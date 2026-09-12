@@ -9,3 +9,6 @@
 | wontfix | wontfix | 不處理 |
 
 技能提到 canonical role 時，使用本表對應標籤。
+
+這些標籤僅作本機 Markdown tracker 的 triage／歷史記錄；`ready-for-agent` 不等於
+ForgePilot Work Item 的 READY，也不授予正式實作。正式 lifecycle 依 [issue tracker](issue-tracker.md) 的提升規則。

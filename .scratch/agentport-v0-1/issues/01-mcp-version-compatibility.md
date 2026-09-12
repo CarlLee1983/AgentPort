@@ -1,5 +1,8 @@
 # 01: 固定版本與 MCP 相容性
 
+> Migration source：已提升為 [AP-001](../../../specs/stories/AP-001-toolchain-mcp-compatibility/story.md)。
+> 下列 Status／checkbox 保留原始規劃紀錄；正式執行狀態由 ForgePilot Work Item 管理，不在此同步。
+
 **What to build:** 管理者能在確認的程式工作目錄重現安裝與檢查；相容的官方 MCP Client 能以個別身分呼叫受限 fixture，並取得協定、Runtime 與 Linux 前置條件的實測紀錄。本票完成 S0／G0，不派送 coding 工作。
 
 **Blocked by:** None (can start immediately).

@@ -4,13 +4,17 @@
 
 依據：[已確認需求](delegation-requirements.md)、[Technical Design](technical-design.md)、[術語表](../CONTEXT.md)。技術設計定義行為，本文件定義執行順序與驗收；兩者衝突時先修正計畫，不以方便實作為由降低已確認需求。
 
+治理導入註記：本計畫保留 S0–S6／G0–G6 的依賴與驗收設計；表格的「未開始」是規劃時點快照，正式工作狀態由 ForgePilot 管理，不在本計畫維護第二套 lifecycle。
+`.scratch` 不是 implementation lifecycle authority；正式 implementation 工作需提升為 ForgeFlow Story，其執行狀態由 ForgePilot Work Item 管理。
+第一張為 [AP-001 / S0–G0](../specs/stories/AP-001-toolchain-mcp-compatibility/story.md)，治理導入僅建立 Story，尚未開始 S0。完整流程見 [development workflow](development-workflow.md)。
+
 ## 1. 首版成果與範圍
 
 完成的使用流程是：具相容 MCP 能力的交辦方選取已配置 Agent，提交工作取得 Task ID；Linux 上的 Claude Code 執行修改／測試，交辦方可從外側查詢、追加、回答問題或取消，最後取得結果。服務重啟仍可查任務，且不自動重跑或重送答案。
 
 首版必須同時具備外側控制、持久任務、可靠停止及正向澄清往返；只有 fake worker、SDK 呼叫成功或 MCP tools/list 成功，都不能宣告首版完成。分支推送與 PR 依任務／專案規則，不是所有任務的必需產出。
 
-macOS、A2A、其他 Runtime、排程、LINE／Telegram、公開多租戶、遠端提權與任意檔案下載不列入這次實作。現有目錄只有文件，且不是 Git worktree；本計畫不建立 Git 歷史，後續若要以 PR 交付程式，須先確定實際 repository。
+macOS、A2A、其他 Runtime、排程、LINE／Telegram、公開多租戶、遠端提權與任意檔案下載不列入這次實作。原計畫撰寫時目錄尚非 Git worktree；目前已初始化 Git，產品程式仍未開始，沿用既有 repository 歷史。
 
 ## 2. 順序與階段門檻
 
@@ -150,7 +154,9 @@ SQLite／並行／授權／launcher 是高風險邊界，保持主代理實作�
 
 ## 11. 品質命令與驗收對照
 
-目前沒有下列命令；由 S0 建立，後續階段加入對應實際測試。依使用者指定採 pnpm 12 作唯一套件管理工具，只保留 pnpm-lock.yaml；本機、Linux 驗證與 CI 使用相同的 exact patch 及 frozen lockfile 安裝，不另產生 package-lock.json 或 yarn.lock。若指定版本與 Node／依賴有實際相容性問題，先記錄證據處理，不擅自切換套件管理器或主要版本。
+`make verify` 是唯一 canonical gate，治理導入時先檢查 repository contract／Story 結構，S0 再加入工具鏈與 MCP fixture；目前尚無下列 pnpm 命令，由 S0 起逐步建立。依使用者指定採 pnpm 12 作唯一套件管理工具，只保留 pnpm-lock.yaml；本機、Linux 驗證與 CI 使用相同的 exact patch 及 frozen lockfile 安裝，不另產生 package-lock.json 或 yarn.lock。若指定版本與 Node／依賴有實際相容性問題，先記錄證據並交由 ForgePilot Gate，不擅自切換套件管理器或主要版本。
+
+下表是底層檢查，不是平行 PASS authority。無 vendor 憑證的檢查由 `make verify` 統合；Linux／Claude／release 所需外部環境證據另行明確執行並與同一 revision 的 local verify 一起交付。缺必要環境保持未驗證，不能因 local PASS 宣稱該階段完成。
 
 | 擬建立命令 | 用途／環境 |
 | --- | --- |
