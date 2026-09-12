@@ -29,6 +29,10 @@ export const submitTaskInputSchema = z
 
 export const getTaskInputSchema = z.object({ taskId: identifier }).strict();
 
+export const getExecutionLifecycleInputSchema = z
+  .object({ taskId: identifier })
+  .strict();
+
 export const listTasksInputSchema = z
   .object({
     agentId: identifier.optional(),
@@ -143,6 +147,22 @@ export const mutationSuccessSchema = z
 
 export const getTaskSuccessSchema = z
   .object({ ok: z.literal(true), task: taskSnapshotSchema })
+  .strict();
+
+const executionLifecycleSnapshotSchema = z
+  .object({
+    executionId: z.string(),
+    taskId: z.string(),
+    state: z.enum(["prepared", "recovering"]),
+    candidateOutcome: z.null(),
+    quarantined: z.boolean(),
+    revision: z.number().int(),
+    observedAt: z.string(),
+  })
+  .strict();
+
+export const getExecutionLifecycleSuccessSchema = z
+  .object({ ok: z.literal(true), lifecycle: executionLifecycleSnapshotSchema })
   .strict();
 
 export const listTasksSuccessSchema = z

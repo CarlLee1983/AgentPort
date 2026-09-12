@@ -10,6 +10,7 @@ import {
   DurableAgentExecutionService,
   type ServiceOptions,
 } from "../../src/core/agent-execution-service.js";
+import type { ExecutionReference } from "../../src/core/types.js";
 import {
   SqliteDurableAdmissionStore,
   type DurableAdmissionStoreOptions,
@@ -25,6 +26,18 @@ export interface DurableAdmissionFixture {
   registry: AgentRegistry;
   registryConfiguration: RegistryConfiguration;
   service: DurableAgentExecutionService;
+  prepareExecution(
+    actor: { principalId: string },
+    input: { taskId: string },
+  ): Promise<{ executionId: string; state: "prepared" }>;
+  recordIndeterminateSupervisorResult(
+    actor: { principalId: string },
+    input: { taskId: string; reference: ExecutionReference },
+  ): Promise<void>;
+  executionReference(
+    actor: { principalId: string },
+    input: { taskId: string },
+  ): Promise<ExecutionReference>;
   store: SqliteDurableAdmissionStore;
   close(): Promise<void>;
 }
@@ -108,12 +121,18 @@ export async function createDurableAdmissionFixture(
   });
   const registry = await AgentRegistry.create(registryConfiguration, store);
   let sequence = 0;
-  const service = new DurableAgentExecutionService(registry, store, {
-    cursorSecret: "ap002-fixture-cursor-secret",
-    newId: () => `fixture-id-${String(++sequence)}`,
-    now: () => new Date("2026-09-12T08:00:00.000Z"),
-    ...serviceOverrides,
-  });
+  const preparation =
+    DurableAgentExecutionService.createPlatformNeutralPreparationFixture(
+      registry,
+      store,
+      {
+        cursorSecret: "ap002-fixture-cursor-secret",
+        newId: () => `fixture-id-${String(++sequence)}`,
+        now: () => new Date("2026-09-12T08:00:00.000Z"),
+        ...serviceOverrides,
+      },
+    );
+  const { service } = preparation;
   await service.initializeAfterRestart();
 
   return {
@@ -122,6 +141,10 @@ export async function createDurableAdmissionFixture(
     registry,
     registryConfiguration,
     service,
+    prepareExecution: preparation.prepareExecution,
+    recordIndeterminateSupervisorResult:
+      preparation.recordIndeterminateSupervisorResult,
+    executionReference: preparation.executionReference,
     store,
     close: async () => {
       await store.close();

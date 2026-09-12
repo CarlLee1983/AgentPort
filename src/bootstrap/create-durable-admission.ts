@@ -1,4 +1,5 @@
 import { DurableAgentExecutionService } from "../core/agent-execution-service.js";
+import type { AgentExecutionService } from "../core/types.js";
 import { createDurableAdmissionMcpHandler } from "../mcp/adapter.js";
 import {
   SqliteDurableAdmissionStore,
@@ -15,8 +16,7 @@ export interface DurableAdmissionConfiguration {
 
 export interface DurableAdmissionComposition {
   registry: AgentRegistry;
-  service: DurableAgentExecutionService;
-  store: SqliteDurableAdmissionStore;
+  service: AgentExecutionService;
   mcpHandler: McpHttpHandler;
   close(): Promise<void>;
 }
@@ -35,7 +35,6 @@ export async function createDurableAdmission(
     return {
       registry,
       service,
-      store,
       mcpHandler,
       close: async () => {
         try {

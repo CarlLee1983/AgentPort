@@ -1,8 +1,9 @@
 # Durable admission operations and rollback
 
-This note covers only the AP-002 platform-neutral, non-dispatch development
-slice. It is not a production runbook and provides no Runtime execution, Stop
-Evidence, Linux G1, AP-001 AC-09, deployment, or production-readiness claim.
+This note covers the AP-002 platform-neutral, non-dispatch development slice
+and the data-preserving AP-003 schema rollback layered on it. It is not a
+production runbook and provides no Runtime execution, Stop Evidence, Linux G1,
+AP-001 AC-09, deployment, or production-readiness claim.
 
 ## Operating boundary
 
@@ -102,3 +103,12 @@ database and its WAL/SHM/control-reserve companions, then revert the AP-002 code
 and repository gate entries as one coherent change. Do not point older code at
 this database or silently replace the durable store with an in-memory
 implementation.
+
+After the additive AP-003 execution-control migration has been applied, do not
+use that destructive AP-002 procedure. Stop the listener, close the composition,
+and preserve any required evidence copy before applying
+`migrations/002_execution_control_rollback.sql`. That rollback removes only the
+version-2 marker: it retains the `executions` and `workspace_claims` tables and
+all of their records, while restoring the version set recognized by the AP-002
+binary. The retained AP-003 data is not Stop Evidence and the rollback does not
+release a Workspace claim or authorize Runtime dispatch.

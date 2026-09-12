@@ -16,6 +16,8 @@ import { MCP_PROTOCOL_VERSION } from "./protocol.js";
 import {
   applicationErrorSchema,
   cancelTaskInputSchema,
+  getExecutionLifecycleInputSchema,
+  getExecutionLifecycleSuccessSchema,
   getEventsInputSchema,
   getEventsSuccessSchema,
   getTaskInputSchema,
@@ -220,6 +222,23 @@ export function createDurableAdmissionMcpHandler(
           invokeInput(getTaskInputSchema, input, async (input) => ({
             task: await service.getTask(actor, input),
           })),
+      );
+      server.registerTool(
+        "agentport_get_execution_lifecycle",
+        {
+          description:
+            "Read the bounded lifecycle of an authorized Execution without dispatching it.",
+          inputSchema: publishedInput(getExecutionLifecycleInputSchema),
+          outputSchema: getExecutionLifecycleSuccessSchema,
+        },
+        (input) =>
+          invokeInput(
+            getExecutionLifecycleInputSchema,
+            input,
+            async (input) => ({
+              lifecycle: await service.getExecutionLifecycle(actor, input),
+            }),
+          ),
       );
       server.registerTool(
         "agentport_list_tasks",

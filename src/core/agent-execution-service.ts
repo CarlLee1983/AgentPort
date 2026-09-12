@@ -19,10 +19,13 @@ import type {
   CredentialSubject,
   EventPage,
   GetEventsInput,
+  GetExecutionLifecycleInput,
   GetTaskInput,
   ListAgentsInput,
   ListTasksInput,
   MutationResult,
+  ExecutionLifecycleSnapshot,
+  ExecutionReference,
   SubmitTaskInput,
   TaskEvent,
   TaskPage,
@@ -35,6 +38,22 @@ export interface ServiceOptions {
   now?: () => Date;
   newId?: () => string;
   snapshotCacheEntries?: number;
+}
+
+export interface PlatformNeutralPreparationFixture {
+  service: DurableAgentExecutionService;
+  prepareExecution: (
+    actor: CredentialSubject,
+    input: { taskId: string },
+  ) => Promise<{ executionId: string; state: "prepared" }>;
+  recordIndeterminateSupervisorResult: (
+    actor: CredentialSubject,
+    input: { taskId: string; reference: ExecutionReference },
+  ) => Promise<void>;
+  executionReference: (
+    actor: CredentialSubject,
+    input: { taskId: string },
+  ) => Promise<ExecutionReference>;
 }
 
 const STORAGE_CODES = new Set<ApplicationErrorCode>([
@@ -87,6 +106,7 @@ export class DurableAgentExecutionService implements AgentExecutionService {
   readonly #now: () => Date;
   readonly #newId: () => string;
   readonly #snapshotCacheEntries: number;
+  readonly #daemonEpoch: string;
   readonly #snapshots = new Map<
     string,
     { accessScopeId: string; snapshot: TaskSnapshot }
@@ -100,6 +120,7 @@ export class DurableAgentExecutionService implements AgentExecutionService {
     this.#cursorCodec = new CursorCodec(options.cursorSecret);
     this.#now = options.now ?? (() => new Date());
     this.#newId = options.newId ?? randomUUID;
+    this.#daemonEpoch = this.#newId();
     this.#snapshotCacheEntries = options.snapshotCacheEntries ?? 256;
     if (
       !Number.isSafeInteger(this.#snapshotCacheEntries) ||
@@ -107,6 +128,24 @@ export class DurableAgentExecutionService implements AgentExecutionService {
     ) {
       throw new Error("snapshotCacheEntries must be a positive safe integer");
     }
+  }
+
+  /** Test-only composition for AP-003; production bootstrap never receives this capability. */
+  static createPlatformNeutralPreparationFixture(
+    registry: AgentRegistry,
+    store: DurableAdmissionStore,
+    options: ServiceOptions,
+  ): PlatformNeutralPreparationFixture {
+    const service = new DurableAgentExecutionService(registry, store, options);
+    return {
+      service,
+      prepareExecution: (actor, input) =>
+        service.#prepareExecution(actor, input),
+      recordIndeterminateSupervisorResult: (actor, input) =>
+        service.#recordIndeterminateSupervisorResult(actor, input),
+      executionReference: (actor, input) =>
+        service.#executionReference(actor, input),
+    };
   }
 
   async initializeAfterRestart(): Promise<void> {
@@ -117,6 +156,7 @@ export class DurableAgentExecutionService implements AgentExecutionService {
         reason: "daemon_restart",
         eventType: "daemon_restart_paused",
       });
+      await this.store.recoverExecutions();
     } catch (error) {
       throw storageError(error);
     }
@@ -423,6 +463,138 @@ export class DurableAgentExecutionService implements AgentExecutionService {
     input: CancelTaskInput,
   ): Promise<MutationResult> {
     return this.#cancelTask(actor, input);
+  }
+
+  async #prepareExecution(
+    actor: CredentialSubject,
+    input: { taskId: string },
+  ): Promise<{ executionId: string; state: "prepared" }> {
+    const authorization = this.#authorize(actor);
+    const expectedRegistryRevision = this.#mutationRevision(authorization);
+    const task = await this.#getCurrentTask(authorization, input.taskId);
+    try {
+      const execution = await this.store.claimAndPrepare({
+        accessScopeId: authorization.accessScopeId,
+        allowedAgentIds: allowedAgentIds(authorization),
+        expectedRegistryRevision,
+        executionId: this.#newId(),
+        taskId: task.taskId,
+        generation: this.#newId(),
+        daemonEpoch: this.#daemonEpoch,
+      });
+      return { executionId: execution.executionId, state: "prepared" };
+    } catch (error) {
+      if (this.#isRegistryRevisionChange(error)) {
+        throw this.#registryChanged(error);
+      }
+      throw storageError(error);
+    }
+  }
+
+  async #recordIndeterminateSupervisorResult(
+    actor: CredentialSubject,
+    input: { taskId: string; reference: ExecutionReference },
+  ): Promise<void> {
+    const authorization = this.#authorize(actor);
+    try {
+      const execution = await this.store.getExecution({
+        accessScopeId: authorization.accessScopeId,
+        allowedAgentIds: allowedAgentIds(authorization),
+        taskId: input.taskId,
+      });
+      if (
+        execution === undefined ||
+        !this.#sameExecutionReference(execution, input.reference)
+      ) {
+        throw new ApplicationError(
+          "operation_conflict",
+          "Execution reference does not match the current lifecycle",
+        );
+      }
+      await this.store.quarantineExecution({
+        accessScopeId: authorization.accessScopeId,
+        allowedAgentIds: allowedAgentIds(authorization),
+        taskId: input.taskId,
+      });
+    } catch (error) {
+      if (error instanceof ApplicationError) throw error;
+      throw storageError(error);
+    }
+  }
+
+  async #executionReference(
+    actor: CredentialSubject,
+    input: { taskId: string },
+  ): Promise<ExecutionReference> {
+    const authorization = this.#authorize(actor);
+    try {
+      const execution = await this.store.getExecution({
+        accessScopeId: authorization.accessScopeId,
+        allowedAgentIds: allowedAgentIds(authorization),
+        taskId: input.taskId,
+      });
+      if (execution === undefined) {
+        throw new ApplicationError("not_found", "Resource not found");
+      }
+      return {
+        executionId: execution.executionId,
+        generation: execution.generation,
+        daemonEpoch: execution.daemonEpoch,
+        launchProfileId: execution.launchProfileId,
+        workspaceIdentity: execution.workspaceId,
+      };
+    } catch (error) {
+      if (error instanceof ApplicationError) throw error;
+      throw storageError(error);
+    }
+  }
+
+  #sameExecutionReference(
+    execution: {
+      executionId: string;
+      generation: string;
+      daemonEpoch: string;
+      launchProfileId: string;
+      workspaceId: string;
+    },
+    reference: ExecutionReference,
+  ): boolean {
+    return (
+      execution.executionId === reference.executionId &&
+      execution.generation === reference.generation &&
+      execution.daemonEpoch === reference.daemonEpoch &&
+      execution.launchProfileId === reference.launchProfileId &&
+      execution.workspaceId === reference.workspaceIdentity
+    );
+  }
+
+  async getExecutionLifecycle(
+    actor: CredentialSubject,
+    input: GetExecutionLifecycleInput,
+  ): Promise<ExecutionLifecycleSnapshot> {
+    const authorization = this.#authorize(actor);
+    try {
+      const execution = await this.store.getExecution({
+        accessScopeId: authorization.accessScopeId,
+        allowedAgentIds: allowedAgentIds(authorization),
+        taskId: input.taskId,
+      });
+      if (execution === undefined) {
+        throw new ApplicationError("not_found", "Resource not found");
+      }
+      return {
+        executionId: execution.executionId,
+        taskId: execution.taskId,
+        state: execution.state === "recovering" ? "recovering" : "prepared",
+        candidateOutcome: execution.candidateOutcome,
+        quarantined: execution.workspaceClaim === "quarantined",
+        revision: execution.revision,
+        observedAt: this.#now().toISOString(),
+      };
+    } catch (error) {
+      if (error instanceof ApplicationError) throw error;
+      throw storageError(error);
+    }
   }
 
   async #cancelTask(

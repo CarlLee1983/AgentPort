@@ -23,6 +23,29 @@ export interface StoredTask {
   inputWaitSeconds?: number | null;
 }
 
+export interface StoredExecution {
+  executionId: string;
+  taskId: string;
+  generation: string;
+  daemonEpoch: string;
+  launchProfileId: string;
+  workspaceId: string;
+  state: "prepared" | "recovering";
+  workspaceClaim: "held" | "quarantined";
+  candidateOutcome: null;
+  revision: number;
+}
+
+export interface ClaimAndPrepareExecutionRequest {
+  accessScopeId: string;
+  allowedAgentIds: readonly string[];
+  expectedRegistryRevision: number;
+  executionId: string;
+  taskId: string;
+  generation: string;
+  daemonEpoch: string;
+}
+
 export interface StoredEvent {
   cursor: number;
   taskId: string;
@@ -362,6 +385,36 @@ export class SqliteDurableAdmissionStore {
   ): Promise<StoredMutationResult> {
     return this.#request("cancel", request) as Promise<StoredMutationResult>;
   }
+  async claimAndPrepare(
+    request: ClaimAndPrepareExecutionRequest,
+  ): Promise<StoredExecution> {
+    return this.#request(
+      "claimAndPrepare",
+      request,
+    ) as Promise<StoredExecution>;
+  }
+  async recoverExecutions(): Promise<void> {
+    await this.#request("recoverExecutions", {});
+  }
+  async quarantineExecution(request: {
+    accessScopeId: string;
+    allowedAgentIds: readonly string[];
+    taskId: string;
+  }): Promise<StoredExecution> {
+    return this.#request(
+      "quarantineExecution",
+      request,
+    ) as Promise<StoredExecution>;
+  }
+  async getExecution(request: {
+    accessScopeId: string;
+    allowedAgentIds: readonly string[];
+    taskId: string;
+  }): Promise<StoredExecution | undefined> {
+    return this.#request("getExecution", request) as Promise<
+      StoredExecution | undefined
+    >;
+  }
   async transitionTasks(request: TransitionStoredTasksRequest): Promise<void> {
     await this.#request("transitionTasks", request);
   }
@@ -435,6 +488,7 @@ export class SqliteDurableAdmissionStore {
     probe:
       | "block"
       | "armCommitBarrier"
+      | "applyExecutionControlRollback"
       | "corruptReservedControlSummary"
       | "exhaustRestartEventReserve"
       | "exitClean"
@@ -445,6 +499,7 @@ export class SqliteDurableAdmissionStore {
       | "makeSchemaIncomplete"
       | "inspectPhysicalCapacity"
       | "inspectProductAudit"
+      | "inspectSchemaVersions"
       | "inspectDurability"
       | "releaseCommitBarrier"
       | "setFutureSchemaVersion"

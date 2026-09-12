@@ -2,11 +2,13 @@ import type {
   CancelStoredTaskRequest,
   LookupStoredReceiptRequest,
   StoredEvent,
+  StoredExecution,
   StoredMutationResult,
   StoredTask,
   StoredTaskState,
   SubmitStoredTaskRequest,
   TransitionStoredTasksRequest,
+  ClaimAndPrepareExecutionRequest,
 } from "../storage/sqlite-durable-admission-store.js";
 
 export interface DurableAdmissionStore {
@@ -17,6 +19,20 @@ export interface DurableAdmissionStore {
   submit(request: SubmitStoredTaskRequest): Promise<StoredMutationResult>;
   cancel(request: CancelStoredTaskRequest): Promise<StoredMutationResult>;
   transitionTasks(request: TransitionStoredTasksRequest): Promise<void>;
+  claimAndPrepare(
+    request: ClaimAndPrepareExecutionRequest,
+  ): Promise<StoredExecution>;
+  recoverExecutions(): Promise<void>;
+  quarantineExecution(request: {
+    accessScopeId: string;
+    allowedAgentIds: readonly string[];
+    taskId: string;
+  }): Promise<StoredExecution>;
+  getExecution(request: {
+    accessScopeId: string;
+    allowedAgentIds: readonly string[];
+    taskId: string;
+  }): Promise<StoredExecution | undefined>;
   getTask(request: {
     accessScopeId: string;
     allowedAgentIds: readonly string[];

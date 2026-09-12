@@ -5,6 +5,15 @@ export const MAX_AGENT_DESCRIPTION_BYTES = 8 * 1024;
 
 export type AdmissionTaskState = (typeof ADMISSION_TASK_STATES)[number];
 
+/** Opaque execution identity used to bind platform-neutral observations. */
+export interface ExecutionReference {
+  executionId: string;
+  generation: string;
+  daemonEpoch: string;
+  launchProfileId: string;
+  workspaceIdentity: string;
+}
+
 export interface CredentialSubject {
   principalId: string;
 }
@@ -146,6 +155,20 @@ export interface CancelTaskInput {
   taskId: string;
 }
 
+export interface GetExecutionLifecycleInput {
+  taskId: string;
+}
+
+export interface ExecutionLifecycleSnapshot {
+  executionId: string;
+  taskId: string;
+  state: "prepared" | "recovering";
+  candidateOutcome: null;
+  quarantined: boolean;
+  revision: number;
+  observedAt: string;
+}
+
 export interface AgentExecutionService {
   listAgents(
     actor: CredentialSubject,
@@ -165,4 +188,8 @@ export interface AgentExecutionService {
     actor: CredentialSubject,
     input: CancelTaskInput,
   ): Promise<MutationResult>;
+  getExecutionLifecycle(
+    actor: CredentialSubject,
+    input: GetExecutionLifecycleInput,
+  ): Promise<ExecutionLifecycleSnapshot>;
 }

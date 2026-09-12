@@ -10,7 +10,11 @@ import {
 } from "node:fs";
 import { dirname } from "node:path";
 import Database from "better-sqlite3";
-import { initialMigration } from "./migration.js";
+import {
+  executionControlMigration,
+  executionControlRollbackMigration,
+  initialMigration,
+} from "./migration.js";
 
 /* The binding's synchronous query API is intentionally confined to this worker.
  * Its declarations expose row values as any, so conversion happens only here. */
@@ -89,7 +93,18 @@ if (hasVersionTable) {
   const versions = db
     .prepare("SELECT version FROM schema_migrations ORDER BY version")
     .all() as { version: number }[];
-  if (versions.length !== 1 || Number(versions[0]?.version) !== 1) {
+  if (versions.length === 1 && Number(versions[0]?.version) === 1) {
+    db.transaction(() => {
+      db.exec(executionControlMigration);
+      db.prepare(
+        "INSERT INTO schema_migrations(version, applied_at) VALUES(2, ?)",
+      ).run(now());
+    })();
+  } else if (
+    versions.length !== 2 ||
+    Number(versions[0]?.version) !== 1 ||
+    Number(versions[1]?.version) !== 2
+  ) {
     throw new Error("unsupported durable admission schema version");
   }
 } else {
@@ -98,6 +113,10 @@ if (hasVersionTable) {
     db.prepare(
       "INSERT INTO schema_migrations(version, applied_at) VALUES(1, ?)",
     ).run(now());
+    db.exec(executionControlMigration);
+    db.prepare(
+      "INSERT INTO schema_migrations(version, applied_at) VALUES(2, ?)",
+    ).run(now());
   })();
 }
 
@@ -105,6 +124,7 @@ const requiredTables = [
   "binding_snapshots",
   "capacity_metadata",
   "contexts",
+  "executions",
   "operation_receipts",
   "product_audit_records",
   "product_audit_state",
@@ -113,6 +133,7 @@ const requiredTables = [
   "task_events",
   "task_reservations",
   "tasks",
+  "workspace_claims",
 ];
 const actualTables = new Set(
   (
@@ -465,6 +486,132 @@ function task(row: Record<string, unknown>) {
     createdAt: row.created_at,
     updatedAt: row.updated_at,
   };
+}
+function execution(row: Record<string, unknown>) {
+  return {
+    executionId: row.execution_id,
+    taskId: row.task_id,
+    generation: row.generation,
+    daemonEpoch: row.daemon_epoch,
+    launchProfileId: row.launch_profile_id,
+    workspaceId: row.workspace_id,
+    state: row.state,
+    workspaceClaim: row.claim_status,
+    candidateOutcome: null,
+    revision: row.revision,
+  };
+}
+function claimAndPrepare(p: Record<string, unknown>) {
+  const scope = String(p.accessScopeId);
+  const taskId = String(p.taskId);
+  const executionId = String(p.executionId);
+  const generation = String(p.generation);
+  const daemonEpoch = String(p.daemonEpoch);
+  const stamp = now();
+  try {
+    return registryFencedTransaction(p.expectedRegistryRevision, () => {
+      const row = db
+        .prepare(
+          "SELECT t.task_id,t.state,t.agent_id,c.binding_snapshot_id,b.workspace_id,json_extract(b.payload_json,'$.runtimeDriver') AS runtime_driver,json_extract(b.payload_json,'$.runtimeVersion') AS runtime_version FROM tasks t JOIN contexts c ON c.context_id=t.context_id JOIN binding_snapshots b ON b.binding_snapshot_id=c.binding_snapshot_id WHERE t.scope=? AND t.task_id=?",
+        )
+        .get(scope, taskId) as Record<string, unknown> | undefined;
+      if (
+        !row ||
+        !allowed(row.agent_id, p.allowedAgentIds) ||
+        (row.state !== "queued" && row.state !== "paused")
+      ) {
+        throwFailure(
+          "invalid_state",
+          "task cannot prepare an execution",
+          taskId,
+        );
+      }
+      db.prepare(
+        "INSERT INTO executions(execution_id,task_id,binding_snapshot_id,generation,daemon_epoch,launch_profile_id,workspace_id,state,revision,created_at,updated_at) VALUES(?,?,?,?,?,?,?,'prepared',1,?,?)",
+      ).run(
+        executionId,
+        taskId,
+        row.binding_snapshot_id,
+        generation,
+        daemonEpoch,
+        `${String(row.runtime_driver)}@${String(row.runtime_version)}`,
+        row.workspace_id,
+        stamp,
+        stamp,
+      );
+      db.prepare(
+        "INSERT INTO workspace_claims(workspace_id,execution_id,status,created_at,updated_at) VALUES(?,?,'held',?,?)",
+      ).run(row.workspace_id, executionId, stamp, stamp);
+      db.prepare(
+        "UPDATE tasks SET state='paused',reason='execution_prepared',revision=revision+1,updated_at=? WHERE task_id=?",
+      ).run(stamp, taskId);
+      return execution(
+        db
+          .prepare(
+            "SELECT e.*,w.status AS claim_status FROM executions e JOIN workspace_claims w ON w.execution_id=e.execution_id WHERE e.execution_id=?",
+          )
+          .get(executionId) as Record<string, unknown>,
+      );
+    });
+  } catch (error) {
+    if (
+      error instanceof Error &&
+      /UNIQUE constraint failed/.test(error.message)
+    ) {
+      throwFailure(
+        "operation_conflict",
+        "Workspace already has an execution claim",
+        taskId,
+      );
+    }
+    throw error;
+  }
+}
+function recoverExecutions(): void {
+  const stamp = now();
+  db.transaction(() => {
+    const active = db.prepare("SELECT execution_id FROM executions").all() as {
+      execution_id: string;
+    }[];
+    if (active.length === 0) return;
+    db.prepare(
+      "UPDATE executions SET state='recovering',revision=revision+1,updated_at=? WHERE state='prepared'",
+    ).run(stamp);
+    db.prepare(
+      "UPDATE workspace_claims SET status='quarantined',updated_at=? WHERE execution_id IN (SELECT execution_id FROM executions WHERE state='recovering')",
+    ).run(stamp);
+  })();
+}
+function quarantineExecution(p: Record<string, unknown>) {
+  const scope = String(p.accessScopeId);
+  const taskId = String(p.taskId);
+  const stamp = now();
+  return db.transaction(() => {
+    const agentIds = authorizedAgentIds(p.allowedAgentIds);
+    const row =
+      agentIds.length === 0
+        ? undefined
+        : (db
+            .prepare(
+              `SELECT e.execution_id FROM executions e JOIN tasks t ON t.task_id=e.task_id WHERE t.scope=? AND e.task_id=? AND t.agent_id IN (${agentIds.map(() => "?").join(",")})`,
+            )
+            .get(scope, taskId, ...agentIds) as
+            { execution_id: string } | undefined);
+    if (row === undefined) throwFailure("not_found", "execution was not found");
+    db.prepare(
+      "UPDATE executions SET state='recovering',revision=revision+1,updated_at=? WHERE execution_id=?",
+    ).run(stamp, row.execution_id);
+    db.prepare(
+      "UPDATE workspace_claims SET status='quarantined',updated_at=? WHERE execution_id=?",
+    ).run(stamp, row.execution_id);
+    return execution(
+      db
+        .prepare(
+          "SELECT e.*,w.status AS claim_status FROM executions e JOIN workspace_claims w ON w.execution_id=e.execution_id WHERE e.execution_id=?",
+        )
+        .get(row.execution_id) as Record<string, unknown>,
+    );
+  })();
 }
 function throwFailure(
   code: Failure["code"],
@@ -826,6 +973,16 @@ function cancel(p: Record<string, unknown>) {
         .get(scope, taskId) as Record<string, unknown> | undefined;
       if (!row || !allowed(row.agent_id, p.allowedAgentIds))
         throwFailure("not_found", "task was not found");
+      const execution = db
+        .prepare("SELECT 1 AS present FROM executions WHERE task_id=?")
+        .get(taskId);
+      if (execution !== undefined) {
+        throwFailure(
+          "operation_conflict",
+          "task has a retained Execution claim",
+          taskId,
+        );
+      }
       const expectedStates = Array.isArray(p.expectedStates)
         ? p.expectedStates.map(String)
         : [];
@@ -933,7 +1090,22 @@ parentPort?.on("message", (message: Request) => {
       );
     else if (message.command === "submit") result = submit(p);
     else if (message.command === "cancel") result = cancel(p);
-    else if (message.command === "get") {
+    else if (message.command === "claimAndPrepare") result = claimAndPrepare(p);
+    else if (message.command === "recoverExecutions") {
+      recoverExecutions();
+      result = undefined;
+    } else if (message.command === "quarantineExecution") {
+      result = quarantineExecution(p);
+    } else if (message.command === "getExecution") {
+      const agentIds = authorizedAgentIds(p.allowedAgentIds);
+      const row = db
+        .prepare(
+          `SELECT e.*,w.status AS claim_status FROM executions e JOIN tasks t ON t.task_id=e.task_id LEFT JOIN workspace_claims w ON w.execution_id=e.execution_id WHERE t.scope=? AND e.task_id=? AND t.agent_id IN (${agentIds.map(() => "?").join(",")})`,
+        )
+        .get(scope, String(p.taskId), ...agentIds) as
+        Record<string, unknown> | undefined;
+      result = row === undefined ? undefined : execution(row);
+    } else if (message.command === "get") {
       const r = db
         .prepare("SELECT * FROM tasks WHERE scope=? AND task_id=?")
         .get(scope, String(p.taskId)) as Record<string, unknown> | undefined;
@@ -1127,6 +1299,16 @@ parentPort?.on("message", (message: Request) => {
         );
       else if (p.probe === "largeRead")
         result = "x".repeat(Math.min(Number(p.milliseconds) || 0, 1024 * 1024));
+      else if (p.probe === "applyExecutionControlRollback") {
+        db.exec(executionControlRollbackMigration);
+        result = undefined;
+      } else if (p.probe === "inspectSchemaVersions") {
+        result = (
+          db
+            .prepare("SELECT version FROM schema_migrations ORDER BY version")
+            .all() as { version: number }[]
+        ).map(({ version }) => version);
+      }
     } else if (message.command === "close") {
       closeSync(controlReserveFile);
       db.close();

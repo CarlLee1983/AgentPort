@@ -18,19 +18,20 @@ macOS 是 Node、MCP、SQLite、核心狀態／持久化、Adapter 與 fake-work
 
 ## 2. 順序與階段門檻
 
-| 階段 | 交付的可觀察能力 | 依賴 |
-| --- | --- | --- |
-| S0 | 可重現工具鏈與版本／契約檢查；MCP Client 相容性已證實 | 無 |
-| S1 | 指定 Linux target 上受控 execution 可啟動／停止，真 Claude 可提問並取得回答 | S0 local compatibility；指定 Linux environment |
-| S2 | 經授權 MCP 提交→持久 queued Task→查詢／取消；重啟不遺失；不派送 Runtime | S0 local compatibility；ADR-0004 sequencing decision |
-| S3 | MCP→核心→受控 Claude execution→結果／取消，並具基本恢復 | G1、G2 |
-| S4 | 完整追加佇列、修改、澄清往返與明確續接操作 | S3 |
-| S5 | 崩潰、容量、儲存及效能情境下仍符合控制與恢復契約 | S4 |
-| S6 | 通用 MCP 交辦方的首版全流程驗收與可操作的 Linux 發行包 | S5 |
+| 階段 | 交付的可觀察能力                                                                                        | 依賴                                                                                          |
+| ---- | ------------------------------------------------------------------------------------------------------- | --------------------------------------------------------------------------------------------- |
+| S0   | 可重現工具鏈與版本／契約檢查；MCP Client 相容性已證實                                                   | 無                                                                                            |
+| S1   | 指定 Linux target 上受控 execution 可啟動／停止，真 Claude 可提問並取得回答                             | S0 local compatibility；指定 Linux environment                                                |
+| S2   | 經授權 MCP 提交→持久 queued Task→查詢／取消；重啟不遺失；不派送 Runtime                                 | S0 local compatibility；ADR-0004 sequencing decision                                          |
+| S1-P | platform-neutral execution-control preparation；只完成 lifecycle／持久化／Supervisor contract，絕不派送 | G2；[AP-003](../specs/stories/AP-003-platform-neutral-execution-control-preparation/story.md) |
+| S3   | MCP→核心→受控 Claude execution→結果／取消，並具基本恢復                                                 | G1、G2                                                                                        |
+| S4   | 完整追加佇列、修改、澄清往返與明確續接操作                                                              | S3                                                                                            |
+| S5   | 崩潰、容量、儲存及效能情境下仍符合控制與恢復契約                                                        | S4                                                                                            |
+| S6   | 通用 MCP 交辦方的首版全流程驗收與可操作的 Linux 發行包                                                  | S5                                                                                            |
 
-S0 後可平行處理 S1 與 S2：S1 只在指定 Linux fixture 建立受控 execution；S2 可在 macOS 或 Linux 開發 platform-neutral durable admission，但 build／import／production composition graph 都不得含可到達的 Runtime dispatch path。兩條路徑都通過後才可進 S3，主要整合路徑為 `(G1 + G2) → S3 → S4 → S5 → S6`。S0 的 Linux metadata blocked 不由 macOS evidence 取代，也不因可平行而讓多個人同時修改生命週期／儲存 seam。
+S0 後可平行處理 S1 與 S2：S1 只在指定 Linux fixture 建立受控 execution；S2 可在 macOS 或 Linux 開發 platform-neutral durable admission，但 build／import／production composition graph 都不得含可到達的 Runtime dispatch path。G2 之後可進行 S1-P，將 execution lifecycle、transaction、recovery 及 Supervisor contract 先實作為不可由 production composition 到達的 platform-neutral Module；其 core／storage preparation fixture 可持久建立並保留 Workspace claim，但 scripted Supervisor fixture 本身不建立 claim，兩者都不是 Linux Stop Evidence，也不能建立 Execution Unit、程序或 Runtime call。S1-P 不改變主整合路徑：`(G1 + G2) → S3 → S4 → S5 → S6`。S0 的 Linux metadata blocked 不由 macOS evidence 取代，也不因可平行而讓多個人同時修改生命週期／儲存 seam。
 
-S1 將最可能推翻整合選擇的能力提早驗證；其 harness 只在指定 Linux fixture 使用，不是略過核心授權與持久化的產品入口。S2 的 MCP／storage fixture 也不是可部署的 admission-only 服務。S3 開始任何真正派送前，G1 的 generation fencing／Stop Evidence 與 G2 的持久 admission／取消／重啟規則都必須通過，不能留到 S5 才補上；Workspace claim 在 S3 的 dispatch transaction 才建立。S5 是擴大故障驗證，不是延後可靠性實作。
+S1 將最可能推翻整合選擇的能力提早驗證；其 harness 只在指定 Linux fixture 使用，不是略過核心授權與持久化的產品入口。S2 的 MCP／storage fixture 也不是可部署的 admission-only 服務。S1-P 的不可達 preparation transaction 先建立並保留 platform-neutral persisted claim；S3 開始任何真正派送前，仍須同時通過 G1 的 generation fencing／Stop Evidence 與 G2 的持久 admission／取消／重啟規則，並在 production dispatch transaction 中核對及承接該 prepared claim。claim release 仍只屬於 S3 的真 Stop Evidence／terminal commit 路徑，不能留到 S5 才補上。S5 是擴大故障驗證，不是延後可靠性實作。
 
 每階段完成時保存檔案變更、命令、版本、測試結果及未解事項。階段只有在退出條件通過後才標完成；缺少 Linux 或 Runtime 憑證標記待環境，不以跳過測試作為通過。
 
@@ -38,16 +39,16 @@ S1 將最可能推翻整合選擇的能力提早驗證；其 harness 只在指�
 
 下列是實作時逐步建立的責任位置，現在並不存在；以最小內聚檔案開始，不預建空 class、通用 repository framework 或第二份狀態機。
 
-| 建議位置 | 責任／主要擁有者 |
-| --- | --- |
-| src/core/ | Task／Context／Question、唯一應用服務、狀態及授權；主代理 |
-| src/storage/、migrations/ | SQLite 交易、receipt、claim、事件、reserve 與恢復資料；主代理 |
-| src/mcp/ | 官方 SDK、工具 schema、Principal 轉換與錯誤投影；穩定核心契約後可分派 |
-| src/runtime/claude/、src/runtime/worker/ | Claude Driver、受限 IPC、事件及回答 ack；主代理負責控制語意 |
-| src/supervisor/ | platform-neutral Supervisor interface、generation／Stop Evidence；Linux cgroup v2 Adapter；主代理 |
-| src/bootstrap/ | 配置、Registry、組裝、readiness／doctor；不含另一套排程 |
-| tests/unit/、tests/integration/、tests/contracts/、tests/e2e/、tests/fixtures/ | 對應行為、真儲存、worker、MCP、Linux／Claude 及故障 fixture |
-| docs/operations.md、docs/verification.md | 操作程序與實際驗證紀錄；隨切片更新 |
+| 建議位置                                                                       | 責任／主要擁有者                                                                                  |
+| ------------------------------------------------------------------------------ | ------------------------------------------------------------------------------------------------- |
+| src/core/                                                                      | Task／Context／Question、唯一應用服務、狀態及授權；主代理                                         |
+| src/storage/、migrations/                                                      | SQLite 交易、receipt、claim、事件、reserve 與恢復資料；主代理                                     |
+| src/mcp/                                                                       | 官方 SDK、工具 schema、Principal 轉換與錯誤投影；穩定核心契約後可分派                             |
+| src/runtime/claude/、src/runtime/worker/                                       | Claude Driver、受限 IPC、事件及回答 ack；主代理負責控制語意                                       |
+| src/supervisor/                                                                | platform-neutral Supervisor interface、generation／Stop Evidence；Linux cgroup v2 Adapter；主代理 |
+| src/bootstrap/                                                                 | 配置、Registry、組裝、readiness／doctor；不含另一套排程                                           |
+| tests/unit/、tests/integration/、tests/contracts/、tests/e2e/、tests/fixtures/ | 對應行為、真儲存、worker、MCP、Linux／Claude 及故障 fixture                                       |
+| docs/operations.md、docs/verification.md                                       | 操作程序與實際驗證紀錄；隨切片更新                                                                |
 
 SQLite／並行／授權／launcher 是高風險邊界，保持主代理實作及 Sol/high 分析、審查；不拆給一般 worker 同時改寫。可分派的內容限已凍結契約下的 adapter、fixture、文件或唯讀查證；每個語意切片只有一個 writer。跨邊界修改由主代理整合，審查後只複查修正範圍。
 
@@ -94,13 +95,26 @@ SQLite／並行／授權／launcher 是高風險邊界，保持主代理實作�
 
 **退出條件 G2：**真 SQLite＋官方 MCP Client 驗證同鍵同時提交只建一個 Task、回應遺失後同鍵取得原 ID、重啟保留紀錄且 queue 暫停、跨 scope 操作拒絕；no-dispatch contract 證明沒有 Execution／claim／worker／Supervisor 接觸。提交或 DB commit 失敗時沒有執行副作用；macOS PASS 只證明 durable admission，不是 Linux、Runtime、reliable-stop 或首版完成。
 
+## 6a. S1-P — Platform-neutral execution-control preparation
+
+**成果：**在不建立可到達 dispatcher、Runtime worker 或 Supervisor Adapter 的前提下，完成 S3 所需 execution lifecycle 的核心 Module、SQLite transaction／recovery 語意、MCP read projection 與 Supervisor contract fixtures。
+
+工作：
+
+- 將 AgentExecutionService 保持為唯一 lifecycle owner；以既有 `start`、`revokeAndStop`、`reconcile` Supervisor interface 形成唯一 seam，定義 immutable Execution Reference、generation、daemon epoch 與 prepared／recovering／quarantine 的安全保留語意。
+- 以真 SQLite 驗證 Workspace claim 的唯一性、prepare／cancel race 與 restart→recovering／quarantine；scripted contract fixture 只可回 pending／indeterminate，不能啟動程序、建立 Execution Unit、寫入 candidate outcome、釋放 claim 或提供 G1 Stop Evidence。
+- 建立 bounded Reference-bound worker observation schema 與 MCP lifecycle read projection；所有 production bootstrap/composition 仍不可 import dispatcher、worker launcher、Supervisor Adapter 或 Driver。candidate outcome、terminal result 與 claim release 延後至 G1 後的 S3。
+- 保留 no-dispatch reachability／process tripwire；不呼叫 Claude SDK `query()`、不建立 container、cgroup、process group 或 Execution Unit。
+
+**限制：**S1-P 的 test、review 與 macOS evidence 只證明 core contract。它不證明 generation fencing、cgroup containment、unit empty、descendant cleanup、real Claude 問答／取消／Session、G1、G3 或 production readiness；S3 不因 S1-P 完成而可開始。
+
 ## 7. S3 — 派送、結果、取消與基本恢復
 
 **成果：**單項 MCP 工作能經核心交給 S1 的受控 Claude worker，回傳最終結果；外側查詢／取消不等模型。
 
 工作：
 
-- dispatcher 在短交易內建立 execution、取得唯一 Workspace claim、標 starting，再呼叫 launcher。將核心取消／recovery 與 supervisor generation 撤銷接起來；所有停止確認含「不會再有未來 start」。
+- dispatcher 在短交易內核對並承接 S1-P 已持久化的 prepared Execution／唯一 Workspace claim、標 starting，再呼叫 launcher。將核心取消／recovery 與 supervisor generation 撤銷接起來；所有停止確認含「不會再有未來 start」。
 - 接上 worker observation、連續 ordinal、候選 outcome、finalOrdinal 及停止證據；結果／終態／reference／claim 釋放同交易提交，EOF 或 exit 0 不單獨算成功。
 - 完成 running／stopping／completed／failed／canceled／recovering／interrupted；cancel 立即回停止中，完成與取消以 commit 順序裁定。acknowledge_interruption 必須先有停止證據，不造成功。
 - 實作開機 pause／舊 execution 核對、stop-unknown quarantine、候選 outcome 恢復及 daemon 失聯清理。重啟不能自動 dispatch 或重播 Runtime 命令。
@@ -159,32 +173,32 @@ SQLite／並行／授權／launcher 是高風險邊界，保持主代理實作�
 
 下表是底層檢查，不是平行 PASS authority。無 vendor 憑證的檢查由 `make verify` 統合；Linux／Claude／release 所需外部環境證據另行明確執行並與同一 revision 的 local verify 一起交付。缺必要環境保持未驗證，不能因 local PASS 宣稱該階段完成。
 
-| 命令 | 用途／環境 |
-| --- | --- |
-| pnpm install --frozen-lockfile | 根據 pnpm-lock.yaml 重現安裝 |
-| pnpm run check | lint、typecheck、build 及不需 vendor 憑證的核心／儲存／fixture 整合檢查 |
-| pnpm run test:mcp | 官方 Client 驗證版本、認證、工具 schema 及應用結果 |
-| pnpm run test:linux | Linux cgroup／supervisor／子程序與 generation fence 契約；缺環境需明確失敗／待執行 |
-| pnpm run test:claude | 真 Claude 的非互動及正向澄清／取消／續接；指定測試目錄與 Runtime 認證 |
-| pnpm run test:faults | 持久 crash windows、容量／DB 故障與恢復；標示各案例需要的 Linux 條件 |
-| pnpm run verify:release | check＋MCP＋Linux＋Claude＋faults 與發行證據完整性；不得因環境缺少而把必要套件全 skip 後報成功 |
+| 命令                           | 用途／環境                                                                                     |
+| ------------------------------ | ---------------------------------------------------------------------------------------------- |
+| pnpm install --frozen-lockfile | 根據 pnpm-lock.yaml 重現安裝                                                                   |
+| pnpm run check                 | lint、typecheck、build 及不需 vendor 憑證的核心／儲存／fixture 整合檢查                        |
+| pnpm run test:mcp              | 官方 Client 驗證版本、認證、工具 schema 及應用結果                                             |
+| pnpm run test:linux            | Linux cgroup／supervisor／子程序與 generation fence 契約；缺環境需明確失敗／待執行             |
+| pnpm run test:claude           | 真 Claude 的非互動及正向澄清／取消／續接；指定測試目錄與 Runtime 認證                          |
+| pnpm run test:faults           | 持久 crash windows、容量／DB 故障與恢復；標示各案例需要的 Linux 條件                           |
+| pnpm run verify:release        | check＋MCP＋Linux＋Claude＋faults 與發行證據完整性；不得因環境缺少而把必要套件全 skip 後報成功 |
 
 每個切片先跑受影響的最小測試，再於整合 checkpoint 跑該階段必需完整 gates。來源與環境未變的通過結果可重用；修正後重跑受影響測試與同一 reviewer 的 delta，不以重複全掃代替修正。
 
-| Technical Design 驗收 | 首次落地／最終收斂 |
-| --- | --- |
-| AC-01 MCP | S0、S2／S6 真交辦方 |
-| AC-02 提交／去重 | S2／S5 crash matrix |
-| AC-03 外側觀察 | S3／S5 量測 |
-| AC-04 queue | S4／S5 競爭與容量 |
-| AC-05 澄清 | S1 能力、S4 完整產品／S5 故障 |
-| AC-06 取消／完成 | S1 平台、S3 核心／S5 |
-| AC-07 Crash windows | S1 fence、S2–S4 各 commit 邊界／S5 |
-| AC-08 恢復／續接 | S3 基本恢復、S4 queue／Session／S5 |
-| AC-09 資源／期限 | S2 reserve、S3–S4 時鐘／S5 |
-| AC-10 授權 | S0 相容性、S2 scope、S3 launcher、S4 回答／S5 |
-| AC-11 交付／通知 | S2 事件、S3 結果／S5 保存、S6 |
-| AC-12 平台／回滾 | S0–S1 版本／Linux／S6 migration 與操作演練 |
+| Technical Design 驗收 | 首次落地／最終收斂                            |
+| --------------------- | --------------------------------------------- |
+| AC-01 MCP             | S0、S2／S6 真交辦方                           |
+| AC-02 提交／去重      | S2／S5 crash matrix                           |
+| AC-03 外側觀察        | S3／S5 量測                                   |
+| AC-04 queue           | S4／S5 競爭與容量                             |
+| AC-05 澄清            | S1 能力、S4 完整產品／S5 故障                 |
+| AC-06 取消／完成      | S1 平台、S3 核心／S5                          |
+| AC-07 Crash windows   | S1 fence、S2–S4 各 commit 邊界／S5            |
+| AC-08 恢復／續接      | S3 基本恢復、S4 queue／Session／S5            |
+| AC-09 資源／期限      | S2 reserve、S3–S4 時鐘／S5                    |
+| AC-10 授權            | S0 相容性、S2 scope、S3 launcher、S4 回答／S5 |
+| AC-11 交付／通知      | S2 事件、S3 結果／S5 保存、S6                 |
+| AC-12 平台／回滾      | S0–S1 版本／Linux／S6 migration 與操作演練    |
 
 ## 12. 證據、阻擋與接手方式
 
