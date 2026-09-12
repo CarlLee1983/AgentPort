@@ -1,0 +1,41 @@
+{
+  "name": "agentport",
+  "version": "0.0.0",
+  "private": true,
+  "type": "module",
+  "packageManager": "pnpm@12.4.1",
+  "engines": {
+    "node": "24.21.0",
+    "pnpm": "12.4.1"
+  },
+  "scripts": {
+    "build": "tsc -p tsconfig.build.json",
+    "check": "pnpm run format:check && pnpm run lint && pnpm run typecheck && pnpm run build && pnpm run test",
+    "format": "prettier --write '.github/**/*.yml' 'compatibility/**/*.ts' 'tests/**/*.ts' '*.json' 'pnpm-*.yaml' 'docs/toolchain-compatibility.md' 'specs/stories/AP-001-toolchain-mcp-compatibility/verification.md'",
+    "format:check": "prettier --check '.github/**/*.yml' 'compatibility/**/*.ts' 'tests/**/*.ts' '*.json' 'pnpm-*.yaml' 'docs/toolchain-compatibility.md' 'specs/stories/AP-001-toolchain-mcp-compatibility/verification.md'",
+    "lint": "eslint .",
+    "test": "vitest run",
+    "test:mcp": "vitest run tests/mcp-compatibility.test.ts",
+    "test:sqlite": "vitest run tests/sqlite-compatibility.test.ts",
+    "typecheck": "tsc --noEmit"
+  },
+  "dependencies": {
+    "@anthropic-ai/claude-agent-sdk": "0.3.269",
+    "@modelcontextprotocol/client": "2.0.0",
+    "@modelcontextprotocol/node": "2.0.0",
+    "@modelcontextprotocol/server": "2.0.0",
+    "better-sqlite3": "13.0.3",
+    "zod": "4.6.2"
+  },
+  "devDependencies": {
+    "@eslint/js": "10.0.1",
+    "@types/better-sqlite3": "9.6.0",
+    "@types/node": "24.13.4",
+    "eslint": "10.10.0",
+    "globals": "17.12.0",
+    "prettier": "3.9.6",
+    "typescript": "6.0.3",
+    "typescript-eslint": "8.70.0",
+    "vitest": "5.0.0"
+  }
+}

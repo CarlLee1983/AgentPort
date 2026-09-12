@@ -10,6 +10,12 @@ fail() {
 
 for file in \
   AGENTS.md CONTEXT.md Makefile \
+  .node-version .npmrc package.json pnpm-lock.yaml pnpm-workspace.yaml \
+  eslint.config.js tsconfig.json tsconfig.build.json \
+  compatibility/claude-capabilities.ts compatibility/mcp-fixture.ts compatibility/sqlite-probe.ts \
+  tests/claude-capabilities.test.ts tests/mcp-compatibility.test.ts tests/sqlite-compatibility.test.ts \
+  scripts/verify-toolchain.sh docs/toolchain-compatibility.md \
+  specs/stories/AP-001-toolchain-mcp-compatibility/verification.md \
   guidance/ENTRY.md guidance/PRINCIPLES.md guidance/DECISIONS.md guidance/PRACTICES.md \
   specs/.forgeflow-adoption \
   specs/stories/_template/story.md specs/stories/_template/acceptance.md specs/stories/_template/task.md \
@@ -45,4 +51,4 @@ for script in scripts/verify-repository.sh scripts/forgeflow/story-check; do
   /bin/sh -n "$script" || fail "invalid shell syntax: $script"
 done
 
-printf 'PASS repository contract (governance only; product acceptance not executed)\n'
+printf 'PASS repository contract\n'
