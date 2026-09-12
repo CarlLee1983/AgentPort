@@ -8,6 +8,98 @@ import { createDurableAdmissionFixture } from "../fixtures/durable-admission.js"
 const ACTOR = { principalId: "principal-a" };
 
 describe("Registry revision fence", () => {
+  it("fences a replayed submit before returning its receipt after membership revocation", async () => {
+    const fixture = await createDurableAdmissionFixture();
+    const input = {
+      operationId: "replayed-submit-membership-race",
+      agentId: "agent-a",
+      instruction: "must not replay after membership is revoked",
+    };
+    try {
+      await fixture.service.submitTask(ACTOR, input);
+      await fixture.store.probe("armCommitBarrier");
+      const replay = fixture.service.submitTask(ACTOR, input);
+      const first = await Promise.race([
+        replay.then(
+          () => "replay" as const,
+          () => "replay" as const,
+        ),
+        fixture.store
+          .probe("waitForCommitBarrier")
+          .then(() => "barrier" as const),
+      ]);
+      expect(first).toBe("barrier");
+
+      const replacement = fixture.registry.replace({
+        ...fixture.registryConfiguration,
+        principals: fixture.registryConfiguration.principals.map((principal) =>
+          principal.principalId === ACTOR.principalId
+            ? { ...principal, active: false }
+            : principal,
+        ),
+      });
+      await fixture.store.probe("waitForRegistryRevision", 2);
+      await fixture.store.probe("releaseCommitBarrier");
+
+      await expect(replay).rejects.toMatchObject({
+        code: "storage_unavailable",
+        retryable: true,
+      });
+      await replacement;
+    } finally {
+      await fixture.store.probe("releaseCommitBarrier").catch(() => undefined);
+      await fixture.close();
+    }
+  });
+
+  it("fences a replayed cancel before returning its receipt after membership revocation", async () => {
+    const fixture = await createDurableAdmissionFixture();
+    const submitted = await fixture.service.submitTask(ACTOR, {
+      operationId: "replayed-cancel-membership-race-submit",
+      agentId: "agent-a",
+      instruction: "must not expose a canceled receipt after revocation",
+    });
+    const input = {
+      operationId: "replayed-cancel-membership-race",
+      taskId: submitted.task.taskId,
+    };
+    try {
+      await fixture.service.cancelTask(ACTOR, input);
+      await fixture.store.probe("armCommitBarrier");
+      const replay = fixture.service.cancelTask(ACTOR, input);
+      const first = await Promise.race([
+        replay.then(
+          () => "replay" as const,
+          () => "replay" as const,
+        ),
+        fixture.store
+          .probe("waitForCommitBarrier")
+          .then(() => "barrier" as const),
+      ]);
+      expect(first).toBe("barrier");
+
+      const replacement = fixture.registry.replace({
+        ...fixture.registryConfiguration,
+        principals: fixture.registryConfiguration.principals.map((principal) =>
+          principal.principalId === ACTOR.principalId
+            ? { ...principal, active: false }
+            : principal,
+        ),
+      });
+      await fixture.store.probe("waitForRegistryRevision", 2);
+      await fixture.store.probe("releaseCommitBarrier");
+
+      await expect(replay).rejects.toMatchObject({
+        code: "storage_unavailable",
+        retryable: true,
+      });
+      await replacement;
+    } finally {
+      await fixture.store.probe("releaseCommitBarrier").catch(() => undefined);
+      await fixture.close();
+    }
+  });
+
   it("rechecks authorization after SQL writes and before COMMIT", async () => {
     const fixture = await createDurableAdmissionFixture();
     try {

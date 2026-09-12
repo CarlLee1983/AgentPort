@@ -680,19 +680,17 @@ function submit(p: Record<string, unknown>) {
   const workspaceId = bindingWorkspace.filesystemIdentity;
   const instruction = String(p.instruction);
   const principalId = String(p.principalId);
-  const existing = receipt(scope, operationId, "submit", null, fingerprint);
-  if (existing) return { task: existing, replayed: true };
   checkpointWal();
   const estimatedGrowth = submitGrowthEstimate(instruction, binding);
-  requirePhysicalHeadroom(
-    physicalAdmissionBytes,
-    estimatedGrowth,
-    taskControlReserveBytes,
-  );
   try {
     return registryFencedTransaction(p.expectedRegistryRevision, () => {
       const old = receipt(scope, operationId, "submit", null, fingerprint);
       if (old) return { task: old, replayed: true };
+      requirePhysicalHeadroom(
+        physicalAdmissionBytes,
+        estimatedGrowth,
+        taskControlReserveBytes,
+      );
       const receiptCount = capacityValue("general_receipts");
       if (receiptCount >= (options.receiptCapacity ?? 100_000))
         throwFailure(
@@ -816,8 +814,6 @@ function cancel(p: Record<string, unknown>) {
   const fingerprint = String(p.fingerprint);
   const taskId = String(p.taskId);
   const principalId = String(p.principalId);
-  const existing = receipt(scope, operationId, "cancel", taskId, fingerprint);
-  if (existing) return { task: existing, replayed: true };
   checkpointWal();
   try {
     return registryFencedTransaction(p.expectedRegistryRevision, () => {
