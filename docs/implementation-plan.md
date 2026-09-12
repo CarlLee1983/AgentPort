@@ -192,4 +192,4 @@ verification 每次紀錄包含：階段／AC、source revision 或檔案摘要�
 
 目前阻擋是 AP-001 AC-09 的 Linux metadata、S1 Linux 執行權限及 Claude 純等待／停止能力；沒有指定 Linux target 時可依 AP-002 完成 S2 的 platform-neutral durable admission，仍保留 G0／G1 與所有依賴 execution 的階段為未完成。不得以 macOS、Docker、fake worker、放寬權限、取消 persistence、忽略 generation fence 或改稱不支援互動來通過驗收。
 
-下一個可開始的產品切片是 AP-002／S2，但只有在使用者明確 Start 對應 ForgePilot Work Item 後才執行；S1 仍等待指定 Linux target，S3 必須等 G1 與 G2 都通過。這份計畫不直接授權任何階段，也不提供未量測的工期／完成日期。
+AP-002／S2 的 ForgePilot Work Item 已由使用者明確 Start，platform-neutral durable-admission implementation candidate 已進入 local verification。GATE-006～010 已解決：所有 Registry authorization／binding 變更採 commit 前完整 revision fence；audit 採有界 sanitized product ring 與持久 gap counter；SQLite／WAL accounting 另以同 filesystem 實體 sidecar bytes 預留 accepted-Task 控制容量。G2 仍須完整 committed ForgePilot evidence 與 Human Review，不能由本段進度文字或 local PASS 視為通過。S1 仍等待指定 Linux target，S3 必須等 G1 與 G2 都通過。這份計畫不直接授權其他階段，也不提供未量測的工期／完成日期。

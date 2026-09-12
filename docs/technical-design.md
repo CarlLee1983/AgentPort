@@ -170,7 +170,7 @@ Linux Supervisor Adapter 掌握 cgroup 建立、migration、kill；Runtime 不�
 
 ## 9. 持久化、事件與恢復
 
-SQLite WAL、foreign keys、FULL 同步、單寫入通道；檔案在控制帳號專用本機目錄，不放 Workspace。SQLite／binding 需含適用 WAL 修正；短讀取／交易與受控 checkpoint 延遲另測。[來源與限制](technical-evidence.md)
+SQLite WAL、foreign keys、FULL 同步、單寫入通道；檔案在控制帳號專用本機目錄，不放 Workspace。SQLite／binding 需含適用 WAL 修正；短讀取／交易與受控 checkpoint 延遲另測。S2 依 GATE-008 同時計算 DB／WAL 實際 bytes，並以同 filesystem、非 sparse、fsync 的 sidecar 實體配置 accepted-Task restart／cancel reserve；啟動時依持久 ledger reconciliation，無法補足則 fail closed。此保證限 AgentPort 控制的 artifact，不宣稱抵抗任意外部 host writer。[來源與限制](technical-evidence.md)
 
 影響執行的狀態、receipt、問題、答案、claim、事件先 commit 再外部動作。寫錯／磁碟滿停止 admission／dispatch，不回已接受再補寫。資源監督可安全停止，但 DB 未恢復前不能假報持久取消或終態；get 可回快照並標 stale，無可靠快照則 observation_unavailable。
 
@@ -227,7 +227,7 @@ credential 只由受保護服務配置解析，分別映射本人／bot，不進
 
 Runtime env 只提供該 execution 所需 vendor 憑證；核心 DB／credential／launcher 權限由不同受保護邊界持有。Runtime 可共用低權限帳號，不承諾相互檔案隔離。Workspace 文件、hooks、MCP 設定可能執行行為，管理者明確指定載入來源；prompt 限制不等於 OS 強制限制。
 
-已允許的工具可正常執行；permission request 不等於 clarification。首版無遠端提權工具，不用 AskUserQuestion 答案授權任意 shell。日誌只記 allowlist metadata，audit 記主體／結果；完整 prompt／答案存在授權資料區，stderr／argv／env 不直接輸出。
+已允許的工具可正常執行；permission request 不等於 clarification。首版無遠端提權工具，不用 AskUserQuestion 答案授權任意 shell。日誌只記 allowlist metadata；S2 product audit 僅接收 allowlisted method／tool、已 normalize 的 protocol metadata、client metadata 的單向 SHA-256 fingerprints、衍生 Principal 與 stable outcome，不接收 raw client metadata、arguments、token、instruction、path、stack、cause 或 error message。audit ring 滿時依 GATE-010 覆寫最舊列並持久累計 gap counter；main-thread queue 受相同 capacity 限制，淘汰最舊 queued payload、保留最新，超額只合併為持久 gap count；gap retry 使用持久 idempotency key，late commit 不重複計數，連續失敗則明確終止 audit drain，但不阻擋 reserved Task control 或 storage close。audit 排程一次最多送一筆低優先 worker request。完整 prompt／答案存在授權資料區，stderr／argv／env 不直接輸出。
 
 ## 12. 運維、回滾與擴充
 
@@ -258,4 +258,4 @@ schema 有版本，未知新版本拒絕 dispatch、保留原檔，不重建空 
 | AC-11 交付／通知 | 終態立即可見結果，通知失敗仍可查；30 天保存及過期行為，無 PR 仍可完成 |
 | AC-12 平台／回滾 | Linux cleanup、版本 pin、migration／備份恢復；macOS 僅有 platform-neutral development evidence，不宣稱 Runtime／停止等價支援 |
 
-驗證分層：macOS 或 Linux 的核心交易／狀態競爭、fake worker／故障注入、官方 MCP Client 互通，以及指定 Linux target 的真 Claude fixture、停止／恢復。固定 SDK 型別、認證 Client 配置、儲存與 Linux Supervisor Adapter 整合未驗證前，不宣告 production readiness。依賴順序、早期能力門檻與品質命令見[實作計畫](implementation-plan.md)；目前只有 S0 compatibility fixture，尚未建立產品 Runtime 或部署。
+驗證分層：macOS 或 Linux 的核心交易／狀態競爭、fake worker／故障注入、官方 MCP Client 互通，以及指定 Linux target 的真 Claude fixture、停止／恢復。固定 SDK 型別、認證 Client 配置、儲存與 Linux Supervisor Adapter 整合未驗證前，不宣告 production readiness。依賴順序、早期能力門檻與品質命令見[實作計畫](implementation-plan.md)；目前已有 S0 compatibility evidence 與 AP-002/S2 platform-neutral durable-admission implementation candidate。GATE-006～010 的完整 Registry fence、bounded sanitized audit ring／gap counter 與 SQLite／WAL physical control reserve 決策已落入 candidate，但仍待完整 committed verification、ADR-0003 Human Review 與 Story Human Review。尚未建立產品 Runtime、Execution Supervisor Adapter 或部署。

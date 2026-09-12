@@ -25,6 +25,21 @@ for file in \
   specs/stories/AP-002-platform-neutral-durable-admission/story.md \
   specs/stories/AP-002-platform-neutral-durable-admission/acceptance.md \
   specs/stories/AP-002-platform-neutral-durable-admission/task.md \
+  specs/stories/AP-002-platform-neutral-durable-admission/verification.md \
+  migrations/001_durable_admission.sql \
+  src/bootstrap/create-durable-admission.ts src/bootstrap/registry.ts \
+  src/core/agent-execution-service.ts src/core/codec.ts src/core/errors.ts src/core/ports.ts src/core/types.ts \
+  src/mcp/adapter.ts src/mcp/loopback-server.ts src/mcp/protocol.ts src/mcp/schemas.ts \
+  src/storage/migration.ts src/storage/sqlite-durable-admission-store.ts src/storage/sqlite-durable-admission-worker.ts \
+  tests/fixtures/durable-admission.ts tests/fixtures/durable-admission-mcp.ts tests/fixtures/durable-store.ts \
+  tests/acceptance/authorization.test.ts tests/acceptance/durable-admission.test.ts \
+  tests/contracts/no-dispatch.test.ts \
+  tests/integration/admission-failures.test.ts tests/integration/operation-receipts.test.ts \
+  tests/integration/registry-revision-fence.test.ts \
+  tests/integration/storage-reserve.test.ts tests/integration/storage-responsiveness.test.ts \
+  tests/integration/storage-restart.test.ts \
+  tests/unit/agent-execution-service.test.ts tests/unit/codec.test.ts tests/unit/migration.test.ts tests/unit/registry.test.ts \
+  docs/durable-admission-operations.md \
   docs/development-workflow.md docs/implementation-plan.md docs/technical-design.md \
   docs/agents/domain.md docs/agents/issue-tracker.md docs/agents/triage-labels.md \
   docs/adr/0001-external-observation-and-control.md \

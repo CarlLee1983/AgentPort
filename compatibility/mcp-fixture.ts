@@ -16,7 +16,8 @@ import {
 } from "@modelcontextprotocol/node";
 import { z } from "zod";
 
-export const MCP_PROTOCOL_VERSION = "2026-07-28";
+export { MCP_PROTOCOL_VERSION } from "../src/mcp/protocol.js";
+import { MCP_PROTOCOL_VERSION } from "../src/mcp/protocol.js";
 
 const PRINCIPALS = new Map([
   ["ap001-principal-a-token", "principal-a"],

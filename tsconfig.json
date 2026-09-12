@@ -11,5 +11,10 @@
     "noEmit": true,
     "skipLibCheck": false
   },
-  "include": ["compatibility/**/*.ts", "tests/**/*.ts", "eslint.config.js"]
+  "include": [
+    "compatibility/**/*.ts",
+    "src/**/*.ts",
+    "tests/**/*.ts",
+    "eslint.config.js"
+  ]
 }

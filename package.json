@@ -11,11 +11,12 @@
   "scripts": {
     "build": "tsc -p tsconfig.build.json",
     "check": "pnpm run format:check && pnpm run lint && pnpm run typecheck && pnpm run build && pnpm run test",
-    "format": "prettier --write '.github/**/*.yml' 'compatibility/**/*.ts' 'tests/**/*.ts' '*.json' 'pnpm-*.yaml' 'docs/toolchain-compatibility.md' 'specs/stories/AP-001-toolchain-mcp-compatibility/verification.md'",
-    "format:check": "prettier --check '.github/**/*.yml' 'compatibility/**/*.ts' 'tests/**/*.ts' '*.json' 'pnpm-*.yaml' 'docs/toolchain-compatibility.md' 'specs/stories/AP-001-toolchain-mcp-compatibility/verification.md'",
+    "format": "prettier --write '.github/**/*.yml' 'compatibility/**/*.ts' 'src/**/*.ts' 'tests/**/*.ts' '*.json' 'pnpm-*.yaml' 'docs/toolchain-compatibility.md' 'docs/durable-admission-operations.md' 'specs/stories/*/verification.md'",
+    "format:check": "prettier --check '.github/**/*.yml' 'compatibility/**/*.ts' 'src/**/*.ts' 'tests/**/*.ts' '*.json' 'pnpm-*.yaml' 'docs/toolchain-compatibility.md' 'docs/durable-admission-operations.md' 'specs/stories/*/verification.md'",
     "lint": "eslint .",
     "test": "vitest run",
-    "test:mcp": "vitest run tests/mcp-compatibility.test.ts",
+    "test:mcp": "vitest run tests/mcp-compatibility.test.ts tests/acceptance/durable-admission.test.ts tests/acceptance/authorization.test.ts tests/acceptance/product-audit.test.ts",
+    "test:platform-neutral": "pnpm run build && vitest run tests/unit tests/integration tests/contracts tests/acceptance",
     "test:sqlite": "vitest run tests/sqlite-compatibility.test.ts",
     "typecheck": "tsc --noEmit"
   },
