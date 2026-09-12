@@ -2,34 +2,77 @@
 
 ## Development workflow
 
-本 repository 採 ForgeFlow engineering protocol；ForgePilot 管理正式 implementation lifecycle。
-兩者都是開發治理工具，不是 AgentPort runtime dependency，也不定義產品 domain。
+AgentPort uses ForgeFlowV2 0.9.0 as its engineering protocol and ForgePilot
+v0.2.1 as its mutable engineering control plane. Neither is an AgentPort runtime
+dependency or product-domain authority.
 
-1. 先讀 `CONTEXT.md`；探索程式、撰寫 Story 或處理票據時，依下方 Domain docs 讀取相關 ADR 與設計。
-2. Product requirement 以目前已核准 Story 為準。實作前讀 `story.md`、`acceptance.md` 的每項 AC 與 Acceptance Evidence，確認方法、fixture／前提與預期觀察完整；再讀 `task.md` 的工作計畫。
-3. 讀 `guidance/ENTRY.md`，僅載入相關 guidance；AgentPort domain／ADR 優先於通用 guidance。Story 若與既有架構或 ADR 衝突，先開 Gate，不默默重設 domain。
-4. 在 ForgePilot 領取已授權的 Work Item 後，檢查相關程式與 callers，以最小內聚變更完成 Story。不得自行擴大 scope、改寫需求或超出 Story Authority；能力與 READY 狀態本身不授予執行權限。
-5. 修改行為必須新增或更新相應測試。文件與純機械修改不製造無意義測試。
-6. 執行唯一 canonical verification command：`make verify`。修正失敗原因；不得為了 PASS 弱化 acceptance criteria、刪除失敗測試或繞過檢查。
-7. 依 `docs/development-workflow.md` 保存 ForgePilot verification evidence，逐項對應 AC、命令、revision、實際觀察及未通過項目。修改影響行為的內容後重新執行完整 `make verify`。
-8. `make verify` PASS 只代表可準備 Human Review；所有必要 AC 與 environment evidence 仍須滿足。只有人類能接受 review 並完成工作，不自行批准 DONE。
+The authority boundary is strict:
 
-遇到未定義的架構、scope 或 security decision，停止受影響工作並使用 ForgePilot Gate；
-domain boundary、workspace access、runtime isolation、task lifecycle、protocol compatibility、scope expansion、public API semantic change 的判斷範圍與指令見 `docs/development-workflow.md` 的 Gate 規則。
+* story.md plus acceptance.md are the approved product intent and Acceptance
+  Evidence authority.
+* ForgePilot is the only authority for current Work Item, lifecycle, Gates,
+  blockers, next action, verification-current, Human Review, and completion.
+* task.md is optional working notes. verification.md or handoff material is
+  optional immutable historical evidence. Neither can project current state.
+* make verify is the canonical automated repository gate. ForgePilot records
+  which candidate that command verified; it does not replace the command.
 
-交付時報告變更檔案、行為摘要、測試／verification evidence、AC 對照、架構影響與未解 Gate／風險。
-治理規則不授予 commit、push、publish 或 deploy；依使用者實際授權處理。
+1. Read CONTEXT.md; while exploring, drafting a Story, or handling tickets,
+   read the applicable domain docs and ADRs below.
+2. Read the approved Story's story.md, every AC and Acceptance Evidence row in
+   acceptance.md, then any optional task.md notes. Do not derive the active
+   work from task notes, handoff, Story ordering, prior completed Stories, or
+   Git history guesses. Use forgepilot status, forgepilot status --work
+   <work-id> --summary, or forgepilot next.
+3. Read guidance/ENTRY.md and load only relevant guidance. AgentPort domain
+   docs and ADRs take precedence. If a Story conflicts with them, open a
+   ForgePilot Gate; do not silently redesign the domain or Story.
+4. Work only on an authorized ForgePilot Work Item. READY identifies a
+   schedulable item; it is not by itself permission to start, modify, commit,
+   push, deploy, resolve a Gate, or approve review.
+5. Change behavior with appropriate tests. Do not manufacture tests for
+   documentation-only or mechanical changes.
+6. Run make verify. A pass answers only whether repository automation passes.
+   It does not satisfy environment ACs, approve a Work Item, or complete review.
+7. Record that result through ForgePilot using the candidate that was actually
+   checked:
+
+       # clean, committed implementation
+       forgepilot verify <work-id>
+
+       # intentional uncommitted working-tree implementation
+       forgepilot verify <work-id> --snapshot
+
+   Never attach dirty-tree results to an unchanged HEAD revision, and never
+   force a commit merely to obtain verification. A behavior-changing change
+   makes prior verification-current stale; rerun make verify and ForgePilot
+   verification before Human Review.
+8. Only Human Review may approve or complete work. Coding agents must not
+   self-approve, self-resolve, or self-cancel Gates to advance work.
+
+For an undefined or changed domain boundary, security policy, workspace access,
+runtime isolation, task lifecycle, protocol compatibility, scope expansion, or
+public API semantic decision, stop affected work and open a ForgePilot Gate.
+See docs/development-workflow.md for the exact lifecycle, candidate, risk
+signal, and Gate rules.
+
+When reporting, state changed files, behavior, make verify evidence,
+ForgePilot candidate evidence, AC mapping, architecture impact, and unresolved
+Gates or risks. Governance does not grant commit, push, publish, deploy, or
+Human Review authority.
 
 ## Agent skills
 
 ### Issue tracker
 
-建立、讀取或發布規格與票據時，使用本機 Markdown tracker；先讀 `docs/agents/issue-tracker.md`。
+建立、讀取或發布規格與票據時，使用本機 Markdown tracker；先讀
+docs/agents/issue-tracker.md。
 
 ### Triage labels
 
-分類票據或設定 triage 狀態時，依 `docs/agents/triage-labels.md` 的標籤映射。
+分類票據或設定 triage 狀態時，依 docs/agents/triage-labels.md 的標籤映射。
 
 ### Domain docs
 
-本專案採 single-context；探索程式或撰寫規格前，依 `docs/agents/domain.md` 讀取術語與相關決策。
+本專案採 single-context；探索程式或撰寫規格前，依
+docs/agents/domain.md 讀取術語與相關決策。

@@ -1,12 +1,12 @@
 # AgentPort v0.1 實作計畫
 
-日期：2026-09-12。狀態：計畫文件；S0 local compatibility evidence 已完成，Linux metadata／G0 仍 blocked，尚未建立產品程式、啟動 Runtime 或部署。
+日期：2026-09-12。這是計畫文件，不投影目前 Story、Gate、verification 或 completion 狀態；請以 ForgePilot 查詢該狀態。
 
 依據：[已確認需求](delegation-requirements.md)、[Technical Design](technical-design.md)、[術語表](../CONTEXT.md)。技術設計定義行為，本文件定義執行順序與驗收；兩者衝突時先修正計畫，不以方便實作為由降低已確認需求。
 
 治理導入註記：本計畫保留 S0–S6／G0–G6 的依賴與驗收設計；正式工作狀態由 ForgePilot 管理，不在本計畫維護第二套 lifecycle。
 `.scratch` 不是 implementation lifecycle authority；正式 implementation 工作需提升為 ForgeFlow Story，其執行狀態由 ForgePilot Work Item 管理。
-[AP-001 / S0–G0](../specs/stories/AP-001-toolchain-mcp-compatibility/story.md) 已保存 local PASS evidence，但 AC-09 因沒有指定 Linux target 保持 blocked；[AP-002 / S2–G2](../specs/stories/AP-002-platform-neutral-durable-admission/story.md) 是後續 durable-admission Story。完整流程見 [development workflow](development-workflow.md)。
+[AP-001 / S0–G0](../specs/stories/AP-001-toolchain-mcp-compatibility/story.md) 與 [AP-002 / S2–G2](../specs/stories/AP-002-platform-neutral-durable-admission/story.md) 提供這份計畫所引用的需求與歷史證據；完整 current-state 流程見 [development workflow](development-workflow.md)。
 
 ## 1. 首版成果與範圍
 
@@ -190,6 +190,4 @@ SQLite／並行／授權／launcher 是高風險邊界，保持主代理實作�
 
 verification 每次紀錄包含：階段／AC、source revision 或檔案摘要、OS／版本、命令、fixture、預期與實際、執行／停止次數、結果位置、時間及限制。Task／execution／question ID 可作關聯，但不記 token、環境變數值、完整私密 prompt 或未遮罩 stderr。
 
-目前阻擋是 AP-001 AC-09 的 Linux metadata、S1 Linux 執行權限及 Claude 純等待／停止能力；沒有指定 Linux target 時可依 AP-002 完成 S2 的 platform-neutral durable admission，仍保留 G0／G1 與所有依賴 execution 的階段為未完成。不得以 macOS、Docker、fake worker、放寬權限、取消 persistence、忽略 generation fence 或改稱不支援互動來通過驗收。
-
-AP-002／S2 的 ForgePilot Work Item 已由使用者明確 Start，platform-neutral durable-admission implementation candidate 已進入 local verification。GATE-006～010 已解決：所有 Registry authorization／binding 變更採 commit 前完整 revision fence；audit 採有界 sanitized product ring 與持久 gap counter；SQLite／WAL accounting 另以同 filesystem 實體 sidecar bytes 預留 accepted-Task 控制容量。G2 仍須完整 committed ForgePilot evidence 與 Human Review，不能由本段進度文字或 local PASS 視為通過。S1 仍等待指定 Linux target，S3 必須等 G1 與 G2 都通過。這份計畫不直接授權其他階段，也不提供未量測的工期／完成日期。
+Linux metadata、S1 Linux 執行權限及 Claude 純等待／停止能力是此計畫的外部前提。沒有指定 Linux target 時，macOS、Docker、fake worker、放寬權限、取消 persistence、忽略 generation fence 或改稱不支援互動都不能取代相關驗收。所有 Work Item 的 blocker、Gate、verification 與 review 狀態只可由 ForgePilot 宣告；本計畫不直接授權其他階段，也不提供未量測的工期／完成日期。

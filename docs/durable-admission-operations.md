@@ -72,7 +72,7 @@ Evidence, Linux G1, AP-001 AC-09, deployment, or production-readiness claim.
   AgentPort-controlled capacity; it cannot prevent an unrelated host writer or
   administrator from deleting or exhausting the same filesystem.
 
-## Resolved acceptance decisions
+## Acceptance contract decisions
 
 - `GATE-006` and `GATE-009`: every Registry authorization or binding change
   wins before a not-yet-committed mutation through the full revision fence.
@@ -82,9 +82,10 @@ Evidence, Linux G1, AP-001 AC-09, deployment, or production-readiness claim.
 - `GATE-010`: audit overflow uses ring overwrite with a persistent gap counter
   and never blocks reserved Task control operations.
 
-These decisions are implemented in the current candidate, but only committed
-ForgePilot evidence and Human Review can accept the Story result. This remains
-a development operations note, not a production runbook.
+These are product-contract decisions recorded for operations. Their Work Item,
+Gate, verification, and Human Review state is not projected here; query
+ForgePilot. This remains a development operations note, not a production
+runbook.
 
 ## Backup and rollback
 

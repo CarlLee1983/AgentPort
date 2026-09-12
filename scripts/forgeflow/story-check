@@ -24,7 +24,7 @@ help() {
   printf '_template/ is checked relative to the current directory.\n\n'
   printf 'The check is static and read-only. It never executes repository code\n'
   printf 'and never replaces make verify or human review.\n'
-  printf '%s\n' '--ready also checks Goal, Scope, unique nonempty checkbox AC IDs, and Acceptance Evidence.'
+  printf '%s\n' '--ready also checks Goal, Scope, unique nonempty checkbox AC IDs, Acceptance Evidence, and declared risk contracts.'
   printf 'It checks minimum content, not human-approved READY.\n'
 }
 
@@ -211,6 +211,27 @@ forgeflow_is_placeholder() {
   esac
 
   return 1
+}
+
+# Risk-contract fields are structurally exact literals even before readiness,
+# but the normal contract check deliberately permits template placeholders.
+forgeflow_is_structured_literal() {
+  forgeflow_structured_literal=$1
+  forgeflow_trim "$forgeflow_structured_literal"
+  forgeflow_structured_literal=$forgeflow_trimmed
+
+  case "$forgeflow_structured_literal" in
+    \`*\`) ;;
+    *) return 1 ;;
+  esac
+
+  forgeflow_structured_literal=${forgeflow_structured_literal#\`}
+  forgeflow_structured_literal=${forgeflow_structured_literal%\`}
+  case "$forgeflow_structured_literal" in
+    ''|*'`'*) return 1 ;;
+    *[![:space:]]*) return 0 ;;
+    *) return 1 ;;
+  esac
 }
 
 forgeflow_report() {
@@ -553,6 +574,18 @@ forgeflow_is_evidence_placeholder() {
   case "$1" in
     ''|'*'|'-'|TBD|tbd|TODO|todo|'N/A'|'n/a'|'...'|'<evidence>'|'<fixture>'|\
     '<fixture / precondition>'|'<expected observation>') return 0 ;;
+  esac
+  return 1
+}
+
+forgeflow_is_risk_contract_placeholder() {
+  case "$1" in
+    ''|'*'|'-'|TBD|tbd|TODO|todo|'N/A'|'n/a'|'...'|'<value>'|\
+    '<source failure>'|'<public projection>'|'<detail policy>'|\
+    '<contended resource>'|'<linearization point>'|'<conflict outcome>'|\
+    '<bounded resource>'|'<limit>'|'<saturation behavior>'|\
+    '<failure projection>'|'<retained resource>'|'<retention bound>'|\
+    '<overflow policy>'|'<recovery / observability>'|'<evidence ac>') return 0 ;;
   esac
   return 1
 }
@@ -956,10 +989,269 @@ forgeflow_risk_bullet() {
         forgeflow_story_fail 'risk reason must name one same-line backticked signal'
       fi
       ;;
+    Signal)
+      if ! forgeflow_is_structured_literal "$forgeflow_gov_value"; then
+        forgeflow_story_fail 'risk signal must name one same-line backticked value'
+        return 0
+      fi
+      forgeflow_gov_unquote "$forgeflow_gov_value"
+      case " $forgeflow_standard_risk_signals " in
+        *" $forgeflow_gov_unquoted "*) ;;
+        *)
+          forgeflow_story_fail "risk signal is unknown: $forgeflow_gov_unquoted"
+          return 0
+          ;;
+      esac
+      case "$forgeflow_risk_signals" in
+        *" $forgeflow_gov_unquoted "*)
+          forgeflow_story_fail "risk signal is declared more than once: $forgeflow_gov_unquoted"
+          return 0
+          ;;
+      esac
+      forgeflow_risk_signals="$forgeflow_risk_signals$forgeflow_gov_unquoted "
+      ;;
     *)
       forgeflow_story_fail "risk declares an unknown label: $forgeflow_gov_label"
       ;;
   esac
+}
+
+forgeflow_risk_contract_bullet() {
+  if ! forgeflow_gov_split "$1"; then
+    forgeflow_story_fail "$forgeflow_risk_contract_name entry is not a declaration: $1"
+    return 0
+  fi
+
+  case "$forgeflow_risk_contract_kind:$forgeflow_gov_label" in
+    error-projection:'Source failure')
+      forgeflow_source_failure_count=$((forgeflow_source_failure_count + 1))
+      forgeflow_source_failure=$forgeflow_gov_value ;;
+    error-projection:'Public projection')
+      forgeflow_public_projection_count=$((forgeflow_public_projection_count + 1))
+      forgeflow_public_projection=$forgeflow_gov_value ;;
+    error-projection:'Detail policy')
+      forgeflow_detail_policy_count=$((forgeflow_detail_policy_count + 1))
+      forgeflow_detail_policy=$forgeflow_gov_value ;;
+    error-projection:'Evidence AC')
+      forgeflow_contract_evidence_ac_count=$((forgeflow_contract_evidence_ac_count + 1))
+      forgeflow_contract_evidence_ac=$forgeflow_gov_value ;;
+    concurrency:'Contended resource')
+      forgeflow_contended_resource_count=$((forgeflow_contended_resource_count + 1))
+      forgeflow_contended_resource=$forgeflow_gov_value ;;
+    concurrency:'Linearization point')
+      forgeflow_linearization_point_count=$((forgeflow_linearization_point_count + 1))
+      forgeflow_linearization_point=$forgeflow_gov_value ;;
+    concurrency:'Conflict outcome')
+      forgeflow_conflict_outcome_count=$((forgeflow_conflict_outcome_count + 1))
+      forgeflow_conflict_outcome=$forgeflow_gov_value ;;
+    concurrency:'Evidence AC')
+      forgeflow_contract_evidence_ac_count=$((forgeflow_contract_evidence_ac_count + 1))
+      forgeflow_contract_evidence_ac=$forgeflow_gov_value ;;
+    bounded-capacity:'Bounded resource')
+      forgeflow_bounded_resource_count=$((forgeflow_bounded_resource_count + 1))
+      forgeflow_bounded_resource=$forgeflow_gov_value ;;
+    bounded-capacity:Limit)
+      forgeflow_capacity_limit_count=$((forgeflow_capacity_limit_count + 1))
+      forgeflow_capacity_limit=$forgeflow_gov_value ;;
+    bounded-capacity:'Saturation behavior')
+      forgeflow_saturation_behavior_count=$((forgeflow_saturation_behavior_count + 1))
+      forgeflow_saturation_behavior=$forgeflow_gov_value ;;
+    bounded-capacity:'Failure projection')
+      forgeflow_failure_projection_count=$((forgeflow_failure_projection_count + 1))
+      forgeflow_failure_projection=$forgeflow_gov_value ;;
+    bounded-capacity:'Evidence AC')
+      forgeflow_contract_evidence_ac_count=$((forgeflow_contract_evidence_ac_count + 1))
+      forgeflow_contract_evidence_ac=$forgeflow_gov_value ;;
+    retention-overflow:'Retained resource')
+      forgeflow_retained_resource_count=$((forgeflow_retained_resource_count + 1))
+      forgeflow_retained_resource=$forgeflow_gov_value ;;
+    retention-overflow:'Retention bound')
+      forgeflow_retention_bound_count=$((forgeflow_retention_bound_count + 1))
+      forgeflow_retention_bound=$forgeflow_gov_value ;;
+    retention-overflow:'Overflow policy')
+      forgeflow_overflow_policy_count=$((forgeflow_overflow_policy_count + 1))
+      forgeflow_overflow_policy=$forgeflow_gov_value ;;
+    retention-overflow:'Recovery / observability')
+      forgeflow_recovery_observability_count=$((forgeflow_recovery_observability_count + 1))
+      forgeflow_recovery_observability=$forgeflow_gov_value ;;
+    retention-overflow:'Evidence AC')
+      forgeflow_contract_evidence_ac_count=$((forgeflow_contract_evidence_ac_count + 1))
+      forgeflow_contract_evidence_ac=$forgeflow_gov_value ;;
+    *) forgeflow_story_fail "$forgeflow_risk_contract_name declares an unknown label: $forgeflow_gov_label" ;;
+  esac
+}
+
+forgeflow_require_risk_contract_field() {
+  forgeflow_contract_field_label=$1
+  forgeflow_contract_field_count=$2
+  forgeflow_contract_field_value=$3
+
+  if [ "$forgeflow_contract_field_count" -ne 1 ]; then
+    forgeflow_story_fail "$forgeflow_risk_contract_name must declare \"$forgeflow_contract_field_label\" exactly once"
+    return
+  fi
+
+  if ! forgeflow_is_structured_literal "$forgeflow_contract_field_value"; then
+    forgeflow_story_fail "$forgeflow_risk_contract_name $forgeflow_contract_field_label must state one exact same-line backticked value"
+    return
+  fi
+
+  if [ "$forgeflow_ready" -eq 1 ]; then
+    forgeflow_gov_unquote "$forgeflow_contract_field_value"
+    if forgeflow_is_risk_contract_placeholder "$forgeflow_gov_unquoted"; then
+      forgeflow_ready_fail "$forgeflow_risk_contract_name $forgeflow_contract_field_label is a placeholder"
+    fi
+  fi
+}
+
+forgeflow_check_risk_evidence_ac() {
+  [ "$forgeflow_ready" -eq 1 ] || return 0
+  [ "$forgeflow_contract_evidence_ac_count" -eq 1 ] || return 0
+  forgeflow_is_structured_literal "$forgeflow_contract_evidence_ac" || return 0
+
+  forgeflow_gov_unquote "$forgeflow_contract_evidence_ac"
+  forgeflow_risk_evidence_ac=$forgeflow_gov_unquoted
+  case "$forgeflow_risk_evidence_ac" in
+    AC-*)
+      case "${forgeflow_risk_evidence_ac#AC-}" in
+        ''|*[!0-9]*) forgeflow_risk_evidence_ac= ;;
+      esac
+      ;;
+    *) forgeflow_risk_evidence_ac= ;;
+  esac
+
+  if [ -z "$forgeflow_risk_evidence_ac" ]; then
+    forgeflow_ready_fail "$forgeflow_risk_contract_name Evidence AC must name one exact AC-<digits> ID"
+    return
+  fi
+
+  case "$forgeflow_ac_ids" in
+    *" $forgeflow_risk_evidence_ac "*) ;;
+    *)
+      forgeflow_ready_fail "$forgeflow_risk_contract_name Evidence AC names unknown AC ID: $forgeflow_risk_evidence_ac"
+      return
+      ;;
+  esac
+
+  case "$forgeflow_evidence_ids" in
+    *" $forgeflow_risk_evidence_ac "*) ;;
+    *) forgeflow_ready_fail "$forgeflow_risk_contract_name Evidence AC has no Acceptance Evidence row: $forgeflow_risk_evidence_ac" ;;
+  esac
+}
+
+forgeflow_check_error_projection_contract() {
+  forgeflow_risk_contract_kind=error-projection
+  forgeflow_risk_contract_name='Error Projection'
+  forgeflow_source_failure_count=0
+  forgeflow_source_failure=
+  forgeflow_public_projection_count=0
+  forgeflow_public_projection=
+  forgeflow_detail_policy_count=0
+  forgeflow_detail_policy=
+  forgeflow_contract_evidence_ac_count=0
+  forgeflow_contract_evidence_ac=
+  forgeflow_scan_section "$forgeflow_story_file" '## Error Projection' \
+    forgeflow_risk_contract_bullet
+  if [ "$forgeflow_section_count" -ne 1 ]; then
+    forgeflow_story_fail 'risk signal error-projection requires ## Error Projection exactly once'
+    return
+  fi
+  forgeflow_require_risk_contract_field 'Source failure' "$forgeflow_source_failure_count" "$forgeflow_source_failure"
+  forgeflow_require_risk_contract_field 'Public projection' "$forgeflow_public_projection_count" "$forgeflow_public_projection"
+  forgeflow_require_risk_contract_field 'Detail policy' "$forgeflow_detail_policy_count" "$forgeflow_detail_policy"
+  forgeflow_require_risk_contract_field 'Evidence AC' "$forgeflow_contract_evidence_ac_count" "$forgeflow_contract_evidence_ac"
+  forgeflow_check_risk_evidence_ac
+}
+
+forgeflow_check_concurrency_contract() {
+  forgeflow_risk_contract_kind=concurrency
+  forgeflow_risk_contract_name='Concurrency'
+  forgeflow_contended_resource_count=0
+  forgeflow_contended_resource=
+  forgeflow_linearization_point_count=0
+  forgeflow_linearization_point=
+  forgeflow_conflict_outcome_count=0
+  forgeflow_conflict_outcome=
+  forgeflow_contract_evidence_ac_count=0
+  forgeflow_contract_evidence_ac=
+  forgeflow_scan_section "$forgeflow_story_file" '## Concurrency' \
+    forgeflow_risk_contract_bullet
+  if [ "$forgeflow_section_count" -ne 1 ]; then
+    forgeflow_story_fail 'risk signal concurrency requires ## Concurrency exactly once'
+    return
+  fi
+  forgeflow_require_risk_contract_field 'Contended resource' "$forgeflow_contended_resource_count" "$forgeflow_contended_resource"
+  forgeflow_require_risk_contract_field 'Linearization point' "$forgeflow_linearization_point_count" "$forgeflow_linearization_point"
+  forgeflow_require_risk_contract_field 'Conflict outcome' "$forgeflow_conflict_outcome_count" "$forgeflow_conflict_outcome"
+  forgeflow_require_risk_contract_field 'Evidence AC' "$forgeflow_contract_evidence_ac_count" "$forgeflow_contract_evidence_ac"
+  forgeflow_check_risk_evidence_ac
+}
+
+forgeflow_check_capacity_contract() {
+  forgeflow_risk_contract_kind=bounded-capacity
+  forgeflow_risk_contract_name='Capacity'
+  forgeflow_bounded_resource_count=0
+  forgeflow_bounded_resource=
+  forgeflow_capacity_limit_count=0
+  forgeflow_capacity_limit=
+  forgeflow_saturation_behavior_count=0
+  forgeflow_saturation_behavior=
+  forgeflow_failure_projection_count=0
+  forgeflow_failure_projection=
+  forgeflow_contract_evidence_ac_count=0
+  forgeflow_contract_evidence_ac=
+  forgeflow_scan_section "$forgeflow_story_file" '## Capacity' \
+    forgeflow_risk_contract_bullet
+  if [ "$forgeflow_section_count" -ne 1 ]; then
+    forgeflow_story_fail 'risk signal bounded-capacity requires ## Capacity exactly once'
+    return
+  fi
+  forgeflow_require_risk_contract_field 'Bounded resource' "$forgeflow_bounded_resource_count" "$forgeflow_bounded_resource"
+  forgeflow_require_risk_contract_field 'Limit' "$forgeflow_capacity_limit_count" "$forgeflow_capacity_limit"
+  forgeflow_require_risk_contract_field 'Saturation behavior' "$forgeflow_saturation_behavior_count" "$forgeflow_saturation_behavior"
+  forgeflow_require_risk_contract_field 'Failure projection' "$forgeflow_failure_projection_count" "$forgeflow_failure_projection"
+  forgeflow_require_risk_contract_field 'Evidence AC' "$forgeflow_contract_evidence_ac_count" "$forgeflow_contract_evidence_ac"
+  forgeflow_check_risk_evidence_ac
+}
+
+forgeflow_check_retention_contract() {
+  forgeflow_risk_contract_kind=retention-overflow
+  forgeflow_risk_contract_name='Retention and Overflow'
+  forgeflow_retained_resource_count=0
+  forgeflow_retained_resource=
+  forgeflow_retention_bound_count=0
+  forgeflow_retention_bound=
+  forgeflow_overflow_policy_count=0
+  forgeflow_overflow_policy=
+  forgeflow_recovery_observability_count=0
+  forgeflow_recovery_observability=
+  forgeflow_contract_evidence_ac_count=0
+  forgeflow_contract_evidence_ac=
+  forgeflow_scan_section "$forgeflow_story_file" '## Retention and Overflow' \
+    forgeflow_risk_contract_bullet
+  if [ "$forgeflow_section_count" -ne 1 ]; then
+    forgeflow_story_fail 'risk signal retention-overflow requires ## Retention and Overflow exactly once'
+    return
+  fi
+  forgeflow_require_risk_contract_field 'Retained resource' "$forgeflow_retained_resource_count" "$forgeflow_retained_resource"
+  forgeflow_require_risk_contract_field 'Retention bound' "$forgeflow_retention_bound_count" "$forgeflow_retention_bound"
+  forgeflow_require_risk_contract_field 'Overflow policy' "$forgeflow_overflow_policy_count" "$forgeflow_overflow_policy"
+  forgeflow_require_risk_contract_field 'Recovery / observability' "$forgeflow_recovery_observability_count" "$forgeflow_recovery_observability"
+  forgeflow_require_risk_contract_field 'Evidence AC' "$forgeflow_contract_evidence_ac_count" "$forgeflow_contract_evidence_ac"
+  forgeflow_check_risk_evidence_ac
+}
+
+forgeflow_check_risk_contracts() {
+  for forgeflow_declared_signal in $forgeflow_risk_signals
+  do
+    case "$forgeflow_declared_signal" in
+      error-projection) forgeflow_check_error_projection_contract ;;
+      concurrency) forgeflow_check_concurrency_contract ;;
+      bounded-capacity) forgeflow_check_capacity_contract ;;
+      retention-overflow) forgeflow_check_retention_contract ;;
+    esac
+  done
+  return 0
 }
 
 # Reads a decision record's single "* Status: <value>" declaration. A decision
@@ -1091,6 +1383,7 @@ forgeflow_check_governance() {
   forgeflow_risk_level_count=0
   forgeflow_reasons=
   forgeflow_reason_count=0
+  forgeflow_risk_signals=' '
 
   forgeflow_scan_section "$forgeflow_story_file" '## Classification' \
     forgeflow_task_mode_bullet
@@ -1256,6 +1549,8 @@ forgeflow_check_governance() {
       esac
     done
   fi
+
+  forgeflow_check_risk_contracts
 }
 
 # One Story ID grammar, shared with scripts/handoff-check: hyphen-separated
@@ -1493,6 +1788,7 @@ forgeflow_tab=$(printf '\t')
 forgeflow_unit_separator=$(printf '\036')
 forgeflow_authority_keys='plan modify add_dependency migration commit push deploy'
 forgeflow_high_risk_signals='authentication authorization security payment payments schema-migration data-loss public-contract concurrency production-config dependency-supply-chain destructive-operation'
+forgeflow_standard_risk_signals='error-projection concurrency bounded-capacity retention-overflow'
 forgeflow_matrix_header_row='| Source field | Payload | Expected result | Persisted locations | Verification |'
 forgeflow_evidence_header_row='| AC | Method | Evidence | Fixture / precondition | Expected observation |'
 forgeflow_ready=0
@@ -1600,8 +1896,8 @@ if [ "$forgeflow_contract_incomplete" -gt 0 ]; then
   printf 'Result: STORY_CONTRACT_INCOMPLETE\n'
   printf 'Stories checked: %s\n\n' "$forgeflow_checked"
   printf 'Next:\n'
-  printf 'Record the missing classification, fixture matrix, or superseded\n'
-  printf 'behavior in the Story, then run this check again.\n'
+  printf 'Record the missing classification, conditional contract, fixture\n'
+  printf 'matrix, or superseded behavior in the Story, then recheck.\n'
   exit 1
 fi
 

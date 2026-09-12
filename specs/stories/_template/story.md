@@ -57,6 +57,18 @@ reason. Risk raises inspection and verification depth. It never widens scope.
 Each reason is one non-empty same-line backticked signal, such as
 `versioned-surface`; prose and a closing backtick on a later line are invalid.
 
+<!--
+Optional risk signals:
+error-projection
+concurrency
+bounded-capacity
+retention-overflow
+
+Declaring a signal activates its corresponding readiness contract. Add only
+the Error Projection, Concurrency, Capacity, or Retention and Overflow section
+that the Story needs; see protocol/story.md for its exact fields.
+-->
+
 * Level: low
 * Reason: `signal`
 
