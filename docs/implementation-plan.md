@@ -1,12 +1,12 @@
 # AgentPort v0.1 實作計畫
 
-日期：2026-09-12。狀態：計畫文件；所有實作階段尚未開始，沒有安裝依賴、建立程式骨架、啟動 Runtime 或部署。
+日期：2026-09-12。狀態：計畫文件；S0 local compatibility evidence 已完成，Linux metadata／G0 仍 blocked，尚未建立產品程式、啟動 Runtime 或部署。
 
 依據：[已確認需求](delegation-requirements.md)、[Technical Design](technical-design.md)、[術語表](../CONTEXT.md)。技術設計定義行為，本文件定義執行順序與驗收；兩者衝突時先修正計畫，不以方便實作為由降低已確認需求。
 
-治理導入註記：本計畫保留 S0–S6／G0–G6 的依賴與驗收設計；表格的「未開始」是規劃時點快照，正式工作狀態由 ForgePilot 管理，不在本計畫維護第二套 lifecycle。
+治理導入註記：本計畫保留 S0–S6／G0–G6 的依賴與驗收設計；正式工作狀態由 ForgePilot 管理，不在本計畫維護第二套 lifecycle。
 `.scratch` 不是 implementation lifecycle authority；正式 implementation 工作需提升為 ForgeFlow Story，其執行狀態由 ForgePilot Work Item 管理。
-第一張為 [AP-001 / S0–G0](../specs/stories/AP-001-toolchain-mcp-compatibility/story.md)，治理導入僅建立 Story，尚未開始 S0。完整流程見 [development workflow](development-workflow.md)。
+[AP-001 / S0–G0](../specs/stories/AP-001-toolchain-mcp-compatibility/story.md) 已保存 local PASS evidence，但 AC-09 因沒有指定 Linux target 保持 blocked；[AP-002 / S2–G2](../specs/stories/AP-002-platform-neutral-durable-admission/story.md) 是後續 durable-admission Story。完整流程見 [development workflow](development-workflow.md)。
 
 ## 1. 首版成果與範圍
 
@@ -14,23 +14,23 @@
 
 首版必須同時具備外側控制、持久任務、可靠停止及正向澄清往返；只有 fake worker、SDK 呼叫成功或 MCP tools/list 成功，都不能宣告首版完成。分支推送與 PR 依任務／專案規則，不是所有任務的必需產出。
 
-macOS、A2A、其他 Runtime、排程、LINE／Telegram、公開多租戶、遠端提權與任意檔案下載不列入這次實作。原計畫撰寫時目錄尚非 Git worktree；目前已初始化 Git，產品程式仍未開始，沿用既有 repository 歷史。
+macOS 是 Node、MCP、SQLite、核心狀態／持久化、Adapter 與 fake-worker contract tests 的開發平台，但 native Runtime execution、可靠停止與部署不列入首版支援。A2A、其他 Runtime、排程、LINE／Telegram、公開多租戶、遠端提權與任意檔案下載同樣不列入這次實作。[平台決策](adr/0004-linux-execution-macos-development.md)
 
 ## 2. 順序與階段門檻
 
-| 階段 | 交付的可觀察能力 | 依賴 | 狀態 |
-| --- | --- | --- | --- |
-| S0 | 可重現工具鏈與版本／契約檢查；MCP Client 相容性已證實 | 無 | 未開始 |
-| S1 | 本機受控 execution 可啟動／停止，真 Claude 可提問並取得回答 | S0 | 未開始 |
-| S2 | 經授權 MCP 提交→持久 queued Task→查詢／取消；重啟不遺失 | S0、S1 的必要能力證據 | 未開始 |
-| S3 | MCP→核心→受控 Claude execution→結果／取消，並具基本恢復 | S1、S2 | 未開始 |
-| S4 | 完整追加佇列、修改、澄清往返與明確續接操作 | S3 | 未開始 |
-| S5 | 崩潰、容量、儲存及效能情境下仍符合控制與恢復契約 | S4 | 未開始 |
-| S6 | 通用 MCP 交辦方的首版全流程驗收與可操作的 Linux 發行包 | S5 | 未開始 |
+| 階段 | 交付的可觀察能力 | 依賴 |
+| --- | --- | --- |
+| S0 | 可重現工具鏈與版本／契約檢查；MCP Client 相容性已證實 | 無 |
+| S1 | 指定 Linux target 上受控 execution 可啟動／停止，真 Claude 可提問並取得回答 | S0 local compatibility；指定 Linux environment |
+| S2 | 經授權 MCP 提交→持久 queued Task→查詢／取消；重啟不遺失；不派送 Runtime | S0 local compatibility；ADR-0004 sequencing decision |
+| S3 | MCP→核心→受控 Claude execution→結果／取消，並具基本恢復 | G1、G2 |
+| S4 | 完整追加佇列、修改、澄清往返與明確續接操作 | S3 |
+| S5 | 崩潰、容量、儲存及效能情境下仍符合控制與恢復契約 | S4 |
+| S6 | 通用 MCP 交辦方的首版全流程驗收與可操作的 Linux 發行包 | S5 |
 
-主要路徑為 S0 → S1 → S2 → S3 → S4 → S5 → S6。S0 內的 MCP 相容性與 Linux 靜態環境檢查可獨立進行；不因可並行而讓多個人同時修改生命週期／儲存邊界。
+S0 後可平行處理 S1 與 S2：S1 只在指定 Linux fixture 建立受控 execution；S2 可在 macOS 或 Linux 開發 platform-neutral durable admission，但 build／import／production composition graph 都不得含可到達的 Runtime dispatch path。兩條路徑都通過後才可進 S3，主要整合路徑為 `(G1 + G2) → S3 → S4 → S5 → S6`。S0 的 Linux metadata blocked 不由 macOS evidence 取代，也不因可平行而讓多個人同時修改生命週期／儲存 seam。
 
-S1 將最可能推翻整合選擇的能力提早驗證；其 harness 只在指定 Linux fixture 使用，不是略過核心授權與持久化的產品入口。S3 開始真正派送前就必須有持久 claim、啟動撤銷、取消及重啟停止規則，不能留到 S5 才補上；S5 是擴大故障驗證，不是延後可靠性實作。
+S1 將最可能推翻整合選擇的能力提早驗證；其 harness 只在指定 Linux fixture 使用，不是略過核心授權與持久化的產品入口。S2 的 MCP／storage fixture 也不是可部署的 admission-only 服務。S3 開始任何真正派送前，G1 的 generation fencing／Stop Evidence 與 G2 的持久 admission／取消／重啟規則都必須通過，不能留到 S5 才補上；Workspace claim 在 S3 的 dispatch transaction 才建立。S5 是擴大故障驗證，不是延後可靠性實作。
 
 每階段完成時保存檔案變更、命令、版本、測試結果及未解事項。階段只有在退出條件通過後才標完成；缺少 Linux 或 Runtime 憑證標記待環境，不以跳過測試作為通過。
 
@@ -44,7 +44,7 @@ S1 將最可能推翻整合選擇的能力提早驗證；其 harness 只在指�
 | src/storage/、migrations/ | SQLite 交易、receipt、claim、事件、reserve 與恢復資料；主代理 |
 | src/mcp/ | 官方 SDK、工具 schema、Principal 轉換與錯誤投影；穩定核心契約後可分派 |
 | src/runtime/claude/、src/runtime/worker/ | Claude Driver、受限 IPC、事件及回答 ack；主代理負責控制語意 |
-| src/supervisor/ | Linux execution generation、啟動／撤銷／停止證據；主代理 |
+| src/supervisor/ | platform-neutral Supervisor interface、generation／Stop Evidence；Linux cgroup v2 Adapter；主代理 |
 | src/bootstrap/ | 配置、Registry、組裝、readiness／doctor；不含另一套排程 |
 | tests/unit/、tests/integration/、tests/contracts/、tests/e2e/、tests/fixtures/ | 對應行為、真儲存、worker、MCP、Linux／Claude 及故障 fixture |
 | docs/operations.md、docs/verification.md | 操作程序與實際驗證紀錄；隨切片更新 |
@@ -67,31 +67,32 @@ SQLite／並行／授權／launcher 是高風險邊界，保持主代理實作�
 
 ## 5. S1 — 受控 Linux execution 與真 Claude 可行性
 
-**成果：**本機 harness 能觀察與停止 execution，並證明 Claude 的必要互動能力。此階段只操作指定測試目錄，不開放遠端任務派送。
+**成果：**指定 Linux target 的 harness 能觀察與停止 execution，並證明 Claude 的必要互動能力。此階段只操作指定測試目錄，不開放遠端任務派送。
 
 工作：
 
-- 實作最小可重用 supervisor／launcher 及 worker IPC 契約：executionId／generation、持久撤銷、開始前放行點、停止證據；supervisor 狀態與 Runtime 帳號權限分離。
+- 實作最小可重用 Execution Supervisor interface、Linux cgroup v2 Adapter 及 worker IPC 契約：executionId／generation、持久撤銷、開始前放行點、不透明 Execution Unit ID、Stop Evidence；Supervisor 狀態與 Runtime 帳號權限分離。
 - 先用不呼叫模型的 fixture 驗證啟動、取消早於啟動、延遲 start、supervisor 重啟、同步卡住 worker、子程序／detached 子程序的停止。generation 封閉且 cgroup 空才可說停止完成。
 - 在已驗證的受控 execution 內接入真 Claude SDK：明確 cwd／設定來源，取得結構化結果；刻意觸發 AskUserQuestion、保留原生待決回呼、提供有效答案並繼續同一 harness 工作。
 - 驗證 AskUserQuestion 與一般權限請求分流；確認進入純等待前沒有仍在執行的平行工具。不能把所有 canUseTool 自動 allow 或將普通 assistant 問句當成等待回呼。
 - 驗證執行中／等待中取消、成功後 cleanup 與安全 Session reference；記錄事件順序、原生 tool-use 關聯及 SDK 控制行為，形成後續 Driver contract fixtures。
 
-**退出條件 G1：**真 Claude 正向「提問→回答→繼續」及可靠停止有證據；沒有孤兒 execution，晚到 start 無法在取消後重新啟動。若 SDK 模式無法保證純等待或控制邊界，暫停依賴此能力的 S2–S4，先以證據修正 Driver 選擇；不能改用 fake 通過或刪掉澄清要求。
+**退出條件 G1：**真 Claude 正向「提問→回答→繼續」及可靠停止有證據；沒有孤兒 execution，晚到 start 無法在取消後重新啟動。若 SDK 模式無法保證純等待或控制邊界，暫停依賴 Runtime execution 的 S3–S4，先以證據修正 Driver 選擇；不影響不含 dispatch 的 S2，也不能改用 fake 通過或刪掉澄清要求。
 
 ## 6. S2 — MCP 到持久任務的第一個切片
 
-**成果：**交辦方取得穩定 Task ID，能跨重啟查詢並取消尚未啟動的工作；此切片尚未派送 Runtime。
+**成果：**交辦方取得穩定 Task ID，能跨重啟查詢並取消尚未啟動的工作；此切片可在 macOS 或 Linux 開發，但不建立 Execution、Workspace claim 或派送 Runtime。[AP-002](../specs/stories/AP-002-platform-neutral-durable-admission/story.md)
 
 工作：
 
-- 建立核心公開型別與唯一 AgentExecutionService；SQLite 初始 migration 保存 Task、Context、BindingSnapshot、receipt、event、claim，以及接下來問題／execution 所需的穩定關聯。
+- 建立核心公開型別與唯一 AgentExecutionService；SQLite 初始 migration 只保存本切片需要的 Task、Context、BindingSnapshot、receipt、event 與 reserve metadata，不預建 Question、Execution 或 Workspace claim schema。
 - 實作管理者 Registry、scope／principal 分離、固定 Workspace identity 與 Agent allowlist；MCP 請求不能覆寫路徑、binary、政策或身分。
-- 完成 list_agents、submit_task、get_task、list_tasks、get_events 及未啟動 cancel_task。僅發布已實作且具正確語意的工具，不以空成功結果代替其他工具。
+- 完成 list_agents、submit_task、get_task、list_tasks、get_events 及可取消未啟動 queued／paused Task 的 cancel_task。僅發布已實作且具正確語意的工具，不以空成功結果代替其他工具。
 - submit 的 Task／receipt／事件先原子 commit 再回覆；原始 operation fingerprint 不隨後續 Task 更新改變；跨重啟去重、queued→paused、取消 queued、事件 cursor 與基本 result projection 一起落地。
 - 從一開始區分一般 admission 與既有 Task 控制容量，確保 accepted Task 已保留取消／結案紀錄空間。SQLite I/O 不在控制事件迴圈阻塞。
+- AP-002 diff 不新增 dormant／feature-flagged dispatcher、Runtime Driver、Supervisor Adapter 或 worker launcher；S2 build／import／composition graph 的每種配置都不能到達 S1 已合法交付的 execution artifacts。fake worker 只驗證訊息 contract，任何 spawn／dispatch 都使 tripwire 測試失敗。
 
-**退出條件 G2：**真 SQLite＋官方 MCP Client 驗證同鍵同時提交只建一個 Task、回應遺失後同鍵取得原 ID、重啟保留紀錄且 queue 暫停、跨 scope 操作拒絕。提交或 DB commit 失敗時沒有執行副作用；這只是 durable admission 切片，不是首版完成。
+**退出條件 G2：**真 SQLite＋官方 MCP Client 驗證同鍵同時提交只建一個 Task、回應遺失後同鍵取得原 ID、重啟保留紀錄且 queue 暫停、跨 scope 操作拒絕；no-dispatch contract 證明沒有 Execution／claim／worker／Supervisor 接觸。提交或 DB commit 失敗時沒有執行副作用；macOS PASS 只證明 durable admission，不是 Linux、Runtime、reliable-stop 或首版完成。
 
 ## 7. S3 — 派送、結果、取消與基本恢復
 
@@ -154,11 +155,11 @@ SQLite／並行／授權／launcher 是高風險邊界，保持主代理實作�
 
 ## 11. 品質命令與驗收對照
 
-`make verify` 是唯一 canonical gate，治理導入時先檢查 repository contract／Story 結構，S0 再加入工具鏈與 MCP fixture；目前尚無下列 pnpm 命令，由 S0 起逐步建立。依使用者指定採 pnpm 12 作唯一套件管理工具，只保留 pnpm-lock.yaml；本機、Linux 驗證與 CI 使用相同的 exact patch 及 frozen lockfile 安裝，不另產生 package-lock.json 或 yarn.lock。若指定版本與 Node／依賴有實際相容性問題，先記錄證據並交由 ForgePilot Gate，不擅自切換套件管理器或主要版本。
+`make verify` 是唯一 canonical gate；S0 已接入 repository contract／Story 結構、固定工具鏈、MCP／SQLite compatibility fixture、format、lint、typecheck、build 與 test，後續階段再加入相關產品檢查。依使用者指定採 pnpm 12 作唯一套件管理工具，只保留 pnpm-lock.yaml；本機、Linux 驗證與 CI 使用相同的 exact patch 及 frozen lockfile 安裝，不另產生 package-lock.json 或 yarn.lock。若指定版本與 Node／依賴有實際相容性問題，先記錄證據並交由 ForgePilot Gate，不擅自切換套件管理器或主要版本。
 
 下表是底層檢查，不是平行 PASS authority。無 vendor 憑證的檢查由 `make verify` 統合；Linux／Claude／release 所需外部環境證據另行明確執行並與同一 revision 的 local verify 一起交付。缺必要環境保持未驗證，不能因 local PASS 宣稱該階段完成。
 
-| 擬建立命令 | 用途／環境 |
+| 命令 | 用途／環境 |
 | --- | --- |
 | pnpm install --frozen-lockfile | 根據 pnpm-lock.yaml 重現安裝 |
 | pnpm run check | lint、typecheck、build 及不需 vendor 憑證的核心／儲存／fixture 整合檢查 |
@@ -189,6 +190,6 @@ SQLite／並行／授權／launcher 是高風險邊界，保持主代理實作�
 
 verification 每次紀錄包含：階段／AC、source revision 或檔案摘要、OS／版本、命令、fixture、預期與實際、執行／停止次數、結果位置、時間及限制。Task／execution／question ID 可作關聯，但不記 token、環境變數值、完整私密 prompt 或未遮罩 stderr。
 
-最優先處理的阻擋是 S0 Client／版本相容、S1 Linux 執行權限及 Claude 純等待／停止能力；沒有證據時先完成可獨立驗證的部分，保留依賴階段為未完成。不得以放寬權限、取消 persistence、忽略 generation fence 或改稱不支援互動來通過驗收。
+目前阻擋是 AP-001 AC-09 的 Linux metadata、S1 Linux 執行權限及 Claude 純等待／停止能力；沒有指定 Linux target 時可依 AP-002 完成 S2 的 platform-neutral durable admission，仍保留 G0／G1 與所有依賴 execution 的階段為未完成。不得以 macOS、Docker、fake worker、放寬權限、取消 persistence、忽略 generation fence 或改稱不支援互動來通過驗收。
 
-下次開始實作的第一步是 S0：確認實際程式工作目錄與 Linux 測試目標、建立最小工具鏈並固定版本。這份計畫不直接執行任何階段，不提供未量測的工期／完成日期；S1 通過後再按實際 fixture、依賴及問題量估算剩餘工作。
+下一個可開始的產品切片是 AP-002／S2，但只有在使用者明確 Start 對應 ForgePilot Work Item 後才執行；S1 仍等待指定 Linux target，S3 必須等 G1 與 G2 都通過。這份計畫不直接授權任何階段，也不提供未量測的工期／完成日期。

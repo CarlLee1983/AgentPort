@@ -1,12 +1,12 @@
 # AgentPort v0.1 Technical Design
 
-日期：2026-09-12。依[已確認需求](delegation-requirements.md)整合的可審閱設計；以下技術選擇仍須通過固定版本相容性與實作驗證。本輪只更新文件，沒有程式骨架、套件安裝、Runtime 執行或部署。
+日期：2026-09-12。依[已確認需求](delegation-requirements.md)整合的可審閱設計；S0 已固定相容工具鏈，以下產品選擇仍須通過實作驗證。本次平台決策只更新設計與後續 Story，沒有新增產品程式、Runtime 執行或部署。
 
 詞彙：[CONTEXT.md](../CONTEXT.md)。來源：[技術依據](technical-evidence.md)、[MCP](mcp-evidence.md)、[Claude](claude-evidence.md)。[架構候選](architecture-candidates.md)是歷史探索，不再定義首版行為。
 
 ## 1. 範圍與設計選擇
 
-首版是通用 MCP 交辦方 → AgentPort → Linux 上的 Claude Code。交辦方選工作與 Agent，AgentPort 擁有任務執行、查詢、排隊、澄清往返及取消。Grok bot 僅為交辦方例子；不建立品牌專屬入口。macOS 第二階段驗證；A2A、Codex／Cursor Driver、排程、LINE／Telegram、需求拆解及跨 Agent 協作不列入首版交付。
+首版是通用 MCP 交辦方 → AgentPort → Linux 上的 Claude Code。交辦方選工作與 Agent，AgentPort 擁有任務執行、查詢、排隊、澄清往返及取消。Grok bot 僅為交辦方例子；不建立品牌專屬入口。macOS 支援 platform-neutral development 與 verification，但不支援 native Runtime execution 或 deployment；A2A、Codex／Cursor Driver、排程、LINE／Telegram、需求拆解及跨 Agent 協作不列入首版交付。[平台決策](adr/0004-linux-execution-macos-development.md)
 
 | 選擇 | 設計與理由 |
 | --- | --- |
@@ -30,7 +30,8 @@
 | 持久儲存 | 短交易、唯一約束、revision 比對、快照及事件讀取 | 自行重播 Runtime 命令 |
 | Registry | 管理者設定、Agent／Driver 能力及固定 Workspace | 遠端自助建立執行目標 |
 | Runtime worker／Driver | Claude SDK、原生 Session、輸出正規化、回答傳遞 | 寫核心資料庫、發布 Task 終態、取得 AgentPort 憑證 |
-| 可信 launcher／資源監督 | 執行前建立 cgroup、啟動及停止 execution、存活證據 | 通用遠端 shell、模型成功判定 |
+| Execution Supervisor interface | 放行已持久授權的 generation、撤銷／停止、重啟核對及不透明 Execution Unit／Stop Evidence | OS-specific 名稱、通用遠端 shell、模型成功判定 |
+| Linux Supervisor Adapter | 以 cgroup v2 建立／停止 Execution Unit 並提供 unit empty 證據 | Task 狀態、Runtime credential、macOS 支援宣告 |
 
 SQLite 同步呼叫若由 binding 提供，放在專用資料庫 worker；查詢用獨立短讀取通道，不排在 Runtime 或長寫入後面。首版不引入 broker、跨主機 lease 或多控制 daemon。控制 daemon 只處理有界訊息；Runtime 輸出需限制大小及速率，不能讓 stdout、JSON 解析或 checkpoint 阻塞外側查詢。worker 出錯不等於控制 daemon 出錯；控制 daemon 無法連線時由 Client 明示觀察不可用。
 
@@ -44,7 +45,7 @@ SQLite 同步呼叫若由 binding 提供，放在專用資料庫 worker；查詢
 | Task | taskId、contextId、agentId、accessScopeId、createdBy、instruction、revision、state、reason、時間、結果、predecessorTaskId、queueOrder |
 | BindingSnapshot | 配置 revision、Workspace identity、Driver／整合版本、政策及非秘密配置；內部資料，不回傳主機路徑或憑證 |
 | Context | 固定 Agent／scope／binding、續接 reference、queue pause reason、revision；不等於 Runtime Session |
-| Execution | executionId、taskId、daemon epoch、可信 execution unit ID、開始紀錄、最後提交 ordinal、候選結果、停止證據 |
+| Execution | executionId、taskId、daemon epoch、generation、可信且不透明的 Execution Unit ID、開始紀錄、最後提交 ordinal、候選結果、停止證據 |
 | Workspace claim | canonical Workspace identity 唯一，記 taskId／executionId；不是會自動到期放行的 lease |
 | Question | questionId、taskId、executionId、問題及答案 schema、expiry、pending／accepted／closed、首個答案、actor、delivery |
 | Operation receipt | scope、operationId、操作類型／目標、初始輸入 fingerprint、actor、結果；跨重啟去重 |
@@ -87,7 +88,11 @@ submit 交易驗證 scope／Agent、schema、receipt、Context、能力、容量
 
 dispatcher 挑未暫停 Context 的最早 eligible Task；短交易再核對授權及 binding、取得唯一 Workspace claim、建立 executionId、queued→starting；commit 後才交給 launcher。沒有跨 Runtime I/O 的交易。claim 與 launch 之間 crash 也進恢復核對，不假設一定尚未執行。
 
-可信 supervisor 必須持久保存 execution generation 的啟動／撤銷狀態，並將同 execution 的 start／stop 序列化。任何啟動先登記 generation，只有仍獲准的 generation 能放行 worker；撤銷即使早於 start 到達也要保存不可再啟動的紀錄。stop 確認須同時證明「execution unit 已空」及「該 generation 的延遲／進行中 start 不可能再放行」。僅檢查尚不存在或暫時為空的 cgroup 不足以釋放 claim。
+Execution Supervisor 是核心與 OS-specific execution control 之間的 seam。其小型 interface 只有三項責任：`start` 只接受核心已持久授權的 Execution Generation 並回不透明 Execution Unit ID；`revokeAndStop` 先永久封閉 generation，再 cooperative／forced stop，且只在 generation 不會再放行及 unit 已空時回 Stop Evidence；`reconcile` 在 daemon 或 Supervisor 重啟後，雙向核對核心已知 Execution 與 Supervisor ledger／Execution Unit。呼叫順序、generation fencing、同 execution 的 start／stop serialization、unknown／quarantine 與錯誤模式都屬 interface 契約，Caller 不需知道 cgroup、PID、process group 或 `launchd`。
+
+每個 Supervisor request 都使用內部 Execution reference，至少綁定 executionId、不可變 generation、daemon epoch、管理者控制的 launch profile 與 canonical Workspace identity；unit ID 與 Stop Evidence 也綁定完整 reference，不可跨 generation／epoch 重用或由 MCP Caller 提供。`start` 對相同 reference 必須 idempotent，已撤銷世代不得建立 unit；transport timeout、ledger failure 或 reference mismatch 回 indeterminate／conflict，不可猜成尚未啟動。`revokeAndStop` 只有 stopped、pending 或 indeterminate 三種語意，not found 不等於 stopped。`reconcile` 必須撤銷舊 epoch、收斂 ledger-only／unit-only orphan，且不啟動、resume 或重播 worker；任何未知狀態都保留 claim、quarantine Workspace 並阻擋 dispatch。
+
+Supervisor 必須持久保存 generation 的啟動／撤銷狀態。任何啟動先登記 generation，只有仍獲准的 generation 能放行 worker；撤銷即使早於 start 到達也要保存不可再啟動的紀錄。stop 確認須同時證明「Execution Unit 已空」及「該 generation 的延遲／進行中 start 不可能再放行」。Linux Adapter 以 cgroup v2 提供 unit empty 證據；僅檢查尚不存在或暫時為空的 cgroup 不足以釋放 claim。
 
 核心 commit cancel 或開始 recovery 後要求 supervisor 撤銷 generation，再停止及核對；撤銷確認前不發布已停止。supervisor 的核准／撤銷不得被延遲 launcher I/O 繞過；可在 vendor 執行前設受控放行點，但不能先執行再補 fence。supervisor 重啟先撤銷舊 epoch 未結 execution，再接受新啟動；狀態不明就拒絕啟動及停止確認。此為可信 launcher 必要契約，不是單靠資料庫 executionId 就成立。
 
@@ -149,19 +154,19 @@ commit 後才送同 execution worker；worker 按 questionId 去重、驗證仍�
 
 ## 8. Claude worker、結果與停止證據
 
-採官方 Agent SDK query 的 streaming input 模式；不使用已移除的 V2 session API。輸入串流與 includePartialMessages 輸出串流分開，不靠串流顯示推定可取消。SDK／CLI 都在 execution worker 內，launcher 在 worker／vendor 執行前建立獨立 cgroup，不依賴 SDK 自訂 spawn 才建立停止邊界。
+採官方 Agent SDK query 的 streaming input 模式；不使用已移除的 V2 session API。輸入串流與 includePartialMessages 輸出串流分開，不靠串流顯示推定可取消。SDK／CLI 都在 execution worker 內，Supervisor Adapter 在 worker／vendor 執行前建立獨立 Execution Unit，不依賴 SDK 自訂 spawn 才建立停止邊界；v0.1 Linux Adapter 使用 cgroup v2。
 
 SDK 的 cwd、settingSources、resume 由固定管理者配置轉入，原生 Session reference 只由 Driver 產生；settingSources 空陣列不代表所有 managed policy／工作指令都被隔離。原生 callback、AbortController、版本特有控制方法均以固定型別／測試核對，不只憑方法名稱推定停止。
 
 worker 事件帶 executionId、單調 ordinal、類型及有界 payload；核心只接受目前 execution 的連續序列。EOF、exit code 0、SDK promise resolve 不單獨代表成功。Session reference 只在 binding 相容、結果已保存且資源停止後才可提供下一 Task。
 
-完成流程：worker 傳候選 outcome、finalOrdinal、摘要及續接 reference；核心確認所有 ordinal 已提交，保存候選並轉 stopping；worker 在核心確認保存後退出；可信監督確認 cgroup populated=0；最後交易同時發布結果、終態事件、Context reference 及釋放 claim。不能先 completed 再補結果。
+完成流程：worker 傳候選 outcome、finalOrdinal、摘要及續接 reference；核心確認所有 ordinal 已提交，保存候選並轉 stopping；worker 在核心確認保存後退出；Supervisor 回傳 generation sealed 且 Execution Unit empty 的 Stop Evidence；最後交易同時發布結果、終態事件、Context reference 及釋放 claim。不能先 completed 再補結果。
 
-取消：持久保存意圖及 stopping，再撤銷 execution generation 並送 cooperative cancel；5 秒未完成由外側 launcher 強制停止 execution cgroup，再最多等 5 秒核對。API 不等待這 10 秒，立即回停止中；未確認 generation 已封閉且 cgroup 空，就保持 claim／degraded。SDK 的取消回應或 signal 已送出都不等於停止。
+取消：持久保存意圖及 stopping，再要求 Supervisor 撤銷 Execution Generation 並送 cooperative cancel；5 秒未完成由 Adapter 強制停止 Execution Unit，再最多等 5 秒核對。API 不等待這 10 秒，立即回停止中；未確認 generation 已封閉且 unit 空，就保持 claim／degraded。SDK 的取消回應或 signal 已送出都不等於停止。
 
-supervisor 掌握 cgroup 建立、migration、kill；Runtime 不取得控制權，亦不能改核心 DB／credential。cgroup 只保證本機執行單位停止，不隔離各 Runtime 同帳號檔案，也不撤回分支推送、PR 或外部服務工作；取消結果保存已知副作用及部分變更。
+Linux Supervisor Adapter 掌握 cgroup 建立、migration、kill；Runtime 不取得控制權，亦不能改核心 DB／credential。cgroup 只保證本機 Execution Unit 停止，不隔離各 Runtime 同帳號檔案，也不撤回分支推送、PR 或外部服務工作；取消結果保存已知副作用及部分變更。
 
-正常運行時 worker 死亡且無 outcome：確認 cgroup 空後 failed/runtime_lost。控制服務 crash 先 recovering，不因 PID 消失推測成功／失敗。Linux launcher／SDK／子工具清理未通過測試，Agent 不列 ready；macOS 第二階段獨立驗證，不沿用 cgroup 保證。
+正常運行時 worker 死亡且無 outcome：取得有效 Stop Evidence 後 failed/runtime_lost。控制服務 crash 先 recovering，不因 PID 消失推測成功／失敗。Linux Adapter／SDK／子工具清理未通過測試，Agent 不列 ready。native macOS process group 可被建立新 session 的 descendant 逃離，`launchd` service 管理也不等於 generation sealed 加 unit empty；因此目前沒有 macOS Runtime Adapter，macOS S2 evidence 不沿用 Linux cgroup 保證。
 
 ## 9. 持久化、事件與恢復
 
@@ -228,7 +233,7 @@ Runtime env 只提供該 execution 所需 vendor 憑證；核心 DB／credential
 
 正常 shutdown 先停 admission／dispatch、暫停 queue；對活動 Task 停止，保存結果及未知狀態，再關 listener／storage。deadline 及 cgroup 清理由可信 supervisor 兜底，不只依賴 Node finally；非正常結束按第 9 節核對。
 
-部署驗證包含專用帳號、DB／credential 權限、TLS、固定 executable、cgroup v2／launcher 與 crash cleanup；本輪未建立配置。readiness 區分能查詢與能派送；Agent unavailable 可列出，不接受違反其能力契約的工作。
+部署驗證包含專用帳號、DB／credential 權限、TLS、固定 executable、cgroup v2／Linux Supervisor Adapter 與 crash cleanup；本輪未建立配置。readiness 區分能查詢與能派送；Agent unavailable 可列出，不接受違反其能力契約的工作。macOS development composition 不含 Runtime Adapter，不能對外宣稱可派送或 production-ready。
 
 schema 有版本，未知新版本拒絕 dispatch、保留原檔，不重建空 DB。升級先暫停、停止並確認 execution、做一致備份再 migration。回滾需相容 reader／schema 或離線恢復，不能切回舊 in-memory。備份不可只複製未 checkpoint 的 DB 主檔而漏 WAL；恢復舊備份可能遺失較新副作用紀錄，須核對且不自動派送。
 
@@ -236,7 +241,7 @@ schema 有版本，未知新版本拒絕 dispatch、保留原檔，不重建空 
 
 ## 13. 驗收及實作前門檻
 
-目前無可執行專案或測試命令；以下是待實作驗證，不是通過紀錄。
+目前已有 S0 compatibility project 與 `make verify`；以下是尚待產品切片逐項滿足的驗收，不因 S0 local PASS 自動通過。
 
 | 驗收 | 必須觀察到的行為 |
 | --- | --- |
@@ -251,6 +256,6 @@ schema 有版本，未知新版本拒絕 dispatch、保留原檔，不重建空 
 | AC-09 資源／期限 | 60 分鐘排除純等待，24 小時等待到期停止；一般 tombstone 滿仍可 reply／cancel／ack，控制 reserve 耗盡安全停止；磁碟滿／DB 卡住／輸出超限／慢 Client 不假接受 |
 | AC-10 授權 | 本人／bot 同 scope 不同 actor；跨 scope／Agent／question／cursor 拒絕；回答不提權，Runtime 無 DB／launcher 權限 |
 | AC-11 交付／通知 | 終態立即可見結果，通知失敗仍可查；30 天保存及過期行為，無 PR 仍可完成 |
-| AC-12 平台／回滾 | Linux cleanup、版本 pin、migration／備份恢復；macOS 未驗證不宣稱等價支援 |
+| AC-12 平台／回滾 | Linux cleanup、版本 pin、migration／備份恢復；macOS 僅有 platform-neutral development evidence，不宣稱 Runtime／停止等價支援 |
 
-驗證分層：核心交易／狀態競爭、fake worker／故障注入、官方 MCP Client 互通、真 Claude fixture 及 Linux 停止／恢復。固定 SDK 型別、認證 Client 配置、儲存與 launcher 整合未驗證前，不宣告 production readiness。依賴順序、早期能力門檻與品質命令見[實作計畫](implementation-plan.md)；目前尚未開始實作或部署。
+驗證分層：macOS 或 Linux 的核心交易／狀態競爭、fake worker／故障注入、官方 MCP Client 互通，以及指定 Linux target 的真 Claude fixture、停止／恢復。固定 SDK 型別、認證 Client 配置、儲存與 Linux Supervisor Adapter 整合未驗證前，不宣告 production readiness。依賴順序、早期能力門檻與品質命令見[實作計畫](implementation-plan.md)；目前只有 S0 compatibility fixture，尚未建立產品 Runtime 或部署。

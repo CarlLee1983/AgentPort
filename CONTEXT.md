@@ -21,6 +21,9 @@ _Avoid_: 用 Runtime 指稱 Driver 或單一執行程序。
 **Runtime Driver（簡稱 Driver）**：
 AgentPort 與特定 Runtime 之間的整合邊界，將 Runtime 特有的操作與輸出轉成 AgentPort 可理解的語意。
 
+**Execution Supervisor（簡稱 Supervisor）**：
+負責放行或撤銷 Execution Generation、停止 Execution Unit 並提供停止證據的可信邊界。不同作業系統可有不同 Adapter，但不得改變核心停止語意。
+
 **Workspace**：
 由主機管理者指派給 Agent 的工作目錄範圍。Workspace 綁定表達工作應在哪裡進行，本身不代表 Runtime 無法存取其他主機資源。
 _Avoid_: 將工作目錄稱為 Sandbox。
@@ -30,6 +33,15 @@ _Avoid_: 將工作目錄稱為 Sandbox。
 
 **Task**：
 一項可追蹤狀態、結果與取消請求的工作單位。Task 身份與生命週期獨立於傳輸連線及底層程序。
+
+**Execution**：
+Task 的一次實際執行嘗試，具有自己的身份、授權世代與停止證據；它不等於 Task、Runtime Session 或作業系統程序。
+
+**Execution Generation**：
+可信監督為一次 Execution 保存的啟動授權世代。世代一旦撤銷便不能再啟動，停止完成必須同時證明該世代已封閉。
+
+**Execution Unit**：
+可信監督用來容納並核對一次 Execution 資源的邏輯單位。核心只保存其不透明身份，不把 PID、process group 或 cgroup 當成跨平台語意。
 
 **Follow-up Task（追加任務）**：
 沿用既有 Context 的新工作單位，與前項 Task 有各自的狀態及結果；澄清問題的回答不屬於追加任務。

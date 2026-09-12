@@ -22,11 +22,15 @@ for file in \
   specs/stories/AP-001-toolchain-mcp-compatibility/story.md \
   specs/stories/AP-001-toolchain-mcp-compatibility/acceptance.md \
   specs/stories/AP-001-toolchain-mcp-compatibility/task.md \
+  specs/stories/AP-002-platform-neutral-durable-admission/story.md \
+  specs/stories/AP-002-platform-neutral-durable-admission/acceptance.md \
+  specs/stories/AP-002-platform-neutral-durable-admission/task.md \
   docs/development-workflow.md docs/implementation-plan.md docs/technical-design.md \
   docs/agents/domain.md docs/agents/issue-tracker.md docs/agents/triage-labels.md \
   docs/adr/0001-external-observation-and-control.md \
   docs/adr/0002-task-records-survive-restart.md \
   docs/adr/0003-local-transactional-task-store.md \
+  docs/adr/0004-linux-execution-macos-development.md \
   .scratch/README.md .scratch/agentport-v0-1/spec.md \
   .scratch/agentport-v0-1/issues/01-mcp-version-compatibility.md \
   scripts/forgeflow/story-check scripts/forgeflow/LICENSE scripts/forgeflow/README.md

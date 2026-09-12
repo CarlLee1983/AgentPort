@@ -47,11 +47,12 @@ Human Review
 `.scratch` 不是 implementation lifecycle authority。它保留 research、temporary planning、historical design material 與 migration source。
 正式 implementation 工作需提升為 ForgeFlow Story，其執行狀態由 ForgePilot Work Item 管理。
 舊 Status／claimed／resolved 不與 ForgePilot 同步；[tracker](agents/issue-tracker.md) 與 [triage labels](agents/triage-labels.md) 僅管理研究／triage。
-Implementation Plan 的階段表是依賴與驗收設計，其「未開始」是規劃快照，不另維護正式執行狀態。
+Implementation Plan 的階段表只保存依賴與驗收設計，不另維護正式執行狀態。
 
-本次只提升 [ticket 01](../.scratch/agentport-v0-1/issues/01-mcp-version-compatibility.md) 為
-[AP-001 — Establish Toolchain and MCP Compatibility Baseline](../specs/stories/AP-001-toolchain-mcp-compatibility/story.md)，對應 S0／G0。
-其餘 issues 原樣保留。新 Story 使用 `_template` 的 story／acceptance／task 三檔；
+最初提升 [ticket 01](../.scratch/agentport-v0-1/issues/01-mcp-version-compatibility.md) 為
+[AP-001 — Establish Toolchain and MCP Compatibility Baseline](../specs/stories/AP-001-toolchain-mcp-compatibility/story.md)，對應 S0／G0；
+後續 [AP-002 — Build Platform-neutral Durable Admission](../specs/stories/AP-002-platform-neutral-durable-admission/story.md) 依平台 sequencing 決策對應 S2／G2。
+其餘舊 issues 原樣保留。新 Story 使用 `_template` 的 story／acceptance／task 三檔；
 實作前必須確定 scope、authority、AC、evidence map 與必要 security fixture matrix。
 Coding Agent 依 AGENTS.md 執行；需求改變須經人類核准，不能從 guidance 或工具能力推定授權。
 
@@ -102,8 +103,8 @@ local state、verification logs／worktrees 不進 Git；不手改 state JSON、
 fresh checkout 不攜帶這份 local lifecycle；管理者使用 CLI 重新初始化／加入所需工作。不要把重建的狀態說成還原了歷史 evidence。
 `init` 可重複執行，goal create／work add 是新增操作；重試先看 status，避免重複 Work Item。
 
-**本次停在 READY，不執行 start、verify 或 review approve。** 下一次使用者交辦 Start AP-001 後，才對實際 Work ID 執行 `forgepilot start`。
-Story 的 scope／authority 不因 READY 自動生效為當前執行授權。
+新 Work Item 建立後預設停在 READY，不執行 start、verify 或 review approve。只有使用者明確交辦 Start 該 Story 後，才對實際 Work ID 執行 `forgepilot start`。
+Story 的 scope／authority 不因 READY 自動生效為當前執行授權；既有 Work Item 的歷史狀態與 evidence 以 `forgepilot status` 為準。
 
 實作完成並取得 commit 授權後，提交所有必要檔案；保持 worktree clean，再對 RUNNING／REVIEW Work Item 執行：
 
@@ -151,9 +152,9 @@ Open Gate 會阻擋相關 Work Item 推進；不要自行 resolve／cancel 以�
 人類作決策後依 CLI 的 gate resolve 流程記錄，必要時先修訂／核准 Story 或 ADR，再繼續實作。
 Gate 是工程治理紀錄，不是 AgentPort Task 的 Clarification Reply 或 runtime 控制訊息。
 
-## 本次導入範圍與回復
+## 治理導入範圍與回復
 
-治理導入沒有 S0 toolchain／產品實作，AP-001 AC 全部待執行；沒有安裝 Claude runtime、建立產品 src 模組或修改 domain／ADR。
+初始治理導入沒有 S0 toolchain／產品實作，當時 AP-001 AC 全部待執行；目前進度以 Story verification 與 ForgePilot evidence 為準。治理規則本身不安裝 Claude runtime、建立產品 src 模組或批准 domain／ADR 變更。
 規則集中於 repository AGENTS.md，詳細操作在本文件；不改全域 Codex 設定。
 驗證包含 make verify 的正反例、隔離候選 tree，以及獨立 agent 的規則／邊界審查。
 若需撤回導入，由人類檢閱此次 diff 後回復治理檔案與 tracker 註記；先保存 `.forgepilot` 歷史 evidence，再決定是否移除 local state，避免將它當成可重建的測試 cache。
