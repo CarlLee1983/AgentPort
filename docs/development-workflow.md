@@ -103,6 +103,15 @@ ForgePilot path:
     # intentionally uncommitted implementation or newly created Story
     forgepilot verify <work-id> --snapshot
 
+A ForgePilot PASS is machine Evidence, not a Human Review request. Keep the
+Work Item RUNNING while implementing, checking individual ACs, and re-running
+verification; do not pause merely because an intermediate candidate passes.
+After the final AC and Acceptance Evidence audit, environment evidence, final
+diff, decisions, and residual-risk review are complete, submit the current
+candidate once:
+
+    forgepilot review request <work-id>
+
 Commit mode verifies a clean committed HEAD in a detached worktree. Snapshot
 mode captures staged, unstaged, tracked deletions, and non-ignored untracked
 content into an immutable local Candidate. Its evidence records snapshot
@@ -113,8 +122,8 @@ spurious WIP commit.
 Any behavior-changing candidate modification makes prior verification-current
 stale: commit evidence is compared with HEAD and snapshot evidence with the
 current Candidate digest. Rerun make verify and the appropriate ForgePilot
-verification before Human Review. Do not manually attach a dirty-tree command
-result to a prior revision or copy a local PASS into ForgePilot state.
+verification before another review request. Do not manually attach a dirty-tree
+command result to a prior revision or copy a local PASS into ForgePilot state.
 
 Human Review evaluates AC evidence, environment evidence, diff, decisions,
 residual risk, and current ForgePilot evidence. A make verify PASS or

@@ -35,7 +35,9 @@ The authority boundary is strict:
 6. Run make verify. A pass answers only whether repository automation passes.
    It does not satisfy environment ACs, approve a Work Item, or complete review.
 7. Record that result through ForgePilot using the candidate that was actually
-   checked:
+   checked. A PASS records machine Evidence and leaves the Work Item RUNNING;
+   it is not a request for Human Review. Continue implementation, focused
+   checks, and re-verification without stopping after an intermediate PASS:
 
        # clean, committed implementation
        forgepilot verify <work-id>
@@ -46,7 +48,15 @@ The authority boundary is strict:
    Never attach dirty-tree results to an unchanged HEAD revision, and never
    force a commit merely to obtain verification. A behavior-changing change
    makes prior verification-current stale; rerun make verify and ForgePilot
-   verification before Human Review.
+   verification before Human Review. Only after the agent has checked every AC
+   and Acceptance Evidence row, relevant environment evidence, final diff,
+   documented decisions, residual risk, and a current candidate, submit the
+   Work Item once:
+
+       forgepilot review request <work-id>
+
+   Do not change behavior after this request; re-verification returns the item
+   to RUNNING and requires a new explicit request.
 8. Only Human Review may approve or complete work. Coding agents must not
    self-approve, self-resolve, or self-cancel Gates to advance work.
 
