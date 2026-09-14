@@ -110,6 +110,8 @@ describe("Claude Driver credential boundary", () => {
   it("runs the root harness without ambient credentials or process injection", () => {
     expect(
       createG1ClaudeHarnessEnvironment({
+        AGENTPORT_G1_CANDIDATE_REVISION:
+          "1234567890abcdef1234567890abcdef12345678",
         AGENTPORT_G1_CLAUDE: "1",
         AGENTPORT_G1_LINUX: "1",
         AGENTPORT_G1_RUNTIME_HOME: "/runtime",
@@ -119,6 +121,8 @@ describe("Claude Driver credential boundary", () => {
         PATH: "/host/bin",
       }),
     ).toEqual({
+      AGENTPORT_G1_CANDIDATE_REVISION:
+        "1234567890abcdef1234567890abcdef12345678",
       AGENTPORT_G1_CLAUDE: "1",
       AGENTPORT_G1_LINUX: "1",
       AGENTPORT_G1_RUNTIME_HOME: "/runtime",

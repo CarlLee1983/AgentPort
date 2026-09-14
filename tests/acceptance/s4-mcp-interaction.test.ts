@@ -199,6 +199,10 @@ describe("S4 Context follow-up submission", () => {
       replayed: false,
       task: {
         state: "awaiting_input",
+        execution: {
+          executionId: reference.executionId,
+          state: "running",
+        },
         question: { state: "accepted", delivery: "pending" },
       },
     });
@@ -341,6 +345,23 @@ describe("S4 Context follow-up submission", () => {
     expect(blocked).toMatchObject({
       state: "paused",
       blocker: { predecessorTaskId: failed.task.taskId, state: "failed" },
+    });
+
+    const oversizedSummary = structured(
+      await client.callTool({
+        name: "agentport_resume_context",
+        arguments: {
+          operationId: "s4-mcp-oversized-summary",
+          contextId: failed.task.contextId,
+          expectedRevision: blocked.contextRevision,
+          continuationMode: "fresh_session",
+          contextSummary: "x".repeat(16 * 1024 + 1),
+        },
+      }),
+    );
+    expect(oversizedSummary).toMatchObject({
+      ok: false,
+      error: { code: "validation_error", safeRetry: "none" },
     });
 
     const resumed = structured(

@@ -1,11 +1,10 @@
 import { spawnSync } from "node:child_process";
-import { access, lstat } from "node:fs/promises";
-import { join } from "node:path";
+import { access, lstat, realpath } from "node:fs/promises";
+import { basename, join } from "node:path";
 
 async function main() {
-  const { isClaudeSubscriptionAuthStatus } = await import(
-    "../dist/src/runtime/claude/auth-policy.js"
-  );
+  const { isClaudeSubscriptionAuthStatus } =
+    await import("../dist/src/runtime/claude/auth-policy.js");
   if (process.platform !== "linux" || process.getuid?.() !== 0) {
     throw new Error("invalid-host");
   }
@@ -16,6 +15,7 @@ async function main() {
     throw new Error("disabled");
   }
   for (const name of [
+    "AGENTPORT_G1_CANDIDATE_REVISION",
     "AGENTPORT_G1_CLAUDE_EXECUTABLE",
     "AGENTPORT_G1_CLAUDE_WORKSPACE",
     "AGENTPORT_G1_LAUNCHER_SOCKET",
@@ -25,6 +25,24 @@ async function main() {
     "AGENTPORT_G1_RUNTIME_USER",
   ]) {
     if (!process.env[name]) throw new Error("missing-configuration");
+  }
+
+  const candidateRevision = process.env.AGENTPORT_G1_CANDIDATE_REVISION;
+  if (!/^[0-9a-f]{40}$/u.test(candidateRevision)) {
+    throw new Error("invalid-candidate-revision");
+  }
+  const [candidateDirectory, currentCandidateDirectory] = await Promise.all([
+    realpath(process.cwd()),
+    realpath("/opt/agentport-g1/current"),
+  ]);
+  const candidateMetadata = await lstat(candidateDirectory);
+  if (
+    candidateDirectory !== currentCandidateDirectory ||
+    !basename(candidateDirectory).endsWith(candidateRevision.slice(0, 12)) ||
+    candidateMetadata.uid !== 0 ||
+    (candidateMetadata.mode & 0o022) !== 0
+  ) {
+    throw new Error("unbound-candidate-revision");
   }
 
   const runtimeUser = process.env.AGENTPORT_G1_RUNTIME_USER;

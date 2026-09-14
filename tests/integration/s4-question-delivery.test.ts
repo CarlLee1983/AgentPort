@@ -63,6 +63,60 @@ async function startQuestion(
 }
 
 describe("S4 native Question delivery", () => {
+  it("rejects unbound and oversized native Questions without changing the Task", async () => {
+    const fixture = await createDurableAdmissionFixture();
+    try {
+      const submitted = await fixture.service.submitTask(
+        { principalId: "principal-a" },
+        {
+          operationId: "invalid-native-question-submit",
+          agentId: "agent-a",
+          instruction: "Reject invalid native Questions",
+        },
+      );
+      const { reference } = await fixture.service.prepareForDispatch(
+        submitted.task.taskId,
+        "invalid-native-question-epoch",
+      );
+      await fixture.service.markExecutionRunning(reference);
+      const question = {
+        reference,
+        questionId: "invalid-native-question",
+        toolUseId: "invalid-native-tool-use",
+        requestId: "invalid-native-request",
+        ordinal: 1,
+        toolActivity: "none" as const,
+        questions: schema,
+      };
+
+      await expect(
+        fixture.service.persistRuntimeQuestion(submitted.task.taskId, {
+          ...question,
+          reference: { ...reference, generation: "foreign-generation" },
+        }),
+      ).rejects.toMatchObject({ code: "operation_conflict" });
+      await expect(
+        fixture.service.persistRuntimeQuestion(submitted.task.taskId, {
+          ...question,
+          questions: [
+            {
+              ...schema[0],
+              question: "x".repeat(4 * 1024 + 1),
+            },
+          ],
+        }),
+      ).rejects.toMatchObject({ code: "operation_conflict" });
+      await expect(
+        fixture.service.getTask(
+          { principalId: "principal-a" },
+          { taskId: submitted.task.taskId },
+        ),
+      ).resolves.toMatchObject({ state: "running", question: null });
+    } finally {
+      await fixture.close();
+    }
+  });
+
   it("persists before publication, delivers one accepted answer, and resumes only after the worker acknowledgement", async () => {
     const fixture = await createDurableAdmissionFixture();
     const directory = await mkdtemp(
@@ -166,6 +220,15 @@ describe("S4 native Question delivery", () => {
       await expect(
         fixture.service.reply({ principalId: "principal-a" }, reply),
       ).resolves.toMatchObject({ replayed: true });
+      await expect(
+        fixture.service.reply(
+          { principalId: "principal-a" },
+          {
+            ...reply,
+            answer: { "Which color should be used?": "Red" },
+          },
+        ),
+      ).rejects.toMatchObject({ code: "operation_conflict" });
       await expect(
         fixture.service.reply(
           { principalId: "principal-a" },

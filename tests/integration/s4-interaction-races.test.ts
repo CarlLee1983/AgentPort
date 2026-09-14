@@ -159,7 +159,27 @@ describe("S4 durable interaction races", () => {
         reopened.service.getTask(actor, { taskId: question.taskId }),
       ).resolves.toMatchObject({
         question: { state: "closed", delivery: "unknown" },
-        execution: { stopReason: "cancellation" },
+        execution: {
+          stopReason: "cancellation",
+          quarantined: true,
+        },
+      });
+      await expect(
+        reopened.service.reply(actor, {
+          operationId: "race-answer-first",
+          taskId: question.taskId,
+          questionId: question.identity.questionId,
+          answer: { "Which color should be used?": "Blue" },
+        }),
+      ).resolves.toMatchObject({
+        replayed: true,
+        task: {
+          question: { state: "closed", delivery: "unknown" },
+          execution: {
+            stopReason: "cancellation",
+            quarantined: true,
+          },
+        },
       });
       await expect(
         reopened.store.getQuestionForDelivery({

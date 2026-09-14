@@ -884,7 +884,7 @@ export class DurableAgentExecutionService implements AgentExecutionService {
       const task = this.#snapshot(
         result.task,
         "current",
-        null,
+        result.execution,
         result.question,
       );
       this.#remember(authorization.accessScopeId, task);

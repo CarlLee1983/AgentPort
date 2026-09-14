@@ -62,6 +62,7 @@ export interface DurableAdmissionStore {
     answer: unknown;
     now: string;
   }): Promise<{
+    execution: StoredExecution;
     question: StoredQuestion;
     task: StoredTask;
     replayed: boolean;

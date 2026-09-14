@@ -1,7 +1,7 @@
 import { createHash, randomBytes, randomUUID } from "node:crypto";
 import { chmod, chown, mkdtemp, rm, stat } from "node:fs/promises";
 import { release } from "node:os";
-import { join } from "node:path";
+import { basename, join } from "node:path";
 
 import { describe, expect, it } from "vitest";
 
@@ -88,7 +88,7 @@ function firstAnswer(
 }
 
 function evidence(outcome: "OK" | "FAILED", states: readonly string[]): string {
-  const candidates = [
+  const runtimeOutputs = [
     "AGENTPORT_G4_QUESTION_OK",
     "AGENTPORT_G4_CONTINUATION_OK",
   ];
@@ -97,8 +97,10 @@ function evidence(outcome: "OK" | "FAILED", states: readonly string[]): string {
     kernel: release(),
     node: process.version,
     profile: PROFILE,
-    candidateDigest: createHash("sha256")
-      .update(JSON.stringify(candidates))
+    candidateRevision: requiredEnvironment("AGENTPORT_G1_CANDIDATE_REVISION"),
+    candidateDirectory: basename(process.cwd()),
+    runtimeOutputDigest: createHash("sha256")
+      .update(JSON.stringify(runtimeOutputs))
       .digest("hex"),
     states,
   })}\n`;

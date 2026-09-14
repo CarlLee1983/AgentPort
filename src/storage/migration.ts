@@ -240,3 +240,20 @@ CREATE TABLE execution_recovery_stop_confirmations (
   unit_empty_observed_at TEXT NOT NULL,
   confirmed_at TEXT NOT NULL
 );`;
+
+// migrations/012_s4_workspace_queue.sql keeps public scope-local queue order
+// stable while adding the global admission sequence required for Workspace FIFO.
+export const s4WorkspaceQueueMigration = `
+CREATE TABLE task_workspace_queue (
+  admission_sequence INTEGER PRIMARY KEY AUTOINCREMENT,
+  task_id TEXT NOT NULL UNIQUE REFERENCES tasks(task_id),
+  workspace_id TEXT NOT NULL
+);
+INSERT INTO task_workspace_queue(task_id,workspace_id)
+  SELECT tasks.task_id,binding_snapshots.workspace_id
+  FROM tasks
+  JOIN contexts ON contexts.context_id=tasks.context_id
+  JOIN binding_snapshots ON binding_snapshots.binding_snapshot_id=contexts.binding_snapshot_id
+  ORDER BY tasks.rowid;
+CREATE INDEX task_workspace_queue_workspace_sequence
+  ON task_workspace_queue(workspace_id,admission_sequence);`;

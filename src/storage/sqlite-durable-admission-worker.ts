@@ -34,6 +34,7 @@ import {
   s4QuestionNativeRelationMigration,
   s4ProtectedSessionTokensMigration,
   s4QuestionsMigration,
+  s4WorkspaceQueueMigration,
 } from "./migration.js";
 
 /* The binding's synchronous query API is intentionally confined to this worker.
@@ -44,6 +45,7 @@ interface Options {
   databasePath: string;
   recoveryOnly?: boolean;
   auditCapacity?: number;
+  activeExecutionCapacity?: number;
   queuePerWorkspace?: number;
   queueGlobal?: number;
   receiptCapacity?: number;
@@ -246,7 +248,8 @@ if (hasVersionTable) {
       Number(versions[7]?.version) === 8 &&
       Number(versions[8]?.version) === 9 &&
       Number(versions[9]?.version) === 10) ||
-    hasContiguousSchemaVersions(versions, 11)
+    hasContiguousSchemaVersions(versions, 11) ||
+    hasContiguousSchemaVersions(versions, 12)
   )) {
     throw new Error("unsupported durable admission schema version");
   }
@@ -297,6 +300,7 @@ if (options.recoveryOnly !== true && migrationVersions.length === 5) {
   (migrationVersions.length === 10 &&
     Number(migrationVersions[9]?.version) === 10) ||
   hasContiguousSchemaVersions(migrationVersions, 11) ||
+  hasContiguousSchemaVersions(migrationVersions, 12) ||
   (options.recoveryOnly === true &&
     (migrationVersions.length === 5 ||
       migrationVersions.length === 6 ||
@@ -304,7 +308,8 @@ if (options.recoveryOnly !== true && migrationVersions.length === 5) {
       migrationVersions.length === 8 ||
       migrationVersions.length === 9 ||
       migrationVersions.length === 10 ||
-      migrationVersions.length === 11))
+      migrationVersions.length === 11 ||
+      migrationVersions.length === 12))
 )) {
   throw new Error("unsupported durable admission schema version");
 }
@@ -329,6 +334,7 @@ if (options.recoveryOnly !== true && s4MigrationVersions.length === 6) {
   (s4MigrationVersions.length === 10 &&
     Number(s4MigrationVersions[9]?.version) === 10) ||
   hasContiguousSchemaVersions(s4MigrationVersions, 11) ||
+  hasContiguousSchemaVersions(s4MigrationVersions, 12) ||
   (options.recoveryOnly === true &&
     (s4MigrationVersions.length === 5 ||
       s4MigrationVersions.length === 6 ||
@@ -336,7 +342,8 @@ if (options.recoveryOnly !== true && s4MigrationVersions.length === 6) {
       s4MigrationVersions.length === 8 ||
       s4MigrationVersions.length === 9 ||
       s4MigrationVersions.length === 10 ||
-      s4MigrationVersions.length === 11))
+      s4MigrationVersions.length === 11 ||
+      s4MigrationVersions.length === 12))
 )) {
   throw new Error("unsupported durable admission schema version");
 }
@@ -362,6 +369,7 @@ if (
   (protectedSessionMigrationVersions.length === 10 &&
     Number(protectedSessionMigrationVersions[9]?.version) === 10) ||
   hasContiguousSchemaVersions(protectedSessionMigrationVersions, 11) ||
+  hasContiguousSchemaVersions(protectedSessionMigrationVersions, 12) ||
   (options.recoveryOnly === true &&
     (protectedSessionMigrationVersions.length === 5 ||
       protectedSessionMigrationVersions.length === 6 ||
@@ -369,7 +377,8 @@ if (
       protectedSessionMigrationVersions.length === 8 ||
       protectedSessionMigrationVersions.length === 9 ||
       protectedSessionMigrationVersions.length === 10 ||
-      protectedSessionMigrationVersions.length === 11))
+      protectedSessionMigrationVersions.length === 11 ||
+      protectedSessionMigrationVersions.length === 12))
 )) {
   throw new Error("unsupported durable admission schema version");
 }
@@ -393,6 +402,7 @@ if (
   (questionRelationMigrationVersions.length === 10 &&
     Number(questionRelationMigrationVersions[9]?.version) === 10) ||
   hasContiguousSchemaVersions(questionRelationMigrationVersions, 11) ||
+  hasContiguousSchemaVersions(questionRelationMigrationVersions, 12) ||
   (options.recoveryOnly === true &&
     (questionRelationMigrationVersions.length === 5 ||
       questionRelationMigrationVersions.length === 6 ||
@@ -400,7 +410,8 @@ if (
       questionRelationMigrationVersions.length === 8 ||
       questionRelationMigrationVersions.length === 9 ||
       questionRelationMigrationVersions.length === 10 ||
-      questionRelationMigrationVersions.length === 11))
+      questionRelationMigrationVersions.length === 11 ||
+      questionRelationMigrationVersions.length === 12))
 )) {
   throw new Error("unsupported durable admission schema version");
 }
@@ -422,6 +433,7 @@ if (
   (contextResumeMigrationVersions.length === 10 &&
     Number(contextResumeMigrationVersions[9]?.version) === 10) ||
   hasContiguousSchemaVersions(contextResumeMigrationVersions, 11) ||
+  hasContiguousSchemaVersions(contextResumeMigrationVersions, 12) ||
   (options.recoveryOnly === true &&
     (contextResumeMigrationVersions.length === 5 ||
       contextResumeMigrationVersions.length === 6 ||
@@ -429,7 +441,8 @@ if (
       contextResumeMigrationVersions.length === 8 ||
       contextResumeMigrationVersions.length === 9 ||
       contextResumeMigrationVersions.length === 10 ||
-      contextResumeMigrationVersions.length === 11))
+      contextResumeMigrationVersions.length === 11 ||
+      contextResumeMigrationVersions.length === 12))
 )) {
   throw new Error("unsupported durable admission schema version");
 }
@@ -449,6 +462,7 @@ if (
   })();
 } else if (!(
   hasContiguousSchemaVersions(questionAccountingMigrationVersions, 11) ||
+  hasContiguousSchemaVersions(questionAccountingMigrationVersions, 12) ||
   (options.recoveryOnly === true &&
     (questionAccountingMigrationVersions.length === 5 ||
       questionAccountingMigrationVersions.length === 6 ||
@@ -456,7 +470,30 @@ if (
       questionAccountingMigrationVersions.length === 8 ||
       questionAccountingMigrationVersions.length === 9 ||
       questionAccountingMigrationVersions.length === 10 ||
-      questionAccountingMigrationVersions.length === 11))
+      questionAccountingMigrationVersions.length === 11 ||
+      questionAccountingMigrationVersions.length === 12))
+)) {
+  throw new Error("unsupported durable admission schema version");
+}
+
+const workspaceQueueMigrationVersions = db
+  .prepare("SELECT version FROM schema_migrations ORDER BY version")
+  .all() as { version: number }[];
+if (
+  options.recoveryOnly !== true &&
+  workspaceQueueMigrationVersions.length === 11
+) {
+  db.transaction(() => {
+    db.exec(s4WorkspaceQueueMigration);
+    db.prepare(
+      "INSERT INTO schema_migrations(version, applied_at) VALUES(12, ?)",
+    ).run(now());
+  })();
+} else if (!(
+  hasContiguousSchemaVersions(workspaceQueueMigrationVersions, 12) ||
+  (options.recoveryOnly === true &&
+    workspaceQueueMigrationVersions.length >= 5 &&
+    workspaceQueueMigrationVersions.length <= 12)
 )) {
   throw new Error("unsupported durable admission schema version");
 }
@@ -493,6 +530,12 @@ const actualTables = new Set(
 );
 if (requiredTables.some((name) => !actualTables.has(name))) {
   throw new Error("durable admission schema is incomplete");
+}
+if (
+  Number(workspaceQueueMigrationVersions.at(-1)?.version) >= 12 &&
+  !actualTables.has("task_workspace_queue")
+) {
+  throw new Error("durable Workspace queue schema is incomplete");
 }
 const receiptColumns = new Set(
   (db.pragma("table_info(operation_receipts)") as { name: string }[]).map(
@@ -1270,19 +1313,56 @@ function eligibleContextHeads(
   if (agentIds.length === 0 || !Number.isSafeInteger(limit) || limit < 1) {
     return [];
   }
+  const activeExecutions = Number(
+    (
+      db
+        .prepare(
+          "SELECT COUNT(*) AS count FROM execution_workspace_claims WHERE status IN ('held','quarantined')",
+        )
+        .get() as { count: number }
+    ).count,
+  );
+  const remainingCapacity =
+    (options.activeExecutionCapacity ?? 4) - activeExecutions;
+  if (remainingCapacity <= 0) return [];
+  return queryEligibleContextHeads(
+    scope,
+    agentIds,
+    Math.min(limit, remainingCapacity),
+  );
+}
+
+function isEligibleContextHead(
+  scope: string,
+  agentIds: readonly string[],
+  taskId: string,
+): boolean {
+  return queryEligibleContextHeads(scope, agentIds, 1, taskId).length === 1;
+}
+
+function queryEligibleContextHeads(
+  scope: string,
+  agentIds: readonly string[],
+  limit: number,
+  taskId?: string,
+): Record<string, unknown>[] {
+  if (agentIds.length === 0 || !Number.isSafeInteger(limit) || limit < 1) {
+    return [];
+  }
+  const taskFilter = taskId === undefined ? "" : "AND task_id=?";
   return db
     .prepare(
       `WITH eligible AS (
-         SELECT t.*, b.workspace_id,
+         SELECT t.*, workspace_queue.workspace_id,
+                workspace_queue.admission_sequence,
                 ROW_NUMBER() OVER (
-                  PARTITION BY b.workspace_id ORDER BY t.queue_order
+                  PARTITION BY workspace_queue.workspace_id
+                  ORDER BY workspace_queue.admission_sequence
                 ) AS workspace_rank
          FROM tasks t
-         JOIN contexts c ON c.context_id=t.context_id
-         JOIN binding_snapshots b ON b.binding_snapshot_id=c.binding_snapshot_id
-         WHERE t.scope=?
-           AND t.agent_id IN (${agentIds.map(() => "?").join(",")})
-           AND t.state='queued'
+         JOIN task_workspace_queue workspace_queue
+           ON workspace_queue.task_id=t.task_id
+         WHERE t.state='queued'
            AND t.lifecycle_state IS NULL
            AND (
              t.predecessor_task_id IS NULL OR EXISTS (
@@ -1298,16 +1378,24 @@ function eligibleContextHeads(
            )
            AND NOT EXISTS (
              SELECT 1 FROM execution_workspace_claims claim
-             WHERE claim.workspace_id=b.workspace_id
+             WHERE claim.workspace_id=workspace_queue.workspace_id
                AND claim.status IN ('held','quarantined')
            )
        )
        SELECT * FROM eligible
        WHERE workspace_rank=1
-       ORDER BY queue_order
+         AND scope=?
+         AND agent_id IN (${agentIds.map(() => "?").join(",")})
+         ${taskFilter}
+       ORDER BY admission_sequence
        LIMIT ?`,
     )
-    .all(scope, ...agentIds, limit) as Record<string, unknown>[];
+    .all(
+      scope,
+      ...agentIds,
+      ...(taskId === undefined ? [] : [taskId]),
+      limit,
+    ) as Record<string, unknown>[];
 }
 function execution(row: Record<string, unknown>) {
   const executionId = String(row.execution_id);
@@ -2232,7 +2320,13 @@ function replyToQuestion(p: Record<string, unknown>) {
       const taskRow = db
         .prepare("SELECT * FROM tasks WHERE task_id=?")
         .get(replay.task_id) as Record<string, unknown>;
+      const executionRow = db
+        .prepare(
+          "SELECT e.*,w.status AS claim_status FROM executions e JOIN execution_workspace_claims w ON w.execution_id=e.execution_id WHERE e.execution_id=?",
+        )
+        .get(replay.execution_id) as Record<string, unknown>;
       return {
+        execution: execution(executionRow),
         question: question(replay),
         task: task(taskRow),
         replayed: true,
@@ -2306,7 +2400,17 @@ function replyToQuestion(p: Record<string, unknown>) {
       const taskRow = db
         .prepare("SELECT * FROM tasks WHERE task_id=?")
         .get(row.task_id) as Record<string, unknown>;
-      return { question: question(row), task: task(taskRow), replayed: true };
+      const executionRow = db
+        .prepare(
+          "SELECT e.*,w.status AS claim_status FROM executions e JOIN execution_workspace_claims w ON w.execution_id=e.execution_id WHERE e.execution_id=?",
+        )
+        .get(row.execution_id) as Record<string, unknown>;
+      return {
+        execution: execution(executionRow),
+        question: question(row),
+        task: task(taskRow),
+        replayed: true,
+      };
     }
     if (
       row.state !== "pending" ||
@@ -2375,8 +2479,14 @@ function replyToQuestion(p: Record<string, unknown>) {
     const taskRow = db
       .prepare("SELECT * FROM tasks WHERE task_id=?")
       .get(row.task_id) as Record<string, unknown>;
+    const executionRow = db
+      .prepare(
+        "SELECT e.*,w.status AS claim_status FROM executions e JOIN execution_workspace_claims w ON w.execution_id=e.execution_id WHERE e.execution_id=?",
+      )
+      .get(row.execution_id) as Record<string, unknown>;
     requirePhysicalHeadroom(physicalAdmissionBytes);
     return {
+      execution: execution(executionRow),
       question: question(questionRow),
       task: task(taskRow),
       replayed: false,
@@ -2627,15 +2737,31 @@ function claimAndPrepare(p: Record<string, unknown>) {
       }
       if (
         row.state !== "queued" ||
-        !eligibleContextHeads(
+        !isEligibleContextHead(
           scope,
           authorizedAgentIds(p.allowedAgentIds),
-          options.queueGlobal ?? 256,
-        ).some((head) => head.task_id === taskId)
+          taskId,
+        )
       ) {
         throwFailure(
           "invalid_state",
           "task is not an eligible Context queue head",
+          taskId,
+        );
+      }
+      const activeExecutions = Number(
+        (
+          db
+            .prepare(
+              "SELECT COUNT(*) AS count FROM execution_workspace_claims WHERE status IN ('held','quarantined')",
+            )
+            .get() as { count: number }
+        ).count,
+      );
+      if (activeExecutions >= (options.activeExecutionCapacity ?? 4)) {
+        throwFailure(
+          "queue_capacity",
+          "global active execution capacity is exhausted",
           taskId,
         );
       }
@@ -3450,6 +3576,9 @@ function submit(p: Record<string, unknown>) {
         stamp,
         stamp,
       );
+      db.prepare(
+        "INSERT INTO task_workspace_queue(task_id,workspace_id) VALUES(?,?)",
+      ).run(taskId, contextWorkspaceId);
       db.prepare(
         "INSERT INTO task_reservations(task_id,control_receipts,control_events,control_bytes) VALUES(?,?,?,?)",
       ).run(

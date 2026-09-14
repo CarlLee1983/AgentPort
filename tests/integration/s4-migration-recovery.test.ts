@@ -19,6 +19,7 @@ import {
   createDurableAdmissionFixture,
   type DurableAdmissionFixture,
 } from "../fixtures/durable-admission.js";
+import { submit } from "../fixtures/durable-store.js";
 
 const questionSchema = [
   {
@@ -252,6 +253,72 @@ async function completeTask(fixture: DurableAdmissionFixture, suffix: string) {
 }
 
 describe("S4 migration and restart recovery", () => {
+  it("backfills v11 Tasks into one cross-scope Workspace admission order", async () => {
+    const directory = await mkdtemp(
+      join(tmpdir(), "agentport-s4-v12-upgrade-"),
+    );
+    const databasePath = join(directory, "agentport.sqlite");
+    let store: SqliteDurableAdmissionStore | undefined;
+    try {
+      store = await SqliteDurableAdmissionStore.open({ databasePath });
+      await store.submit(
+        submit({
+          operationId: "v12-scope-a",
+          fingerprint: "v12-scope-a",
+          taskId: "v12-scope-a-task",
+          contextId: "v12-scope-a-context",
+        }),
+      );
+      await store.submit(
+        submit({
+          accessScopeId: "scope-b",
+          principalId: "principal-b",
+          operationId: "v12-scope-b",
+          fingerprint: "v12-scope-b",
+          taskId: "v12-scope-b-task",
+          contextId: "v12-scope-b-context",
+          binding: {
+            ...submit().binding,
+            bindingSnapshotId: "v12-scope-b-binding",
+          },
+        }),
+      );
+      await store.close();
+      store = undefined;
+
+      const legacy = new Database(databasePath);
+      try {
+        legacy.exec(
+          "DROP TABLE task_workspace_queue; DELETE FROM schema_migrations WHERE version=12;",
+        );
+      } finally {
+        legacy.close();
+      }
+
+      store = await SqliteDurableAdmissionStore.open({ databasePath });
+      await expect(store.probe("inspectSchemaVersions")).resolves.toEqual([
+        1, 2, 3, 4, 5, 6, 7, 8, 9, 10, 11, 12,
+      ]);
+      await expect(
+        store.getEligibleTasksForDispatch({
+          accessScopeId: "scope-a",
+          allowedAgentIds: ["agent-a"],
+          limit: 10,
+        }),
+      ).resolves.toMatchObject([{ taskId: "v12-scope-a-task" }]);
+      await expect(
+        store.getEligibleTasksForDispatch({
+          accessScopeId: "scope-b",
+          allowedAgentIds: ["agent-a"],
+          limit: 10,
+        }),
+      ).resolves.toEqual([]);
+    } finally {
+      await store?.close();
+      await rm(directory, { recursive: true, force: true });
+    }
+  });
+
   it("upgrades a pre-S4 S3 database additively without losing durable records", async () => {
     const seeded = await seedPreS4Database();
     let store: SqliteDurableAdmissionStore | undefined;
@@ -260,7 +327,7 @@ describe("S4 migration and restart recovery", () => {
         databasePath: seeded.databasePath,
       });
       await expect(store.probe("inspectSchemaVersions")).resolves.toEqual([
-        1, 2, 3, 4, 5, 6, 7, 8, 9, 10, 11,
+        1, 2, 3, 4, 5, 6, 7, 8, 9, 10, 11, 12,
       ]);
       await store.close();
       store = undefined;

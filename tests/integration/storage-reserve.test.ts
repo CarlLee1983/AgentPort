@@ -484,6 +484,7 @@ describe("storage reserves", () => {
   });
 
   it.each([
+    "activeExecutionCapacity",
     "queuePerWorkspace",
     "auditCapacity",
     "queueGlobal",

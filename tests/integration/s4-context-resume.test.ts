@@ -93,6 +93,39 @@ describe("S4 Context resumption", () => {
         },
       });
 
+      const otherPredecessor = await fixture.service.submitTask(actor, {
+        operationId: "resume-other-predecessor-submit",
+        agentId: "agent-revokable",
+        instruction: "do not borrow another Context Session",
+      });
+      const otherSuccessor = await fixture.service.submitTask(actor, {
+        operationId: "resume-other-successor-submit",
+        agentId: "agent-revokable",
+        contextId: otherPredecessor.task.contextId,
+        instruction: "remain blocked without a local Session",
+      });
+      await fixture.service.cancelTask(actor, {
+        operationId: "resume-other-predecessor-cancel",
+        taskId: otherPredecessor.task.taskId,
+      });
+      const blockedOtherSuccessor = await fixture.service.getTask(actor, {
+        taskId: otherSuccessor.task.taskId,
+      });
+      await expect(
+        fixture.service.resumeContext(actor, {
+          operationId: "resume-cross-context-preserve",
+          contextId: otherPredecessor.task.contextId,
+          expectedRevision: blockedOtherSuccessor.contextRevision,
+          continuationMode: "preserve",
+        }),
+      ).rejects.toMatchObject({ code: "invalid_state" });
+      await expect(
+        fixture.service.getTask(actor, { taskId: otherSuccessor.task.taskId }),
+      ).resolves.toMatchObject({
+        state: "paused",
+        blocker: { predecessorTaskId: otherPredecessor.task.taskId },
+      });
+
       const failedExecution = await fixture.store.claimAndPrepare({
         accessScopeId: "scope-a",
         allowedAgentIds: ["agent-a"],

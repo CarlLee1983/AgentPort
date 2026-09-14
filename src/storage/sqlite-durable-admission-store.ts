@@ -297,6 +297,7 @@ export interface DurableAdmissionStoreOptions {
   /** Fail-closed v3-aware rollback mode: query/control only, no new work or observations. */
   recoveryOnly?: boolean;
   auditCapacity?: number;
+  activeExecutionCapacity?: number;
   queuePerWorkspace?: number;
   queueGlobal?: number;
   receiptCapacity?: number;
@@ -312,6 +313,7 @@ export interface DurableAdmissionStoreOptions {
 
 const positiveIntegerOptions = [
   "auditCapacity",
+  "activeExecutionCapacity",
   "queuePerWorkspace",
   "queueGlobal",
   "receiptCapacity",
@@ -684,11 +686,13 @@ export class SqliteDurableAdmissionStore {
   }
   /** Caller mutation: the first schema-valid answer becomes delivery-pending. */
   async replyToQuestion(request: ReplyToStoredQuestionRequest): Promise<{
+    execution: StoredExecution;
     question: StoredQuestion;
     task: StoredTask;
     replayed: boolean;
   }> {
     return this.#request("replyToQuestion", request) as Promise<{
+      execution: StoredExecution;
       question: StoredQuestion;
       task: StoredTask;
       replayed: boolean;

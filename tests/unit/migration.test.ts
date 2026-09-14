@@ -15,6 +15,7 @@ import {
   s4QuestionAccountingMigration,
   s4QuestionNativeRelationMigration,
   s4ProtectedSessionTokensMigration,
+  s4WorkspaceQueueMigration,
 } from "../../src/storage/migration.js";
 
 function normalizeSql(sql: string): string {
@@ -163,6 +164,21 @@ describe("durable admission migration", () => {
       "utf8",
     );
     expect(normalizeSql(s4QuestionAccountingMigration)).toBe(
+      normalizeSql(artifact),
+    );
+    expect(normalizeSql(artifact)).not.toContain("drop table");
+    expect(normalizeSql(artifact)).not.toContain("delete from");
+  });
+
+  it("keeps the additive S4 cross-scope Workspace queue artifact identical to the worker migration", async () => {
+    const artifact = await readFile(
+      resolve(
+        import.meta.dirname,
+        "../../migrations/012_s4_workspace_queue.sql",
+      ),
+      "utf8",
+    );
+    expect(normalizeSql(s4WorkspaceQueueMigration)).toBe(
       normalizeSql(artifact),
     );
     expect(normalizeSql(artifact)).not.toContain("drop table");

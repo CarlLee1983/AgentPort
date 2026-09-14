@@ -126,7 +126,7 @@ describe("S3-A rollback recovery", () => {
       });
       await expect(
         recoveryStore.probe("inspectSchemaVersions"),
-      ).resolves.toEqual([1, 2, 3, 4, 5, 6, 7, 8, 9, 10, 11]);
+      ).resolves.toEqual([1, 2, 3, 4, 5, 6, 7, 8, 9, 10, 11, 12]);
       await recoveryStore.close();
       recoveryStore = undefined;
 

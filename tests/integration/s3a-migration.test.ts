@@ -107,12 +107,12 @@ async function createSchemaV2Database(): Promise<{
 }
 
 describe("durable schema migration", () => {
-  it("opens the durable store at additive schema version 11", async () => {
+  it("opens the durable store at additive schema version 12", async () => {
     const fixture = await createDurableAdmissionFixture();
     try {
       await expect(
         fixture.store.probe("inspectSchemaVersions"),
-      ).resolves.toEqual([1, 2, 3, 4, 5, 6, 7, 8, 9, 10, 11]);
+      ).resolves.toEqual([1, 2, 3, 4, 5, 6, 7, 8, 9, 10, 11, 12]);
     } finally {
       await fixture.close();
     }
@@ -126,7 +126,7 @@ describe("durable schema migration", () => {
         databasePath: seeded.databasePath,
       });
       await expect(store.probe("inspectSchemaVersions")).resolves.toEqual([
-        1, 2, 3, 4, 5, 6, 7, 8, 9, 10, 11,
+        1, 2, 3, 4, 5, 6, 7, 8, 9, 10, 11, 12,
       ]);
       await expect(
         store.getExecution({
