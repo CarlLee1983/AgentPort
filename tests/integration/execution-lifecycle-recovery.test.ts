@@ -36,12 +36,14 @@ describe("execution lifecycle recovery", () => {
       await service.initializeAfterRestart();
 
       await expect(
-        service.getExecutionLifecycle(actor, { taskId: task.task.taskId }),
+        service.getTask(actor, { taskId: task.task.taskId }),
       ).resolves.toMatchObject({
-        executionId: prepared.executionId,
-        state: "recovering",
-        candidateOutcome: null,
-        quarantined: true,
+        execution: {
+          executionId: prepared.executionId,
+          state: "recovering",
+          candidateAvailable: false,
+          quarantined: true,
+        },
       });
     } finally {
       await reopened?.close();

@@ -1,0 +1,98 @@
+{
+  "socketPath": "/run/agentport-g1/launcher.sock",
+  "socketGroup": "agentport-supervisor",
+  "ledgerDirectory": "/var/lib/agentport-g1/ledger",
+  "workspaceRoot": "/srv/agentport/workspaces",
+  "runtimeUser": "agentport-runtime",
+  "runtimeGroup": "agentport-runtime",
+  "runtimeHome": "/var/lib/agentport-runtime",
+  "nodeExecutable": "/usr/local/bin/node",
+  "profiles": {
+    "g1-idle": {
+      "workspaceIdentity": "g1-workspace",
+      "workspacePath": "/srv/agentport/workspaces/g1",
+      "workerEntrypoint": "/opt/agentport-g1/current/dist/src/runtime/worker/entrypoint.js",
+      "workerArguments": ["--mode", "idle"]
+    },
+    "g1-delayed": {
+      "workspaceIdentity": "g1-workspace",
+      "workspacePath": "/srv/agentport/workspaces/g1",
+      "workerEntrypoint": "/opt/agentport-g1/current/dist/src/runtime/worker/entrypoint.js",
+      "workerArguments": ["--mode", "idle"],
+      "gateDelayMilliseconds": 750
+    },
+    "g1-blocked": {
+      "workspaceIdentity": "g1-workspace",
+      "workspacePath": "/srv/agentport/workspaces/g1",
+      "workerEntrypoint": "/opt/agentport-g1/current/dist/src/runtime/worker/entrypoint.js",
+      "workerArguments": ["--mode", "blocked"]
+    },
+    "g1-descendants": {
+      "workspaceIdentity": "g1-workspace",
+      "workspacePath": "/srv/agentport/workspaces/g1",
+      "workerEntrypoint": "/opt/agentport-g1/current/dist/src/runtime/worker/entrypoint.js",
+      "workerArguments": ["--mode", "descendants"]
+    },
+    "g1-isolation-probe": {
+      "workspaceIdentity": "g1-workspace",
+      "workspacePath": "/srv/agentport/workspaces/g1",
+      "workerEntrypoint": "/opt/agentport-g1/current/dist/src/runtime/worker/entrypoint.js",
+      "workerArguments": ["--mode", "isolation-probe"]
+    },
+    "g1-claude-structured": {
+      "workspaceIdentity": "g1-workspace",
+      "workspacePath": "/srv/agentport/workspaces/g1",
+      "workerEntrypoint": "/opt/agentport-g1/current/dist/src/runtime/worker/entrypoint.js",
+      "workerArguments": [
+        "--mode",
+        "claude-structured",
+        "--claude-executable",
+        "/usr/local/bin/claude"
+      ]
+    },
+    "g1-claude-question": {
+      "workspaceIdentity": "g1-workspace",
+      "workspacePath": "/srv/agentport/workspaces/g1",
+      "workerEntrypoint": "/opt/agentport-g1/current/dist/src/runtime/worker/entrypoint.js",
+      "workerArguments": [
+        "--mode",
+        "claude-question",
+        "--claude-executable",
+        "/usr/local/bin/claude"
+      ]
+    },
+    "g4-claude-interaction": {
+      "workspaceIdentity": "filesystem",
+      "workspacePath": "/srv/agentport/workspaces/g1",
+      "workerEntrypoint": "/opt/agentport-g1/current/dist/src/runtime/worker/entrypoint.js",
+      "workerArguments": [
+        "--mode",
+        "claude-g4",
+        "--claude-executable",
+        "/usr/local/bin/claude"
+      ]
+    },
+    "g1-claude-cancel-active": {
+      "workspaceIdentity": "g1-workspace",
+      "workspacePath": "/srv/agentport/workspaces/g1",
+      "workerEntrypoint": "/opt/agentport-g1/current/dist/src/runtime/worker/entrypoint.js",
+      "workerArguments": [
+        "--mode",
+        "claude-cancel-active",
+        "--claude-executable",
+        "/usr/local/bin/claude"
+      ]
+    },
+    "g1-claude-cancel-question": {
+      "workspaceIdentity": "g1-workspace",
+      "workspacePath": "/srv/agentport/workspaces/g1",
+      "workerEntrypoint": "/opt/agentport-g1/current/dist/src/runtime/worker/entrypoint.js",
+      "workerArguments": [
+        "--mode",
+        "claude-cancel-question",
+        "--claude-executable",
+        "/usr/local/bin/claude"
+      ]
+    }
+  }
+}

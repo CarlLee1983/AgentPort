@@ -1,6 +1,14 @@
-import type { ExecutionReference } from "./types.js";
+import type {
+  ExecutionReference,
+  ProtectedRuntimeLaunchDirective,
+  RuntimeExecutionPolicy,
+} from "./types.js";
 
-export type { ExecutionReference } from "./types.js";
+export type {
+  ExecutionReference,
+  ProtectedRuntimeLaunchDirective,
+  RuntimeExecutionPolicy,
+} from "./types.js";
 
 export interface WorkerObservation {
   reference: ExecutionReference;
@@ -9,21 +17,61 @@ export interface WorkerObservation {
   summary: string;
 }
 
+/** Ephemeral per-execution credentials supplied by the core-owned ingress. */
+export interface RuntimeIngressDescriptor {
+  endpoint: string;
+  token: string;
+}
+
+export interface VerifiedStopEvidence {
+  kind: "verified";
+  platform: "linux-cgroup-v2";
+  reference: ExecutionReference;
+  executionUnitId: string;
+  generationSealedAt: string;
+  unitEmptyObservedAt: string;
+}
+
 export type SupervisorStartResult =
-  { kind: "pending" } | { kind: "indeterminate" };
+  | { kind: "started"; executionUnitId: string }
+  | { kind: "pending" }
+  | { kind: "conflict" }
+  | { kind: "unavailable" }
+  | { kind: "indeterminate" };
 
-export type SupervisorStopResult = { kind: "indeterminate" };
+export type SupervisorStopResult =
+  | { kind: "stopped"; evidence: VerifiedStopEvidence }
+  | { kind: "pending" }
+  | { kind: "conflict" }
+  | { kind: "unavailable" }
+  | { kind: "indeterminate" };
 
-export type SupervisorReconcileResult = { kind: "indeterminate" };
+export type SupervisorReconcileResult =
+  | { kind: "running"; executionUnitId: string }
+  | { kind: "stopped"; evidence: VerifiedStopEvidence }
+  | { kind: "pending" }
+  | { kind: "conflict" }
+  | { kind: "unavailable" }
+  | { kind: "indeterminate" };
 
 export interface ExecutionSupervisorAdapter {
-  start(reference: ExecutionReference): Promise<unknown>;
+  start(
+    reference: ExecutionReference,
+    ingress?: RuntimeIngressDescriptor,
+    continuation?: ProtectedRuntimeLaunchDirective,
+    policy?: RuntimeExecutionPolicy,
+  ): Promise<unknown>;
   revokeAndStop(reference: ExecutionReference): Promise<unknown>;
   reconcile(reference: ExecutionReference): Promise<unknown>;
 }
 
 export interface ExecutionSupervisor {
-  start(reference: ExecutionReference): Promise<SupervisorStartResult>;
+  start(
+    reference: ExecutionReference,
+    ingress?: RuntimeIngressDescriptor,
+    continuation?: ProtectedRuntimeLaunchDirective,
+    policy?: RuntimeExecutionPolicy,
+  ): Promise<SupervisorStartResult>;
   revokeAndStop(reference: ExecutionReference): Promise<SupervisorStopResult>;
   reconcile(reference: ExecutionReference): Promise<SupervisorReconcileResult>;
 }

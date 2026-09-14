@@ -18,6 +18,7 @@ export interface AgentConfiguration {
   configurationRevision: string;
   runtimeDriver: string;
   runtimeVersion: string;
+  launchProfileId: string;
   policy: AgentPolicy;
 }
 
@@ -40,6 +41,7 @@ export interface ResolvedAgentBinding {
   workspace: WorkspaceIdentity;
   runtimeDriver: string;
   runtimeVersion: string;
+  launchProfileId: string;
   policy: AgentPolicy;
 }
 
@@ -88,6 +90,15 @@ async function resolveAgent(
     throw new Error("Configured Agent ID is outside the supported bounds");
   }
   if (
+    configuration.launchProfileId.length === 0 ||
+    configuration.launchProfileId.length > MAX_IDENTIFIER_CHARACTERS ||
+    !/^[A-Za-z0-9][A-Za-z0-9._:-]*$/u.test(configuration.launchProfileId)
+  ) {
+    throw new Error(
+      `Configured launch profile is outside the supported bounds: ${configuration.agentId}`,
+    );
+  }
+  if (
     Buffer.byteLength(configuration.description, "utf8") >
     MAX_AGENT_DESCRIPTION_BYTES
   ) {
@@ -125,6 +136,7 @@ async function resolveAgent(
     },
     runtimeDriver: configuration.runtimeDriver,
     runtimeVersion: configuration.runtimeVersion,
+    launchProfileId: configuration.launchProfileId,
     policy: { ...configuration.policy },
   };
 }

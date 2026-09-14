@@ -43,7 +43,7 @@ describe("execution lifecycle authorization", () => {
 
     for (const override of overrides) {
       const result = await client.callTool({
-        name: "agentport_get_execution_lifecycle",
+        name: "agentport_get_task",
         arguments: { taskId: "unknown-task", ...override },
       });
       expect(result.isError).toBe(true);

@@ -499,21 +499,45 @@ describe("AP-002 authorization boundary", () => {
     }
   });
 
-  it("rejects contextId and every caller-controlled identity or execution override", async () => {
+  it("rejects unauthorized Context IDs and every caller-controlled identity or execution override", async () => {
     const fixture = track(await createDurableAdmissionFixture());
     const endpoint = track(await startDurableAdmissionMcpEndpoint(fixture));
     const client = track(
       await connectDurableAdmissionClient(endpoint.url, SCOPE_A_TOKEN),
     );
-    const overrides: Array<Record<string, unknown>> = [
-      { contextId: "context-existing-in-scope" },
-      { principalId: "principal-b" },
-      { accessScopeId: "scope-b" },
-      { workspacePath: "/tmp/ap002-outside-workspace" },
-      { runtimeBinary: "/tmp/ap002-runtime" },
-      { driverOptions: { unsafe: true } },
-      { policy: { allowAll: true } },
-      { [UNKNOWN_FIELD_SENTINEL]: true },
+    const overrides: Array<{
+      value: Record<string, unknown>;
+      expectedCode: "not_found" | "validation_error";
+    }> = [
+      {
+        value: { contextId: "context-existing-in-scope" },
+        expectedCode: "not_found",
+      },
+      {
+        value: { principalId: "principal-b" },
+        expectedCode: "validation_error",
+      },
+      { value: { accessScopeId: "scope-b" }, expectedCode: "validation_error" },
+      {
+        value: { workspacePath: "/tmp/ap002-outside-workspace" },
+        expectedCode: "validation_error",
+      },
+      {
+        value: { runtimeBinary: "/tmp/ap002-runtime" },
+        expectedCode: "validation_error",
+      },
+      {
+        value: { driverOptions: { unsafe: true } },
+        expectedCode: "validation_error",
+      },
+      {
+        value: { policy: { allowAll: true } },
+        expectedCode: "validation_error",
+      },
+      {
+        value: { [UNKNOWN_FIELD_SENTINEL]: true },
+        expectedCode: "validation_error",
+      },
     ];
     for (const [index, override] of overrides.entries()) {
       const response = await client.callTool({
@@ -522,10 +546,10 @@ describe("AP-002 authorization boundary", () => {
           operationId: `override-${String(index)}`,
           agentId: "agent-a",
           instruction: "must not persist",
-          ...override,
+          ...override.value,
         },
       });
-      assertApplicationError(response, "validation_error");
+      assertApplicationError(response, override.expectedCode);
       const rendered = JSON.stringify(response);
       expect(rendered).not.toContain(SCOPE_A_TOKEN);
       expect(rendered).not.toContain("/tmp/ap002-outside-workspace");

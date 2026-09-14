@@ -60,17 +60,20 @@ describe("execution lifecycle projections", () => {
     await clientB.listTools();
 
     const permitted = await clientA.callTool({
-      name: "agentport_get_execution_lifecycle",
+      name: "agentport_get_task",
       arguments: { taskId: task.task.taskId },
     });
     expectStructuredTextAgreement(permitted);
     expect(structured(permitted)).toMatchObject({
       ok: true,
-      lifecycle: {
+      task: {
         taskId: task.task.taskId,
-        state: "prepared",
-        candidateOutcome: null,
-        quarantined: false,
+        execution: {
+          state: "prepared",
+          candidateAvailable: false,
+          quarantined: false,
+        },
+        readiness: { status: "blocked", reason: "g1_unproven" },
       },
     });
     expect(JSON.stringify(permitted)).not.toMatch(
@@ -78,7 +81,7 @@ describe("execution lifecycle projections", () => {
     );
 
     const crossScope = await clientB.callTool({
-      name: "agentport_get_execution_lifecycle",
+      name: "agentport_get_task",
       arguments: { taskId: task.task.taskId },
     });
     expect(crossScope.isError).toBe(true);

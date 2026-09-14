@@ -14,10 +14,10 @@ import type {
 } from "../core/types.js";
 import { MCP_PROTOCOL_VERSION } from "./protocol.js";
 import {
+  acknowledgeInterruptionInputSchema,
   applicationErrorSchema,
   cancelTaskInputSchema,
-  getExecutionLifecycleInputSchema,
-  getExecutionLifecycleSuccessSchema,
+  editTaskInputSchema,
   getEventsInputSchema,
   getEventsSuccessSchema,
   getTaskInputSchema,
@@ -27,6 +27,8 @@ import {
   listTasksInputSchema,
   listTasksSuccessSchema,
   mutationSuccessSchema,
+  replyInputSchema,
+  resumeContextInputSchema,
   submitTaskInputSchema,
 } from "./schemas.js";
 
@@ -199,6 +201,9 @@ export function createDurableAdmissionMcpHandler(
                 operationId: input.operationId,
                 agentId: input.agentId,
                 instruction: input.instruction,
+                ...(input.contextId === undefined
+                  ? {}
+                  : { contextId: input.contextId }),
                 ...(input.executionLimitSeconds === undefined
                   ? {}
                   : { executionLimitSeconds: input.executionLimitSeconds }),
@@ -206,6 +211,93 @@ export function createDurableAdmissionMcpHandler(
                   ? {}
                   : { inputWaitSeconds: input.inputWaitSeconds }),
               });
+              return { task: mutation.task, replayed: mutation.replayed };
+            },
+            true,
+          ),
+      );
+      server.registerTool(
+        "agentport_edit_task",
+        {
+          description:
+            "Update a never-started Task using its current revision.",
+          inputSchema: publishedInput(editTaskInputSchema),
+          outputSchema: mutationSuccessSchema,
+        },
+        (input) =>
+          invokeInput(
+            editTaskInputSchema,
+            input,
+            async (input) => {
+              const mutation = await service.editTask(actor, input);
+              return { task: mutation.task, replayed: mutation.replayed };
+            },
+            true,
+          ),
+      );
+      server.registerTool(
+        "agentport_reply",
+        {
+          description:
+            "Durably accept the first valid answer to an authorized native Question.",
+          inputSchema: publishedInput(replyInputSchema),
+          outputSchema: mutationSuccessSchema,
+        },
+        (input) =>
+          invokeInput(
+            replyInputSchema,
+            input,
+            async (input) => {
+              const mutation = await service.reply(actor, input);
+              return { task: mutation.task, replayed: mutation.replayed };
+            },
+            true,
+          ),
+      );
+      server.registerTool(
+        "agentport_resume_context",
+        {
+          description:
+            "Resume the named blocked Context using preserved native continuity or an explicit fresh-session summary.",
+          inputSchema: publishedInput(resumeContextInputSchema),
+          outputSchema: mutationSuccessSchema,
+        },
+        (input) =>
+          invokeInput(
+            resumeContextInputSchema,
+            input,
+            async (input) => {
+              const mutation = await service.resumeContext(actor, {
+                operationId: input.operationId,
+                contextId: input.contextId,
+                expectedRevision: input.expectedRevision,
+                continuationMode: input.continuationMode,
+                ...(input.contextSummary === undefined
+                  ? {}
+                  : { contextSummary: input.contextSummary }),
+              });
+              return { task: mutation.task, replayed: mutation.replayed };
+            },
+            true,
+          ),
+      );
+      server.registerTool(
+        "agentport_acknowledge_interruption",
+        {
+          description:
+            "Acknowledge a recovery-unknown Task only after trusted stop confirmation releases its Workspace claim.",
+          inputSchema: publishedInput(acknowledgeInterruptionInputSchema),
+          outputSchema: mutationSuccessSchema,
+        },
+        (input) =>
+          invokeInput(
+            acknowledgeInterruptionInputSchema,
+            input,
+            async (input) => {
+              const mutation = await service.acknowledgeInterruption(
+                actor,
+                input,
+              );
               return { task: mutation.task, replayed: mutation.replayed };
             },
             true,
@@ -222,23 +314,6 @@ export function createDurableAdmissionMcpHandler(
           invokeInput(getTaskInputSchema, input, async (input) => ({
             task: await service.getTask(actor, input),
           })),
-      );
-      server.registerTool(
-        "agentport_get_execution_lifecycle",
-        {
-          description:
-            "Read the bounded lifecycle of an authorized Execution without dispatching it.",
-          inputSchema: publishedInput(getExecutionLifecycleInputSchema),
-          outputSchema: getExecutionLifecycleSuccessSchema,
-        },
-        (input) =>
-          invokeInput(
-            getExecutionLifecycleInputSchema,
-            input,
-            async (input) => ({
-              lifecycle: await service.getExecutionLifecycle(actor, input),
-            }),
-          ),
       );
       server.registerTool(
         "agentport_list_tasks",
@@ -285,7 +360,7 @@ export function createDurableAdmissionMcpHandler(
         "agentport_cancel_task",
         {
           description:
-            "Durably cancel a queued or restart-paused Task without Runtime activity.",
+            "Durably cancel queued work or record a cancellation intent for prepared work without Runtime activity.",
           inputSchema: publishedInput(cancelTaskInputSchema),
           outputSchema: mutationSuccessSchema,
         },

@@ -4,10 +4,23 @@ import tseslint from "typescript-eslint";
 
 export default tseslint.config(
   {
-    ignores: ["dist/**", "node_modules/**", "scripts/forgeflow/**", "eslint.config.js"],
+    ignores: [
+      "dist/**",
+      "node_modules/**",
+      "scripts/forgeflow/**",
+      "eslint.config.js",
+    ],
   },
   eslint.configs.recommended,
   ...tseslint.configs.strictTypeChecked,
+  {
+    files: ["**/*.mjs"],
+    ...tseslint.configs.disableTypeChecked,
+    languageOptions: {
+      ...tseslint.configs.disableTypeChecked.languageOptions,
+      globals: globals.node,
+    },
+  },
   {
     files: ["**/*.ts"],
     languageOptions: {

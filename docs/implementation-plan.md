@@ -21,19 +21,21 @@ macOS 是 Node、MCP、SQLite、核心狀態／持久化、Adapter 與 fake-work
 | 階段 | 交付的可觀察能力                                                                                        | 依賴                                                                                          |
 | ---- | ------------------------------------------------------------------------------------------------------- | --------------------------------------------------------------------------------------------- |
 | S0   | 可重現工具鏈與版本／契約檢查；MCP Client 相容性已證實                                                   | 無                                                                                            |
-| S1   | 指定 Linux target 上受控 execution 可啟動／停止，真 Claude 可提問並取得回答                             | S0 local compatibility；指定 Linux environment                                                |
+| S1-L | 指定 Linux target 上受控 execution 可啟動／停止，並具 bounded isolated worker IPC                      | S0 local compatibility；指定 Linux environment                                                |
+| S1-C | 真 Claude 可產生 structured result、提問、取得回答並在受控 execution 內取消                           | G1-L；指定 Runtime authentication environment                                                 |
 | S2   | 經授權 MCP 提交→持久 queued Task→查詢／取消；重啟不遺失；不派送 Runtime                                 | S0 local compatibility；ADR-0004 sequencing decision                                          |
 | S1-P | platform-neutral execution-control preparation；只完成 lifecycle／持久化／Supervisor contract，絕不派送 | G2；[AP-003](../specs/stories/AP-003-platform-neutral-execution-control-preparation/story.md) |
-| S3   | MCP→核心→受控 Claude execution→結果／取消，並具基本恢復                                                 | G1、G2                                                                                        |
-| S4   | 完整追加佇列、修改、澄清往返與明確續接操作                                                              | S3                                                                                            |
+| S3-A | platform-neutral S3 persistence／candidate／recovery／projection preparation；絕不派送 Runtime          | G2、S1-P；[AP-006](../specs/stories/AP-006-s3-predispatch-preparation/story.md)             |
+| S3-B | MCP→核心→受控 Claude execution→結果／取消，並具基本恢復                                                 | G1-L、G1-C、G2、S3-A                                                                           |
+| S4   | 完整追加佇列、修改、澄清往返與明確續接操作                                                              | S3-B                                                                                          |
 | S5   | 崩潰、容量、儲存及效能情境下仍符合控制與恢復契約                                                        | S4                                                                                            |
 | S6   | 通用 MCP 交辦方的首版全流程驗收與可操作的 Linux 發行包                                                  | S5                                                                                            |
 
-S0 後可平行處理 S1 與 S2：S1 只在指定 Linux fixture 建立受控 execution；S2 可在 macOS 或 Linux 開發 platform-neutral durable admission，但 build／import／production composition graph 都不得含可到達的 Runtime dispatch path。G2 之後可進行 S1-P，將 execution lifecycle、transaction、recovery 及 Supervisor contract 先實作為不可由 production composition 到達的 platform-neutral Module；其 core／storage preparation fixture 可持久建立並保留 Workspace claim，但 scripted Supervisor fixture 本身不建立 claim，兩者都不是 Linux Stop Evidence，也不能建立 Execution Unit、程序或 Runtime call。S1-P 不改變主整合路徑：`(G1 + G2) → S3 → S4 → S5 → S6`。S0 的 Linux metadata blocked 不由 macOS evidence 取代，也不因可平行而讓多個人同時修改生命週期／儲存 seam。
+S0 後可平行處理 S1-L 與 S2：S1-L 只在指定 Linux fixture 建立受控 execution；S1-C 在 G1-L 後以獨立 Story 驗證真 Claude capability。S2 可在 macOS 或 Linux 開發 platform-neutral durable admission，但 build／import／production composition graph 都不得含可到達的 Runtime dispatch path。G2 之後可進行 S1-P，將 execution lifecycle、transaction、recovery 及 Supervisor contract 先實作為不可由 production composition 到達的 platform-neutral Module；其 core／storage preparation fixture 可持久建立並保留 Workspace claim，但 scripted Supervisor fixture 本身不建立 claim，兩者都不是 Linux Stop Evidence，也不能建立 Execution Unit、程序或 Runtime call。S1-P 只能進入同樣不可派送的 S3-A；主整合路徑是 `(G1-L + G1-C + G2 + S3-A) → S3-B → S4 → S5 → S6`。S0 的 Linux metadata blocked 不由 macOS evidence 取代，也不因可平行而讓多個人同時修改生命週期／儲存 seam。
 
-S1 將最可能推翻整合選擇的能力提早驗證；其 harness 只在指定 Linux fixture 使用，不是略過核心授權與持久化的產品入口。S2 的 MCP／storage fixture 也不是可部署的 admission-only 服務。S1-P 的不可達 preparation transaction 先建立並保留 platform-neutral persisted claim；S3 開始任何真正派送前，仍須同時通過 G1 的 generation fencing／Stop Evidence 與 G2 的持久 admission／取消／重啟規則，並在 production dispatch transaction 中核對及承接該 prepared claim。claim release 仍只屬於 S3 的真 Stop Evidence／terminal commit 路徑，不能留到 S5 才補上。S5 是擴大故障驗證，不是延後可靠性實作。
+S1-L 與 S1-C 將最可能推翻整合選擇的能力分開驗證；兩者的 harness 都只在指定 Linux fixture 使用，不是略過核心授權與持久化的產品入口。S2 的 MCP／storage fixture 也不是可部署的 admission-only 服務。S1-P 的不可達 preparation transaction 先建立並保留 platform-neutral persisted claim；S3-A 可先完成 schema v3、bounded candidate／cancel ordering、recovery 與單一 projection，但 production composition 必須物理上沒有 Runtime start 能力，也不得 terminalize 或釋放 claim。S3-B 開始任何真正派送前，仍須同時通過 G1-L 的 generation fencing／Stop Evidence、G1-C 的真 Claude capability 與 G2 的持久 admission／取消／重啟規則，並在 production dispatch transaction 中核對及承接該 prepared claim。claim release 仍只屬於 S3-B 的真 Stop Evidence／terminal commit 路徑，不能留到 S5 才補上。S5 是擴大故障驗證，不是延後可靠性實作。
 
-每階段完成時保存檔案變更、命令、版本、測試結果及未解事項。階段只有在退出條件通過後才標完成；缺少 Linux 或 Runtime 憑證標記待環境，不以跳過測試作為通過。
+每階段完成時保存檔案變更、命令、版本、測試結果及未解事項。階段只有在退出條件通過後才標完成；缺少 Linux 或 Runtime authentication 標記待環境，不以跳過測試作為通過。
 
 ## 3. 建議程式邊界
 
@@ -66,19 +68,28 @@ SQLite／並行／授權／launcher 是高風險邊界，保持主代理實作�
 
 **退出條件 G0：**乾淨安裝／型別／基本測試可重現；MCP 版本及預配置 bearer 的互通有實際結果；Linux 前置條件與 SQLite 修正版已辨識。若選定 Client 不支援設計 revision 或認證模式，先修正技術相容方案，不加隱藏 fallback 或宣稱支援任意 Client。
 
-## 5. S1 — 受控 Linux execution 與真 Claude 可行性
+## 5. S1-L／S1-C — 受控 Linux execution 與真 Claude 可行性
 
-**成果：**指定 Linux target 的 harness 能觀察與停止 execution，並證明 Claude 的必要互動能力。此階段只操作指定測試目錄，不開放遠端任務派送。
+**S1-L 成果：**指定 Linux target 的 harness 能觀察與停止 execution，並證明 isolated
+worker 與 bounded IPC 邊界。此階段只操作指定測試目錄，不開放遠端任務派送。
 
 工作：
 
 - 實作最小可重用 Execution Supervisor interface、Linux cgroup v2 Adapter 及 worker IPC 契約：executionId／generation、持久撤銷、開始前放行點、不透明 Execution Unit ID、Stop Evidence；Supervisor 狀態與 Runtime 帳號權限分離。
 - 先用不呼叫模型的 fixture 驗證啟動、取消早於啟動、延遲 start、supervisor 重啟、同步卡住 worker、子程序／detached 子程序的停止。generation 封閉且 cgroup 空才可說停止完成。
-- 在已驗證的受控 execution 內接入真 Claude SDK：明確 cwd／設定來源，取得結構化結果；刻意觸發 AskUserQuestion、保留原生待決回呼、提供有效答案並繼續同一 harness 工作。
-- 驗證 AskUserQuestion 與一般權限請求分流；確認進入純等待前沒有仍在執行的平行工具。不能把所有 canUseTool 自動 allow 或將普通 assistant 問句當成等待回呼。
-- 驗證執行中／等待中取消、成功後 cleanup 與安全 Session reference；記錄事件順序、原生 tool-use 關聯及 SDK 控制行為，形成後續 Driver contract fixtures。
+- 驗證 Runtime worker 只取得指定 Workspace 與最小環境；Reference、ordinal、payload 或 candidate 不合法時 fail closed，且不洩漏 host details。
+- 以 import／process tripwire 證明 Linux Adapter、launcher 與 worker harness 不可由 production composition 到達。
 
-**退出條件 G1：**真 Claude 正向「提問→回答→繼續」及可靠停止有證據；沒有孤兒 execution，晚到 start 無法在取消後重新啟動。若 SDK 模式無法保證純等待或控制邊界，暫停依賴 Runtime execution 的 S3–S4，先以證據修正 Driver 選擇；不影響不含 dispatch 的 S2，也不能改用 fake 通過或刪掉澄清要求。
+**退出條件 G1-L：**可靠停止與 isolated worker IPC 有證據；沒有孤兒 execution，晚到
+start 無法在取消後重新啟動。G1-L 單獨不允許 S3-B Runtime dispatch。
+
+**S1-C 成果：**後續獨立 Story 在已驗證的受控 execution 內接入真 Claude SDK，明確
+cwd／設定來源，取得 structured result；觸發 AskUserQuestion、綁定原生 question／tool-use、
+提供有效答案並繼續，同時驗證執行中與純等待取消及安全 Session reference。
+
+**退出條件 G1-C：**真 Claude 正向「提問→回答→繼續」、cancellation 與 Session safety
+有 candidate-bound evidence。若 SDK 模式無法保證純等待或控制邊界，暫停 S3-B–S4；
+不能以本機既有登入、fake、skip 或 G1-L evidence 取代。
 
 ## 6. S2 — MCP 到持久任務的第一個切片
 
@@ -103,12 +114,26 @@ SQLite／並行／授權／launcher 是高風險邊界，保持主代理實作�
 
 - 將 AgentExecutionService 保持為唯一 lifecycle owner；以既有 `start`、`revokeAndStop`、`reconcile` Supervisor interface 形成唯一 seam，定義 immutable Execution Reference、generation、daemon epoch 與 prepared／recovering／quarantine 的安全保留語意。
 - 以真 SQLite 驗證 Workspace claim 的唯一性、prepare／cancel race 與 restart→recovering／quarantine；scripted contract fixture 只可回 pending／indeterminate，不能啟動程序、建立 Execution Unit、寫入 candidate outcome、釋放 claim 或提供 G1 Stop Evidence。
-- 建立 bounded Reference-bound worker observation schema 與 MCP lifecycle read projection；所有 production bootstrap/composition 仍不可 import dispatcher、worker launcher、Supervisor Adapter 或 Driver。candidate outcome、terminal result 與 claim release 延後至 G1 後的 S3。
+- 建立 bounded Reference-bound worker observation schema 與 MCP lifecycle read projection；所有 production bootstrap/composition 仍不可 import dispatcher、worker launcher、Supervisor Adapter 或 Driver。candidate outcome 預設延後至 G1 後的 S3-B；只有 Human Gate 明確 supersede GATE-012 的 candidate-timing 部分後，S3-A 才可先保存 bounded、untrusted、nonterminal candidate。terminal result 與 claim release 始終延後至 G1 後的 S3-B。
 - 保留 no-dispatch reachability／process tripwire；不呼叫 Claude SDK `query()`、不建立 container、cgroup、process group 或 Execution Unit。
 
-**限制：**S1-P 的 test、review 與 macOS evidence 只證明 core contract。它不證明 generation fencing、cgroup containment、unit empty、descendant cleanup、real Claude 問答／取消／Session、G1、G3 或 production readiness；S3 不因 S1-P 完成而可開始。
+**限制：**S1-P 的 test、review 與 macOS evidence 只證明 core contract。它不證明 generation fencing、cgroup containment、unit empty、descendant cleanup、real Claude 問答／取消／Session、G1-L、G1-C、G3 或 production readiness；它只允許另經 Gate 授權的 S3-A pre-dispatch preparation，不允許 S3-B Runtime dispatch。
 
-## 7. S3 — 派送、結果、取消與基本恢復
+## 6b. S3-A — Pre-dispatch persistence and projection preparation
+
+**成果：**在 G1-L 或 G1-C 尚未證明時，完成 schema v3、bounded observation／candidate persistence、取消排序、restart recovery 與單一 `agentport_get_task` lifecycle projection；不建立任何可到達 Runtime dispatch。
+
+工作：
+
+- additive migration 保留 AP-003 execution／claim／evidence；舊 binary 拒絕 schema v3，rollback 使用 v3-aware recovery 或 reconciliation 後的 offline restore。
+- 以真 SQLite 保存綁定完整 Reference、連續 ordinal 的 bounded observations 與 nonterminal candidate；衝突、跳號或越界輸入拒絕並 quarantine。
+- candidate 與 cancel intent 依 commit order 決定 stop reason，但都只能到 `stopping`／`recovering`；沒有 G1 Stop Evidence 不 terminalize、不發布 result、不釋放 claim。
+- 將 lifecycle 合併至 `agentport_get_task`，移除 preparation-only public tool；G1-L 或 G1-C 任一未通過時，readiness 固定為 `blocked`／`g1_unproven`。
+- 擴充 no-dispatch import／composition／process tripwire，確保 production 無 Adapter、launcher、worker、Driver、credential source 或 Runtime side effect。
+
+**限制：**S3-A 只是 platform-neutral preparation；不證明 Linux containment、Claude、reliable cancellation、G1-L、G1-C、S3／G3 或 production readiness。真正 dispatch 仍屬 S3-B 並必須等待 G1-L 與 G1-C。
+
+## 7. S3-B — 派送、結果、取消與基本恢復
 
 **成果：**單項 MCP 工作能經核心交給 S1 的受控 Claude worker，回傳最終結果；外側查詢／取消不等模型。
 
@@ -179,7 +204,7 @@ SQLite／並行／授權／launcher 是高風險邊界，保持主代理實作�
 | pnpm run check                 | lint、typecheck、build 及不需 vendor 憑證的核心／儲存／fixture 整合檢查                        |
 | pnpm run test:mcp              | 官方 Client 驗證版本、認證、工具 schema 及應用結果                                             |
 | pnpm run test:linux            | Linux cgroup／supervisor／子程序與 generation fence 契約；缺環境需明確失敗／待執行             |
-| pnpm run test:claude           | 真 Claude 的非互動及正向澄清／取消／續接；指定測試目錄與 Runtime 認證                          |
+| pnpm run test:claude           | G1-C 與後續整合使用：真 Claude 非互動及正向澄清／取消／續接；需指定 Runtime authentication     |
 | pnpm run test:faults           | 持久 crash windows、容量／DB 故障與恢復；標示各案例需要的 Linux 條件                           |
 | pnpm run verify:release        | check＋MCP＋Linux＋Claude＋faults 與發行證據完整性；不得因環境缺少而把必要套件全 skip 後報成功 |
 
@@ -204,4 +229,4 @@ SQLite／並行／授權／launcher 是高風險邊界，保持主代理實作�
 
 verification 每次紀錄包含：階段／AC、source revision 或檔案摘要、OS／版本、命令、fixture、預期與實際、執行／停止次數、結果位置、時間及限制。Task／execution／question ID 可作關聯，但不記 token、環境變數值、完整私密 prompt 或未遮罩 stderr。
 
-Linux metadata、S1 Linux 執行權限及 Claude 純等待／停止能力是此計畫的外部前提。沒有指定 Linux target 時，macOS、Docker、fake worker、放寬權限、取消 persistence、忽略 generation fence 或改稱不支援互動都不能取代相關驗收。所有 Work Item 的 blocker、Gate、verification 與 review 狀態只可由 ForgePilot 宣告；本計畫不直接授權其他階段，也不提供未量測的工期／完成日期。
+Linux metadata、G1-L Linux 執行權限及 G1-C Claude 純等待／停止能力是此計畫的分離外部前提。沒有指定 Linux target 時，macOS、Docker、fake worker、放寬權限、取消 persistence、忽略 generation fence 或改稱不支援互動都不能取代相關驗收；本機已登入的 Claude CLI 也不能取代指定 Runtime account 的 G1-C evidence。所有 Work Item 的 blocker、Gate、verification 與 review 狀態只可由 ForgePilot 宣告；本計畫不直接授權其他階段，也不提供未量測的工期／完成日期。

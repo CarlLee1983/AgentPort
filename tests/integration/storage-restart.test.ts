@@ -56,6 +56,7 @@ describe("storage restart", () => {
             },
             runtimeDriver: "none",
             runtimeVersion: "none",
+            launchProfileId: "fixture-profile",
             workspaceIdentity: {
               canonicalPath: "/fixture/workspace-a",
               filesystemIdentity: "workspace-a",

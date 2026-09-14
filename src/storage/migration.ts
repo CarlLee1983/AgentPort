@@ -43,9 +43,200 @@ CREATE TABLE IF NOT EXISTS workspace_claims (
   updated_at TEXT NOT NULL
 );`;
 
-// A downgrade keeps AP-003 records intact while allowing the AP-002 binary,
-// which recognizes schema version 1, to reopen the database.
-export const executionControlRollbackMigration = `
-BEGIN IMMEDIATE;
-DELETE FROM schema_migrations WHERE version=2;
-COMMIT;`;
+// migrations/003_s3a_predispatch.sql remains the inspectable upgrade artifact.
+// The v2 execution row stays intact; v3 adds bounded observations and the
+// ordering metadata needed to derive prepared/stopping/recovering safely.
+export const s3aPredispatchMigration = `
+ALTER TABLE executions ADD COLUMN stop_reason TEXT CHECK(stop_reason IN ('completion','cancellation'));
+ALTER TABLE executions ADD COLUMN stop_reason_committed_at TEXT;
+ALTER TABLE executions ADD COLUMN recovery_reason TEXT;
+ALTER TABLE executions ADD COLUMN recovery_started_at TEXT;
+ALTER TABLE executions ADD COLUMN last_observation_ordinal INTEGER NOT NULL DEFAULT 0 CHECK(last_observation_ordinal >= 0);
+ALTER TABLE executions ADD COLUMN observation_bytes INTEGER NOT NULL DEFAULT 0 CHECK(observation_bytes >= 0);
+ALTER TABLE executions ADD COLUMN candidate_ordinal INTEGER CHECK(candidate_ordinal IS NULL OR candidate_ordinal > 0);
+CREATE TABLE execution_observations (
+  execution_id TEXT NOT NULL REFERENCES executions(execution_id),
+  generation TEXT NOT NULL,
+  daemon_epoch TEXT NOT NULL,
+  launch_profile_id TEXT NOT NULL,
+  workspace_identity TEXT NOT NULL,
+  ordinal INTEGER NOT NULL CHECK(ordinal > 0),
+  kind TEXT NOT NULL CHECK(kind IN ('progress','candidate')),
+  payload_json TEXT NOT NULL,
+  payload_fingerprint TEXT NOT NULL,
+  payload_bytes INTEGER NOT NULL CHECK(payload_bytes >= 0),
+  final_ordinal INTEGER CHECK(final_ordinal IS NULL OR final_ordinal > 0),
+  created_at TEXT NOT NULL,
+  PRIMARY KEY(execution_id,ordinal)
+);
+CREATE UNIQUE INDEX execution_observations_candidate ON execution_observations(execution_id) WHERE kind='candidate';`;
+
+// migrations/004_s3b_dispatch.sql remains the inspectable upgrade artifact.
+export const s3bDispatchMigration = `
+ALTER TABLE tasks ADD COLUMN lifecycle_state TEXT CHECK(lifecycle_state IN ('starting','running','stopping','completed','failed','canceled','recovering','interrupted'));
+ALTER TABLE executions ADD COLUMN lifecycle_state TEXT CHECK(lifecycle_state IN ('starting','running','stopping','recovering'));`;
+
+// migrations/005_s3b_terminal.sql remains the inspectable upgrade artifact.
+// workspace_claims stays readable for prior binaries; v5 uses the new table so
+// released claims retain their execution history without blocking the next claim.
+export const s3bTerminalMigration = `
+ALTER TABLE contexts ADD COLUMN session_reference TEXT;
+CREATE TABLE execution_workspace_claims (
+  execution_id TEXT PRIMARY KEY REFERENCES executions(execution_id),
+  workspace_id TEXT NOT NULL,
+  status TEXT NOT NULL CHECK(status IN ('held','quarantined','released')),
+  claimed_at TEXT NOT NULL,
+  updated_at TEXT NOT NULL,
+  released_at TEXT
+);
+CREATE UNIQUE INDEX execution_workspace_claims_active_workspace
+  ON execution_workspace_claims(workspace_id)
+  WHERE status IN ('held','quarantined');
+INSERT INTO execution_workspace_claims(execution_id,workspace_id,status,claimed_at,updated_at)
+  SELECT execution_id,workspace_id,status,created_at,updated_at FROM workspace_claims;
+CREATE TABLE execution_terminals (
+  execution_id TEXT PRIMARY KEY REFERENCES executions(execution_id),
+  generation TEXT NOT NULL,
+  daemon_epoch TEXT NOT NULL,
+  launch_profile_id TEXT NOT NULL,
+  workspace_identity TEXT NOT NULL,
+  platform TEXT NOT NULL CHECK(platform='linux-cgroup-v2'),
+  execution_unit_id TEXT NOT NULL,
+  generation_sealed_at TEXT NOT NULL,
+  unit_empty_observed_at TEXT NOT NULL,
+  terminal_state TEXT NOT NULL CHECK(terminal_state IN ('completed','failed','canceled')),
+  result_json TEXT,
+  session_reference TEXT,
+  final_ordinal INTEGER,
+  committed_at TEXT NOT NULL
+);`;
+
+// migrations/006_s4_context_queue.sql remains the inspectable upgrade artifact.
+// A predecessor is set once when a follow-up is accepted and is never rewritten.
+export const s4ContextQueueMigration = `
+ALTER TABLE tasks ADD COLUMN predecessor_task_id TEXT REFERENCES tasks(task_id);
+CREATE INDEX tasks_context_predecessor ON tasks(context_id, predecessor_task_id);
+CREATE INDEX tasks_predecessor_state_queue ON tasks(predecessor_task_id, state, queue_order);`;
+
+// migrations/007_s4_questions.sql remains the inspectable upgrade artifact.
+// `input_state` is deliberately separate from the pre-S4 lifecycle CHECK: it
+// records a durable input wait without weakening a previously applied schema.
+export const s4QuestionsMigration = `
+ALTER TABLE tasks ADD COLUMN input_state TEXT CHECK(input_state IN ('awaiting_input'));
+CREATE TABLE questions (
+  question_id TEXT PRIMARY KEY,
+  task_id TEXT NOT NULL REFERENCES tasks(task_id),
+  execution_id TEXT NOT NULL REFERENCES executions(execution_id),
+  generation TEXT NOT NULL,
+  daemon_epoch TEXT NOT NULL,
+  launch_profile_id TEXT NOT NULL,
+  workspace_identity TEXT NOT NULL,
+  schema_json TEXT NOT NULL,
+  state TEXT NOT NULL CHECK(state IN ('pending','accepted','closed')),
+  delivery_state TEXT NOT NULL CHECK(delivery_state IN ('pending','acknowledged','unknown')),
+  answer_fingerprint TEXT,
+  answer_json TEXT,
+  accepted_actor_principal_id TEXT,
+  accepted_at TEXT,
+  expires_at TEXT NOT NULL,
+  delivery_acknowledged_at TEXT,
+  delivery_unknown_at TEXT,
+  created_at TEXT NOT NULL,
+  CHECK((state='pending' AND answer_fingerprint IS NULL AND answer_json IS NULL AND accepted_actor_principal_id IS NULL AND accepted_at IS NULL) OR (state IN ('accepted','closed') AND answer_fingerprint IS NOT NULL AND answer_json IS NOT NULL AND accepted_actor_principal_id IS NOT NULL AND accepted_at IS NOT NULL)),
+  CHECK((delivery_state='acknowledged' AND delivery_acknowledged_at IS NOT NULL) OR (delivery_state!='acknowledged' AND delivery_acknowledged_at IS NULL)),
+  CHECK((delivery_state='unknown' AND delivery_unknown_at IS NOT NULL) OR (delivery_state!='unknown' AND delivery_unknown_at IS NULL))
+);
+CREATE UNIQUE INDEX questions_execution_question ON questions(execution_id, question_id);
+CREATE INDEX questions_task_created ON questions(task_id, created_at DESC);`;
+
+// migrations/008_s4_protected_session_tokens.sql remains the inspectable upgrade
+// artifact. The vendor token is AES-GCM ciphertext; ordinary observations and
+// caller-visible Context rows retain only `session_reference`.
+export const s4ProtectedSessionTokensMigration = `
+CREATE TABLE runtime_session_tokens (
+  session_reference TEXT PRIMARY KEY,
+  source_execution_id TEXT NOT NULL UNIQUE REFERENCES executions(execution_id),
+  context_id TEXT NOT NULL REFERENCES contexts(context_id),
+  binding_snapshot_id TEXT NOT NULL REFERENCES binding_snapshots(binding_snapshot_id),
+  runtime_driver TEXT NOT NULL,
+  runtime_version TEXT NOT NULL,
+  workspace_identity TEXT NOT NULL,
+  ciphertext BLOB NOT NULL,
+  nonce BLOB NOT NULL CHECK(length(nonce)=12),
+  auth_tag BLOB NOT NULL CHECK(length(auth_tag)=16),
+  key_id TEXT NOT NULL,
+  state TEXT NOT NULL CHECK(state IN ('candidate','current','invalidated')),
+  activated_at TEXT,
+  invalidated_at TEXT,
+  created_at TEXT NOT NULL,
+  CHECK((state='candidate' AND activated_at IS NULL AND invalidated_at IS NULL) OR (state='current' AND activated_at IS NOT NULL AND invalidated_at IS NULL) OR (state='invalidated' AND invalidated_at IS NOT NULL))
+);
+CREATE UNIQUE INDEX runtime_session_tokens_current_context
+  ON runtime_session_tokens(context_id)
+  WHERE state='current';
+CREATE INDEX runtime_session_tokens_context_state
+  ON runtime_session_tokens(context_id,state);`;
+
+// migrations/009_s4_question_native_relation.sql remains the inspectable
+// upgrade artifact. Existing Questions stay readable but lack a deliverable
+// native callback relation until a new worker observation supplies one.
+export const s4QuestionNativeRelationMigration = `
+ALTER TABLE questions ADD COLUMN native_tool_use_id TEXT;
+ALTER TABLE questions ADD COLUMN native_request_id TEXT;`;
+
+// migrations/010_s4_context_resume.sql is additive. A Context has at most one
+// removable predecessor blocker, while continuation intent remains internal.
+export const s4ContextResumeMigration = `
+CREATE TABLE context_blockers (
+  context_id TEXT PRIMARY KEY REFERENCES contexts(context_id),
+  predecessor_task_id TEXT NOT NULL REFERENCES tasks(task_id),
+  state TEXT NOT NULL CHECK(state IN ('failed','canceled','interrupted','recovering')),
+  created_at TEXT NOT NULL
+);
+CREATE INDEX context_blockers_predecessor ON context_blockers(predecessor_task_id);
+CREATE TABLE context_continuations (
+  context_id TEXT PRIMARY KEY REFERENCES contexts(context_id),
+  mode TEXT NOT NULL CHECK(mode IN ('preserve','fresh_session')),
+  context_summary TEXT,
+  native_continuity TEXT NOT NULL CHECK(native_continuity IN ('preserved','abandoned')),
+  updated_at TEXT NOT NULL,
+  CHECK((mode='preserve' AND context_summary IS NULL AND native_continuity='preserved') OR (mode='fresh_session' AND context_summary IS NOT NULL AND native_continuity='abandoned'))
+);`;
+
+// migrations/011_s4_question_accounting.sql adds durable phase checkpoints
+// without rewriting earlier execution or Question rows. A legacy active row
+// starts stopped and is reconciled before any new dispatch.
+export const s4QuestionAccountingMigration = `
+ALTER TABLE executions ADD COLUMN accumulated_execution_ms INTEGER NOT NULL DEFAULT 0 CHECK(accumulated_execution_ms >= 0);
+ALTER TABLE executions ADD COLUMN accounting_phase TEXT NOT NULL DEFAULT 'stopped' CHECK(accounting_phase IN ('active','pure_wait','stopped'));
+ALTER TABLE executions ADD COLUMN accounting_phase_started_at TEXT;
+ALTER TABLE questions ADD COLUMN closed_at TEXT;
+ALTER TABLE questions ADD COLUMN closure_reason TEXT CHECK(closure_reason IN ('expired','canceled','recovery','terminal'));
+ALTER TABLE questions ADD COLUMN input_expiry_closed_at TEXT;
+ALTER TABLE questions ADD COLUMN tool_activity_status TEXT NOT NULL DEFAULT 'unknown' CHECK(tool_activity_status IN ('idle','unknown'));
+ALTER TABLE questions ADD COLUMN tool_activity_observed_at TEXT;
+ALTER TABLE context_continuations ADD COLUMN target_task_id TEXT REFERENCES tasks(task_id);
+ALTER TABLE context_continuations ADD COLUMN consumed_by_execution_id TEXT REFERENCES executions(execution_id);
+UPDATE context_continuations
+SET target_task_id = (
+  SELECT task_id
+  FROM tasks
+  WHERE tasks.context_id = context_continuations.context_id
+    AND tasks.lifecycle_state IS NULL
+    AND tasks.state IN ('queued','paused')
+  ORDER BY tasks.queue_order
+  LIMIT 1
+)
+WHERE target_task_id IS NULL;
+ALTER TABLE executions ADD COLUMN recovery_resolution TEXT CHECK(recovery_resolution IN ('interrupted'));
+CREATE TABLE execution_recovery_stop_confirmations (
+  execution_id TEXT PRIMARY KEY REFERENCES executions(execution_id),
+  generation TEXT NOT NULL,
+  daemon_epoch TEXT NOT NULL,
+  launch_profile_id TEXT NOT NULL,
+  workspace_identity TEXT NOT NULL,
+  execution_unit_id TEXT NOT NULL,
+  generation_sealed_at TEXT NOT NULL,
+  unit_empty_observed_at TEXT NOT NULL,
+  confirmed_at TEXT NOT NULL
+);`;

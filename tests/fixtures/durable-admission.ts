@@ -10,7 +10,10 @@ import {
   DurableAgentExecutionService,
   type ServiceOptions,
 } from "../../src/core/agent-execution-service.js";
-import type { ExecutionReference } from "../../src/core/types.js";
+import type {
+  ExecutionLifecycleSnapshot,
+  ExecutionReference,
+} from "../../src/core/types.js";
 import {
   SqliteDurableAdmissionStore,
   type DurableAdmissionStoreOptions,
@@ -38,6 +41,10 @@ export interface DurableAdmissionFixture {
     actor: { principalId: string },
     input: { taskId: string },
   ): Promise<ExecutionReference>;
+  recordObservation(
+    actor: { principalId: string },
+    input: { taskId: string; observation: unknown },
+  ): Promise<{ execution: ExecutionLifecycleSnapshot; replayed: boolean }>;
   store: SqliteDurableAdmissionStore;
   close(): Promise<void>;
 }
@@ -46,7 +53,14 @@ type StoreOverrides = Omit<DurableAdmissionStoreOptions, "databasePath">;
 
 export async function createDurableAdmissionFixture(
   storeOverrides: StoreOverrides = {},
-  serviceOverrides: Pick<ServiceOptions, "snapshotCacheEntries"> = {},
+  serviceOverrides: Pick<
+    ServiceOptions,
+    | "now"
+    | "monotonicNow"
+    | "snapshotCacheEntries"
+    | "stopRequester"
+    | "stopEvidenceVerifier"
+  > = {},
 ): Promise<DurableAdmissionFixture> {
   const directory = await mkdtemp(join(tmpdir(), "agentport-ap002-"));
   const workspaceA = join(directory, "workspace-a");
@@ -83,6 +97,7 @@ export async function createDurableAdmissionFixture(
         configurationRevision: "fixture-config-1",
         runtimeDriver: "unreachable-fixture-driver",
         runtimeVersion: "0.0.0",
+        launchProfileId: "fixture-profile",
         policy: {
           maximumExecutionLimitSeconds: 3_600,
           maximumInputWaitSeconds: 86_400,
@@ -95,6 +110,7 @@ export async function createDurableAdmissionFixture(
         configurationRevision: "fixture-config-1",
         runtimeDriver: "unreachable-fixture-driver",
         runtimeVersion: "0.0.0",
+        launchProfileId: "fixture-profile",
         policy: {
           maximumExecutionLimitSeconds: 3_600,
           maximumInputWaitSeconds: 86_400,
@@ -107,6 +123,7 @@ export async function createDurableAdmissionFixture(
         configurationRevision: "fixture-config-1",
         runtimeDriver: "unreachable-fixture-driver",
         runtimeVersion: "0.0.0",
+        launchProfileId: "fixture-profile",
         policy: {
           maximumExecutionLimitSeconds: 3_600,
           maximumInputWaitSeconds: 86_400,
@@ -145,6 +162,7 @@ export async function createDurableAdmissionFixture(
     recordIndeterminateSupervisorResult:
       preparation.recordIndeterminateSupervisorResult,
     executionReference: preparation.executionReference,
+    recordObservation: preparation.recordObservation,
     store,
     close: async () => {
       await store.close();

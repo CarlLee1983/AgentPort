@@ -24,6 +24,20 @@ AP-001 AC-09, deployment, or production-readiness claim.
 - Keep `cursorSecret` stable across daemon restart. Rotating it invalidates
   existing opaque cursors, which then fail with the same `not_found` projection
   used for unauthorized or unknown cursors.
+- S4 Claude `preserve` continuation requires `continuationEncryptionKey`: a
+  base64url-encoded 256-bit key held outside SQLite. Configure the same key
+  before accepting any execution that can report a resumable session token, and
+  retain it across daemon restart. Without it, a candidate carrying such a
+  token is quarantined and `preserve` continuation fails closed; the raw token
+  is never exposed through caller-facing storage methods.
+- Do not rotate `continuationEncryptionKey` in place. Current protected
+  session records are AES-GCM ciphertext bound to their execution, Context,
+  binding, Runtime, and Workspace fields, and their stored key ID must match
+  the configured key before `preserve` can proceed. There is no key-ring or
+  re-encryption path. Before replacing the key, operators must explicitly
+  abandon every continuation that still needs the old key using the supported
+  `fresh_session` path with its Caller-provided summary, or retain the old key;
+  changing the key otherwise makes those preserved continuations unavailable.
 - The SQLite path must be an absolute durable filesystem path and is
   canonicalized before opening; its parent directory is
   administrator-controlled. The worker enables WAL, foreign keys,
@@ -66,8 +80,10 @@ AP-001 AC-09, deployment, or production-readiness claim.
   operations before acceptance. The worker accounts for the main SQLite file
   and WAL and allocates each accepted Task's control bytes by non-sparse writes
   to `<database>.control-reserve` on the same filesystem, followed by `fsync`.
-  Restart consumes only its reserved slice; cancellation consumes the
-  remainder. Startup reconciles this sidecar from the durable per-Task ledger,
+  Restart consumes only its reserved slice; terminal cancellation of a Task
+  without an Execution consumes the remainder. An Execution cancel intent
+  retains the remaining terminal/recovery reserve until trusted stop evidence
+  can support a future terminal commit. Startup reconciles this sidecar from the durable per-Task ledger,
   rather than a cached capacity summary, and fails closed if the ledger is
   inconsistent or the allocation cannot be restored. This protects
   AgentPort-controlled capacity; it cannot prevent an unrelated host writer or
@@ -104,11 +120,17 @@ and repository gate entries as one coherent change. Do not point older code at
 this database or silently replace the durable store with an in-memory
 implementation.
 
-After the additive AP-003 execution-control migration has been applied, do not
-use that destructive AP-002 procedure. Stop the listener, close the composition,
-and preserve any required evidence copy before applying
-`migrations/002_execution_control_rollback.sql`. That rollback removes only the
-version-2 marker: it retains the `executions` and `workspace_claims` tables and
-all of their records, while restoring the version set recognized by the AP-002
-binary. The retained AP-003 data is not Stop Evidence and the rollback does not
-release a Workspace claim or authorize Runtime dispatch.
+After schema v3 has been applied, neither AP-002 nor AP-003 code may open the
+live database. Never delete a schema marker to simulate compatibility. Stop the
+listener and preserve the database together with WAL/SHM/control-reserve
+companions. Use the v3-aware store with `recoveryOnly: true`: startup moves all
+unconfirmed Executions to `recovering`, quarantines their Workspace claims,
+permits authorized query and cancellation control, and rejects new admission,
+preparation, and worker observations.
+
+An offline restore is valid only after dispatch is disabled and external
+execution effects have been reconciled or left fail-closed. Restore a
+SQLite-consistent pre-v3 backup to a separate validated path and retain the v3
+database as immutable recovery evidence. Neither recovery path publishes a
+candidate as a result, releases a Workspace claim, or authorizes Runtime
+dispatch.

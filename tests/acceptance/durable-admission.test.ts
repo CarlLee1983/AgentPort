@@ -50,7 +50,7 @@ function isRecord(value: unknown): value is Record<string, unknown> {
 }
 
 describe("AP-002 durable admission through the official MCP Client", () => {
-  it("publishes exactly seven durable tools with identical structured and JSON text results", async () => {
+  it("publishes the registered durable tools with identical structured and JSON text results", async () => {
     const fixture = track(await createDurableAdmissionFixture());
     const endpoint = track(await startDurableAdmissionMcpEndpoint(fixture));
     const client = track(
@@ -59,12 +59,15 @@ describe("AP-002 durable admission through the official MCP Client", () => {
 
     const tools = await client.listTools();
     expect(tools.tools.map(({ name }) => name).sort()).toEqual([
+      "agentport_acknowledge_interruption",
       "agentport_cancel_task",
+      "agentport_edit_task",
       "agentport_get_events",
-      "agentport_get_execution_lifecycle",
       "agentport_get_task",
       "agentport_list_agents",
       "agentport_list_tasks",
+      "agentport_reply",
+      "agentport_resume_context",
       "agentport_submit_task",
     ]);
     for (const tool of tools.tools) {

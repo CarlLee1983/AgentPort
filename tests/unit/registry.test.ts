@@ -38,6 +38,7 @@ function configuration(workspacePath: string): RegistryConfiguration {
         configurationRevision: "config-1",
         runtimeDriver: "fixture-driver",
         runtimeVersion: "1.0.0",
+        launchProfileId: "fixture-profile",
         policy: {
           maximumExecutionLimitSeconds: 3600,
           maximumInputWaitSeconds: 86400,

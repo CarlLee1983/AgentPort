@@ -358,6 +358,7 @@ describe("storage responsiveness", () => {
             },
             runtimeDriver: "none",
             runtimeVersion: "none",
+            launchProfileId: "fixture-profile",
             policy: {
               maximumExecutionLimitSeconds: 3_600,
               maximumInputWaitSeconds: 86_400,

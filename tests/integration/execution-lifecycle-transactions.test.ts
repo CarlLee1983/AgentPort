@@ -1,11 +1,29 @@
 import { describe, expect, it } from "vitest";
 
-import { reopenWithAp002Store } from "../fixtures/ap002-store.js";
 import { createDurableAdmissionFixture } from "../fixtures/durable-admission.js";
 
 const actor = { principalId: "principal-a" };
 
 describe("execution lifecycle transactions", () => {
+  it("persists the administrator-selected launch profile in the Execution Reference", async () => {
+    const fixture = await createDurableAdmissionFixture();
+    try {
+      const submitted = await fixture.service.submitTask(actor, {
+        operationId: "execution-managed-launch-profile",
+        agentId: "agent-a",
+        instruction: "must use the managed launcher profile",
+      });
+
+      await fixture.prepareExecution(actor, { taskId: submitted.task.taskId });
+
+      await expect(
+        fixture.executionReference(actor, { taskId: submitted.task.taskId }),
+      ).resolves.toMatchObject({ launchProfileId: "fixture-profile" });
+    } finally {
+      await fixture.close();
+    }
+  });
+
   it("atomically claims a Workspace for one prepared Execution", async () => {
     const fixture = await createDurableAdmissionFixture();
     try {
@@ -32,7 +50,7 @@ describe("execution lifecycle transactions", () => {
         attempts.find(({ status }) => status === "rejected"),
       ).toMatchObject({
         status: "rejected",
-        reason: { code: "operation_conflict" },
+        reason: { code: "invalid_state" },
       });
       expect(
         attempts.find(({ status }) => status === "fulfilled"),
@@ -61,20 +79,19 @@ describe("execution lifecycle transactions", () => {
         }),
       ]);
 
-      expect(
-        [prepared, canceled].filter(({ status }) => status === "fulfilled"),
-      ).toHaveLength(1);
       const current = await fixture.service.getTask(actor, {
         taskId: task.task.taskId,
       });
       if (prepared.status === "fulfilled") {
-        expect(canceled).toMatchObject({
-          status: "rejected",
-          reason: { code: "operation_conflict" },
-        });
+        expect(canceled).toMatchObject({ status: "fulfilled" });
         expect(current).toMatchObject({
           state: "paused",
-          reason: "execution_prepared",
+          reason: "execution_stopping",
+          execution: {
+            state: "stopping",
+            stopReason: "cancellation",
+            quarantined: false,
+          },
         });
       } else {
         expect(canceled).toMatchObject({ status: "fulfilled" });
@@ -82,43 +99,6 @@ describe("execution lifecycle transactions", () => {
       }
     } finally {
       await fixture.close();
-    }
-  });
-
-  it("preserves execution records while an AP-002 binary reopens schema version 1", async () => {
-    const claimedFixture = await createDurableAdmissionFixture();
-    try {
-      const task = await claimedFixture.service.submitTask(actor, {
-        operationId: "rollback-retained-claim",
-        agentId: "agent-a",
-        instruction: "do not delete this retained claim",
-      });
-      await claimedFixture.prepareExecution(actor, {
-        taskId: task.task.taskId,
-      });
-
-      await expect(
-        claimedFixture.store.probe("applyExecutionControlRollback"),
-      ).resolves.toBeUndefined();
-      await expect(
-        claimedFixture.store.probe("inspectSchemaVersions"),
-      ).resolves.toEqual([1]);
-      await claimedFixture.store.close();
-
-      const reopened = reopenWithAp002Store({
-        databasePath: claimedFixture.databasePath,
-        taskId: task.task.taskId,
-      });
-      expect(reopened.schemaVersions).toEqual([1]);
-      expect(reopened.task).toEqual({
-        instruction: "do not delete this retained claim",
-      });
-      expect(reopened.retainedExecutionClaim).toEqual({
-        taskId: task.task.taskId,
-        status: "held",
-      });
-    } finally {
-      await claimedFixture.close();
     }
   });
 });

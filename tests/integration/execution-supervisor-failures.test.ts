@@ -47,13 +47,15 @@ describe("execution supervisor failures", () => {
         reference,
       });
       await expect(
-        fixture.service.getExecutionLifecycle(actor, {
+        fixture.service.getTask(actor, {
           taskId: task.task.taskId,
         }),
       ).resolves.toMatchObject({
-        state: "recovering",
-        candidateOutcome: null,
-        quarantined: true,
+        execution: {
+          state: "recovering",
+          candidateAvailable: false,
+          quarantined: true,
+        },
       });
     } finally {
       await fixture.close();
