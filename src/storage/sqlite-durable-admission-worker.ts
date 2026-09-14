@@ -35,6 +35,7 @@ import {
   s4ProtectedSessionTokensMigration,
   s4QuestionsMigration,
   s4WorkspaceQueueMigration,
+  s5RetentionExpiryMigration,
 } from "./migration.js";
 
 /* The binding's synchronous query API is intentionally confined to this worker.
@@ -55,6 +56,7 @@ interface Options {
   taskControlReserveBytes?: number;
   controlReceiptReserve?: number;
   controlEventReserve?: number;
+  terminalRetentionDays?: number;
   busyTimeoutMs?: number;
   continuationEncryptionKey?: string;
   registryRevisionFence: SharedArrayBuffer;
@@ -75,6 +77,8 @@ interface Failure {
     | "storage_unavailable"
     | "observation_unavailable"
     | "authorization_changed"
+    | "result_expired"
+    | "cursor_expired"
     | "not_found";
   message: string;
   taskId?: string;
@@ -92,6 +96,8 @@ const physicalControlReserveBytes =
 const physicalCapacityBytes =
   physicalAdmissionBytes + physicalControlReserveBytes;
 const taskControlReserveBytes = options.taskControlReserveBytes ?? 128 * 1024;
+const terminalRetentionMilliseconds =
+  (options.terminalRetentionDays ?? 30) * 24 * 60 * 60 * 1_000;
 const controlReservePath = `${options.databasePath}.control-reserve`;
 const reserveChunk = Buffer.alloc(64 * 1024, 0xa5);
 const db = new Database(options.databasePath);
@@ -249,7 +255,8 @@ if (hasVersionTable) {
       Number(versions[8]?.version) === 9 &&
       Number(versions[9]?.version) === 10) ||
     hasContiguousSchemaVersions(versions, 11) ||
-    hasContiguousSchemaVersions(versions, 12)
+    hasContiguousSchemaVersions(versions, 12) ||
+    hasContiguousSchemaVersions(versions, 13)
   )) {
     throw new Error("unsupported durable admission schema version");
   }
@@ -301,6 +308,7 @@ if (options.recoveryOnly !== true && migrationVersions.length === 5) {
     Number(migrationVersions[9]?.version) === 10) ||
   hasContiguousSchemaVersions(migrationVersions, 11) ||
   hasContiguousSchemaVersions(migrationVersions, 12) ||
+  hasContiguousSchemaVersions(migrationVersions, 13) ||
   (options.recoveryOnly === true &&
     (migrationVersions.length === 5 ||
       migrationVersions.length === 6 ||
@@ -309,7 +317,8 @@ if (options.recoveryOnly !== true && migrationVersions.length === 5) {
       migrationVersions.length === 9 ||
       migrationVersions.length === 10 ||
       migrationVersions.length === 11 ||
-      migrationVersions.length === 12))
+      migrationVersions.length === 12 ||
+      migrationVersions.length === 13))
 )) {
   throw new Error("unsupported durable admission schema version");
 }
@@ -335,6 +344,7 @@ if (options.recoveryOnly !== true && s4MigrationVersions.length === 6) {
     Number(s4MigrationVersions[9]?.version) === 10) ||
   hasContiguousSchemaVersions(s4MigrationVersions, 11) ||
   hasContiguousSchemaVersions(s4MigrationVersions, 12) ||
+  hasContiguousSchemaVersions(s4MigrationVersions, 13) ||
   (options.recoveryOnly === true &&
     (s4MigrationVersions.length === 5 ||
       s4MigrationVersions.length === 6 ||
@@ -343,7 +353,8 @@ if (options.recoveryOnly !== true && s4MigrationVersions.length === 6) {
       s4MigrationVersions.length === 9 ||
       s4MigrationVersions.length === 10 ||
       s4MigrationVersions.length === 11 ||
-      s4MigrationVersions.length === 12))
+      s4MigrationVersions.length === 12 ||
+      s4MigrationVersions.length === 13))
 )) {
   throw new Error("unsupported durable admission schema version");
 }
@@ -370,6 +381,7 @@ if (
     Number(protectedSessionMigrationVersions[9]?.version) === 10) ||
   hasContiguousSchemaVersions(protectedSessionMigrationVersions, 11) ||
   hasContiguousSchemaVersions(protectedSessionMigrationVersions, 12) ||
+  hasContiguousSchemaVersions(protectedSessionMigrationVersions, 13) ||
   (options.recoveryOnly === true &&
     (protectedSessionMigrationVersions.length === 5 ||
       protectedSessionMigrationVersions.length === 6 ||
@@ -378,7 +390,8 @@ if (
       protectedSessionMigrationVersions.length === 9 ||
       protectedSessionMigrationVersions.length === 10 ||
       protectedSessionMigrationVersions.length === 11 ||
-      protectedSessionMigrationVersions.length === 12))
+      protectedSessionMigrationVersions.length === 12 ||
+      protectedSessionMigrationVersions.length === 13))
 )) {
   throw new Error("unsupported durable admission schema version");
 }
@@ -403,6 +416,7 @@ if (
     Number(questionRelationMigrationVersions[9]?.version) === 10) ||
   hasContiguousSchemaVersions(questionRelationMigrationVersions, 11) ||
   hasContiguousSchemaVersions(questionRelationMigrationVersions, 12) ||
+  hasContiguousSchemaVersions(questionRelationMigrationVersions, 13) ||
   (options.recoveryOnly === true &&
     (questionRelationMigrationVersions.length === 5 ||
       questionRelationMigrationVersions.length === 6 ||
@@ -411,7 +425,8 @@ if (
       questionRelationMigrationVersions.length === 9 ||
       questionRelationMigrationVersions.length === 10 ||
       questionRelationMigrationVersions.length === 11 ||
-      questionRelationMigrationVersions.length === 12))
+      questionRelationMigrationVersions.length === 12 ||
+      questionRelationMigrationVersions.length === 13))
 )) {
   throw new Error("unsupported durable admission schema version");
 }
@@ -434,6 +449,7 @@ if (
     Number(contextResumeMigrationVersions[9]?.version) === 10) ||
   hasContiguousSchemaVersions(contextResumeMigrationVersions, 11) ||
   hasContiguousSchemaVersions(contextResumeMigrationVersions, 12) ||
+  hasContiguousSchemaVersions(contextResumeMigrationVersions, 13) ||
   (options.recoveryOnly === true &&
     (contextResumeMigrationVersions.length === 5 ||
       contextResumeMigrationVersions.length === 6 ||
@@ -442,7 +458,8 @@ if (
       contextResumeMigrationVersions.length === 9 ||
       contextResumeMigrationVersions.length === 10 ||
       contextResumeMigrationVersions.length === 11 ||
-      contextResumeMigrationVersions.length === 12))
+      contextResumeMigrationVersions.length === 12 ||
+      contextResumeMigrationVersions.length === 13))
 )) {
   throw new Error("unsupported durable admission schema version");
 }
@@ -463,6 +480,7 @@ if (
 } else if (!(
   hasContiguousSchemaVersions(questionAccountingMigrationVersions, 11) ||
   hasContiguousSchemaVersions(questionAccountingMigrationVersions, 12) ||
+  hasContiguousSchemaVersions(questionAccountingMigrationVersions, 13) ||
   (options.recoveryOnly === true &&
     (questionAccountingMigrationVersions.length === 5 ||
       questionAccountingMigrationVersions.length === 6 ||
@@ -471,7 +489,8 @@ if (
       questionAccountingMigrationVersions.length === 9 ||
       questionAccountingMigrationVersions.length === 10 ||
       questionAccountingMigrationVersions.length === 11 ||
-      questionAccountingMigrationVersions.length === 12))
+      questionAccountingMigrationVersions.length === 12 ||
+      questionAccountingMigrationVersions.length === 13))
 )) {
   throw new Error("unsupported durable admission schema version");
 }
@@ -491,9 +510,29 @@ if (
   })();
 } else if (!(
   hasContiguousSchemaVersions(workspaceQueueMigrationVersions, 12) ||
+  hasContiguousSchemaVersions(workspaceQueueMigrationVersions, 13) ||
   (options.recoveryOnly === true &&
     workspaceQueueMigrationVersions.length >= 5 &&
-    workspaceQueueMigrationVersions.length <= 12)
+    workspaceQueueMigrationVersions.length <= 13)
+)) {
+  throw new Error("unsupported durable admission schema version");
+}
+
+const retentionMigrationVersions = db
+  .prepare("SELECT version FROM schema_migrations ORDER BY version")
+  .all() as { version: number }[];
+if (options.recoveryOnly !== true && retentionMigrationVersions.length === 12) {
+  db.transaction(() => {
+    db.exec(s5RetentionExpiryMigration);
+    db.prepare(
+      "INSERT INTO schema_migrations(version, applied_at) VALUES(13, ?)",
+    ).run(now());
+  })();
+} else if (!(
+  hasContiguousSchemaVersions(retentionMigrationVersions, 13) ||
+  (options.recoveryOnly === true &&
+    retentionMigrationVersions.length >= 5 &&
+    retentionMigrationVersions.length <= 13)
 )) {
   throw new Error("unsupported durable admission schema version");
 }
@@ -532,10 +571,16 @@ if (requiredTables.some((name) => !actualTables.has(name))) {
   throw new Error("durable admission schema is incomplete");
 }
 if (
-  Number(workspaceQueueMigrationVersions.at(-1)?.version) >= 12 &&
+  Number(retentionMigrationVersions.at(-1)?.version) >= 12 &&
   !actualTables.has("task_workspace_queue")
 ) {
   throw new Error("durable Workspace queue schema is incomplete");
+}
+if (
+  Number(retentionMigrationVersions.at(-1)?.version) >= 13 &&
+  !actualTables.has("task_expiry_markers")
+) {
+  throw new Error("durable retention schema is incomplete");
 }
 const receiptColumns = new Set(
   (db.pragma("table_info(operation_receipts)") as { name: string }[]).map(
@@ -544,6 +589,12 @@ const receiptColumns = new Set(
 );
 if (!receiptColumns.has("actor_principal_id")) {
   throw new Error("durable admission receipt schema is incompatible");
+}
+if (
+  Number(retentionMigrationVersions.at(-1)?.version) >= 13 &&
+  (!receiptColumns.has("retained_task_id") || !receiptColumns.has("expired_at"))
+) {
+  throw new Error("durable retention receipt schema is incompatible");
 }
 const taskColumns = new Set(
   (db.pragma("table_info(tasks)") as { name: string }[]).map(
@@ -801,14 +852,24 @@ function availableFilesystemBytes(): number {
 function checkpointWal(): void {
   db.pragma("wal_checkpoint(TRUNCATE)");
 }
+function reusableFreelistBytes(boundary: number): number {
+  if (boundary !== physicalAdmissionBytes) return 0;
+  const usage = physicalUsage();
+  if (usage.walBytes !== 0 || usage.allocatedWalBytes !== 0) return 0;
+  return Number(db.pragma("freelist_count", { simple: true })) * pageSize;
+}
 function requirePhysicalHeadroom(
   boundary: number,
   estimatedGrowth = 0,
   filesystemReserve = 0,
 ): void {
   const usage = physicalUsage();
+  const projectedFileGrowth = Math.max(
+    0,
+    estimatedGrowth - reusableFreelistBytes(boundary),
+  );
   if (
-    usage.accountedDatabaseAndWalBytes + estimatedGrowth > boundary ||
+    usage.accountedDatabaseAndWalBytes + projectedFileGrowth > boundary ||
     usage.physicalTotalBytes + estimatedGrowth + filesystemReserve >
       physicalCapacityBytes ||
     availableFilesystemBytes() < estimatedGrowth + filesystemReserve
@@ -957,12 +1018,43 @@ function enforceAuditCapacity(incomingRecords = 0): void {
 function initializeCapacityMetadata(): void {
   const pausedControlReserveBytes =
     taskControlReserveBytes - Math.floor(taskControlReserveBytes / 2);
+  const unspentControlReceipts = actualTables.has("task_expiry_markers")
+    ? 2
+    : 1;
   const invalidReservation = db
     .prepare(
-      "SELECT t.task_id FROM tasks t LEFT JOIN task_reservations r ON r.task_id=t.task_id LEFT JOIN executions e ON e.task_id=t.task_id WHERE t.state IN ('queued','paused') AND COALESCE(t.lifecycle_state,'') NOT IN ('completed','failed','canceled') AND (r.task_id IS NULL OR r.control_receipts < CASE WHEN t.state='paused' AND t.reason='execution_stopping' AND e.stop_reason='cancellation' AND EXISTS (SELECT 1 FROM operation_receipts o WHERE o.scope=t.scope AND o.operation_type='cancel' AND o.target_id=t.task_id) AND EXISTS (SELECT 1 FROM task_events ev WHERE ev.task_id=t.task_id AND ev.event_type='cancel_requested') THEN 0 ELSE 1 END OR r.control_bytes < CASE t.state WHEN 'queued' THEN ? ELSE ? END OR r.control_events < CASE t.state WHEN 'queued' THEN 2 ELSE 1 END) LIMIT 1",
+      `SELECT t.task_id
+       FROM tasks t
+       LEFT JOIN task_reservations r ON r.task_id=t.task_id
+       LEFT JOIN executions e ON e.task_id=t.task_id
+       WHERE t.state IN ('queued','paused')
+         AND COALESCE(t.lifecycle_state,'') NOT IN ('completed','failed','canceled','interrupted')
+         AND (
+           r.task_id IS NULL
+           OR r.control_receipts < CASE
+             WHEN t.state='paused'
+               AND t.reason='execution_stopping'
+               AND e.stop_reason='cancellation'
+               AND EXISTS (SELECT 1 FROM operation_receipts o WHERE o.scope=t.scope AND o.operation_type='cancel' AND o.target_id=t.task_id)
+               AND EXISTS (SELECT 1 FROM task_events ev WHERE ev.task_id=t.task_id AND ev.event_type='cancel_requested') THEN 0
+             WHEN EXISTS (SELECT 1 FROM questions q WHERE q.task_id=t.task_id AND q.state='accepted') THEN 1
+             ELSE ?
+           END
+           OR r.control_bytes < CASE
+             WHEN EXISTS (SELECT 1 FROM questions q WHERE q.task_id=t.task_id AND q.state='accepted') THEN ?
+             WHEN t.state='queued' THEN ?
+             ELSE ?
+           END
+           OR r.control_events < CASE t.state WHEN 'queued' THEN 2 ELSE 1 END
+         )
+       LIMIT 1`,
     )
-    .get(taskControlReserveBytes, pausedControlReserveBytes) as
-    { task_id: string } | undefined;
+    .get(
+      unspentControlReceipts,
+      pausedControlReserveBytes,
+      taskControlReserveBytes,
+      pausedControlReserveBytes,
+    ) as { task_id: string } | undefined;
   if (invalidReservation !== undefined) {
     throw new Error("active Task control reservation ledger is inconsistent");
   }
@@ -973,7 +1065,7 @@ function initializeCapacityMetadata(): void {
       (
         db
           .prepare(
-            "SELECT COUNT(*) AS value FROM operation_receipts WHERE operation_type IN ('submit','edit','reply')",
+            "SELECT COUNT(*) AS value FROM operation_receipts WHERE operation_type IN ('submit','edit','resume')",
           )
           .get() as { value: number }
       ).value,
@@ -993,7 +1085,7 @@ function initializeCapacityMetadata(): void {
       (
         db
           .prepare(
-            "SELECT COUNT(*) AS value FROM tasks WHERE state IN ('queued','paused') AND COALESCE(lifecycle_state,'') NOT IN ('completed','failed','canceled')",
+            "SELECT COUNT(*) AS value FROM tasks WHERE state IN ('queued','paused') AND COALESCE(lifecycle_state,'') NOT IN ('completed','failed','canceled','interrupted')",
           )
           .get() as { value: number }
       ).value,
@@ -1010,7 +1102,7 @@ function initializeCapacityMetadata(): void {
     );
     const workspaces = db
       .prepare(
-        "SELECT b.workspace_id AS workspace_id, COUNT(*) AS value FROM tasks t JOIN contexts c ON c.context_id=t.context_id JOIN binding_snapshots b ON b.binding_snapshot_id=c.binding_snapshot_id WHERE t.state IN ('queued','paused') AND COALESCE(t.lifecycle_state,'') NOT IN ('completed','failed','canceled') GROUP BY b.workspace_id",
+        "SELECT b.workspace_id AS workspace_id, COUNT(*) AS value FROM tasks t JOIN contexts c ON c.context_id=t.context_id JOIN binding_snapshots b ON b.binding_snapshot_id=c.binding_snapshot_id WHERE t.state IN ('queued','paused') AND COALESCE(t.lifecycle_state,'') NOT IN ('completed','failed','canceled','interrupted') GROUP BY b.workspace_id",
       )
       .all() as { workspace_id: string; value: number }[];
     for (const workspace of workspaces) {
@@ -1509,9 +1601,14 @@ function validTerminalEvidence(
 }
 
 function commitTerminal(p: Record<string, unknown>) {
-  const stamp = now();
+  const stamp = typeof p.now === "string" ? p.now : now();
   const activeElapsedMs = Number(p.activeElapsedMs ?? 0);
-  if (!Number.isSafeInteger(activeElapsedMs) || activeElapsedMs < 0) {
+  if (
+    !Number.isSafeInteger(activeElapsedMs) ||
+    activeElapsedMs < 0 ||
+    !Number.isFinite(Date.parse(stamp)) ||
+    new Date(Date.parse(stamp)).toISOString() !== stamp
+  ) {
     throwFailure("operation_conflict", "execution accounting is invalid");
   }
   let releasedControlBytes = 0;
@@ -1739,6 +1836,7 @@ function commitTerminal(p: Record<string, unknown>) {
     changeCapacity("active_global", -1);
     changeCapacity(workspaceCapacityKey(String(row.workspace_id)), -1);
     maybeFail();
+    waitAtTestCommitBarrier();
     const taskRow = db
       .prepare("SELECT * FROM tasks WHERE task_id=?")
       .get(row.task_id) as Record<string, unknown>;
@@ -2302,89 +2400,155 @@ function replyToQuestion(p: Record<string, unknown>) {
   const taskId = String(p.taskId);
   const questionId = String(p.questionId);
   const stamp = typeof p.now === "string" ? p.now : now();
-  checkpointWal();
-  const result = registryFencedTransaction(p.expectedRegistryRevision, () => {
-    const old = receipt(scope, operationId, "reply", questionId, fingerprint);
-    if (old !== undefined) {
-      const replay = db
-        .prepare(
-          "SELECT q.*,t.agent_id FROM questions q JOIN tasks t ON t.task_id=q.task_id WHERE q.question_id=? AND q.task_id=? AND t.scope=?",
-        )
-        .get(questionId, taskId, scope) as Record<string, unknown> | undefined;
-      if (
-        replay === undefined ||
-        !allowed(replay.agent_id, p.allowedAgentIds)
-      ) {
-        throwFailure("not_found", "Question was not found");
-      }
-      const taskRow = db
-        .prepare("SELECT * FROM tasks WHERE task_id=?")
-        .get(replay.task_id) as Record<string, unknown>;
-      const executionRow = db
-        .prepare(
-          "SELECT e.*,w.status AS claim_status FROM executions e JOIN execution_workspace_claims w ON w.execution_id=e.execution_id WHERE e.execution_id=?",
-        )
-        .get(replay.execution_id) as Record<string, unknown>;
-      return {
-        execution: execution(executionRow),
-        question: question(replay),
-        task: task(taskRow),
-        replayed: true,
-      };
+  const authorizedAgents = authorizedAgentIds(p.allowedAgentIds);
+  const replay = registryFencedRead(p.expectedRegistryRevision, () => {
+    const old = receipt(
+      scope,
+      operationId,
+      "reply",
+      questionId,
+      fingerprint,
+      authorizedAgents,
+    );
+    if (old === undefined) return undefined;
+    const questionRow = db
+      .prepare(
+        "SELECT q.*,t.agent_id FROM questions q JOIN tasks t ON t.task_id=q.task_id WHERE q.question_id=? AND q.task_id=? AND t.scope=?",
+      )
+      .get(questionId, taskId, scope) as Record<string, unknown> | undefined;
+    if (
+      questionRow === undefined ||
+      !allowed(questionRow.agent_id, p.allowedAgentIds)
+    ) {
+      throwFailure("not_found", "Question was not found");
     }
-    const agentIds = authorizedAgentIds(p.allowedAgentIds);
-    const row =
-      agentIds.length === 0
-        ? undefined
-        : (db
-            .prepare(
-              `SELECT q.*,t.scope,t.agent_id,t.lifecycle_state AS task_lifecycle_state,t.input_state AS task_input_state,e.lifecycle_state AS execution_lifecycle_state,w.status AS claim_status
+    const taskRow = db
+      .prepare("SELECT * FROM tasks WHERE task_id=?")
+      .get(questionRow.task_id) as Record<string, unknown>;
+    const executionRow = db
+      .prepare(
+        "SELECT e.*,w.status AS claim_status FROM executions e JOIN execution_workspace_claims w ON w.execution_id=e.execution_id WHERE e.execution_id=?",
+      )
+      .get(questionRow.execution_id) as Record<string, unknown>;
+    return {
+      execution: execution(executionRow),
+      question: question(questionRow),
+      task: task(taskRow),
+      replayed: true,
+    };
+  });
+  if (replay !== undefined) return replay;
+  checkpointWal();
+  let releasedControlBytes = 0;
+  try {
+    const result = registryFencedTransaction(p.expectedRegistryRevision, () => {
+      const agentIds = authorizedAgents;
+      const row =
+        agentIds.length === 0
+          ? undefined
+          : (db
+              .prepare(
+                `SELECT q.*,t.scope,t.agent_id,t.lifecycle_state AS task_lifecycle_state,t.input_state AS task_input_state,e.lifecycle_state AS execution_lifecycle_state,w.status AS claim_status
                FROM questions q JOIN tasks t ON t.task_id=q.task_id JOIN executions e ON e.execution_id=q.execution_id JOIN execution_workspace_claims w ON w.execution_id=e.execution_id
                WHERE q.question_id=? AND q.task_id=? AND t.scope=? AND t.agent_id IN (${agentIds.map(() => "?").join(",")})`,
-            )
-            .get(questionId, taskId, scope, ...agentIds) as
-            Record<string, unknown> | undefined);
-    if (row === undefined) throwFailure("not_found", "Question was not found");
-    if (
-      row.closed_at === null &&
-      row.state === "pending" &&
-      Date.parse(String(row.expires_at)) <= Date.parse(stamp)
-    ) {
-      db.prepare(
-        "UPDATE questions SET closed_at=?,closure_reason='expired' WHERE question_id=? AND state='pending' AND closed_at IS NULL",
-      ).run(stamp, questionId);
-      return undefined;
-    }
-    const schema = normalizeQuestionSchema(JSON.parse(String(row.schema_json)));
-    const answer =
-      schema === undefined
-        ? undefined
-        : normalizeQuestionAnswer(schema, p.answer);
-    if (answer === undefined) {
-      throwFailure(
-        "operation_conflict",
-        "Question answer is invalid",
-        String(row.task_id),
-      );
-    }
-    const answerJson = JSON.stringify(answer);
-    const answerFingerprint = createHash("sha256")
-      .update(answerJson)
-      .digest("hex");
-    if (
-      row.state === "accepted" &&
-      row.delivery_state === "pending" &&
-      row.answer_fingerprint === answerFingerprint
-    ) {
+              )
+              .get(questionId, taskId, scope, ...agentIds) as
+              Record<string, unknown> | undefined);
+      if (row === undefined)
+        throwFailure("not_found", "Question was not found");
       if (
-        capacityValue("general_receipts") >=
-        (options.receiptCapacity ?? 100_000)
+        row.closed_at === null &&
+        row.state === "pending" &&
+        Date.parse(String(row.expires_at)) <= Date.parse(stamp)
       ) {
+        db.prepare(
+          "UPDATE questions SET closed_at=?,closure_reason='expired' WHERE question_id=? AND state='pending' AND closed_at IS NULL",
+        ).run(stamp, questionId);
+        return undefined;
+      }
+      const schema = normalizeQuestionSchema(
+        JSON.parse(String(row.schema_json)),
+      );
+      const answer =
+        schema === undefined
+          ? undefined
+          : normalizeQuestionAnswer(schema, p.answer);
+      if (answer === undefined) {
         throwFailure(
-          "tombstone_capacity",
-          "general receipt capacity is exhausted",
+          "operation_conflict",
+          "Question answer is invalid",
+          String(row.task_id),
         );
       }
+      const answerJson = JSON.stringify(answer);
+      const answerFingerprint = createHash("sha256")
+        .update(answerJson)
+        .digest("hex");
+      if (
+        row.state === "accepted" &&
+        row.delivery_state === "pending" &&
+        row.answer_fingerprint === answerFingerprint
+      ) {
+        throwFailure(
+          "operation_conflict",
+          "Question answer was already accepted",
+          String(row.task_id),
+        );
+      }
+      if (
+        row.state !== "pending" ||
+        row.closed_at !== null ||
+        row.delivery_state !== "pending" ||
+        row.task_lifecycle_state !== "running" ||
+        row.task_input_state !== "awaiting_input" ||
+        row.execution_lifecycle_state !== "running" ||
+        row.claim_status !== "held"
+      ) {
+        throwFailure(
+          "operation_conflict",
+          "Question cannot receive an answer",
+          String(row.task_id),
+        );
+      }
+      const reserve = db
+        .prepare("SELECT * FROM task_reservations WHERE task_id=?")
+        .get(row.task_id) as Record<string, unknown> | undefined;
+      const replyReserveBytes = Math.floor(taskControlReserveBytes / 2);
+      if (
+        reserve === undefined ||
+        Number(reserve.control_receipts) < 2 ||
+        Number(reserve.control_bytes) < replyReserveBytes
+      ) {
+        throwFailure("storage_capacity", "task control reserve is exhausted");
+      }
+      releasedControlBytes = replyReserveBytes;
+      releasePhysicalControlReserve(releasedControlBytes);
+      requirePhysicalHeadroom(
+        physicalCapacityBytes,
+        Buffer.byteLength(answerJson, "utf8") + 4 * pageSize,
+      );
+      const accepted = db
+        .prepare(
+          "UPDATE questions SET state='accepted',answer_fingerprint=?,answer_json=?,accepted_actor_principal_id=?,accepted_at=?,input_expiry_closed_at=? WHERE question_id=? AND state='pending' AND delivery_state='pending' AND closed_at IS NULL",
+        )
+        .run(
+          answerFingerprint,
+          answerJson,
+          principalId,
+          stamp,
+          stamp,
+          questionId,
+        );
+      if (accepted.changes !== 1) {
+        throwFailure(
+          "operation_conflict",
+          "Question answer lost its first-answer race",
+          String(row.task_id),
+        );
+      }
+      db.prepare(
+        "UPDATE executions SET accounting_phase='active',accounting_phase_started_at=?,updated_at=? WHERE execution_id=? AND accounting_phase='pure_wait'",
+      ).run(stamp, stamp, row.execution_id);
       db.prepare(
         "INSERT INTO operation_receipts(scope,operation_id,operation_type,target_id,fingerprint,actor_principal_id,result_json,created_at) VALUES(?,?, 'reply',?,?,?,?,?)",
       ).run(
@@ -2396,7 +2560,13 @@ function replyToQuestion(p: Record<string, unknown>) {
         JSON.stringify({ taskId: row.task_id, questionId, answerFingerprint }),
         stamp,
       );
-      changeCapacity("general_receipts", 1);
+      db.prepare(
+        "UPDATE task_reservations SET control_receipts=control_receipts-1,control_bytes=control_bytes-? WHERE task_id=?",
+      ).run(releasedControlBytes, row.task_id);
+      changeCapacity("reserved_control_bytes", -releasedControlBytes);
+      const questionRow = db
+        .prepare("SELECT * FROM questions WHERE question_id=?")
+        .get(questionId) as Record<string, unknown>;
       const taskRow = db
         .prepare("SELECT * FROM tasks WHERE task_id=?")
         .get(row.task_id) as Record<string, unknown>;
@@ -2405,101 +2575,35 @@ function replyToQuestion(p: Record<string, unknown>) {
           "SELECT e.*,w.status AS claim_status FROM executions e JOIN execution_workspace_claims w ON w.execution_id=e.execution_id WHERE e.execution_id=?",
         )
         .get(row.execution_id) as Record<string, unknown>;
+      requirePhysicalHeadroom(physicalCapacityBytes);
       return {
         execution: execution(executionRow),
-        question: question(row),
+        question: question(questionRow),
         task: task(taskRow),
-        replayed: true,
+        replayed: false,
       };
-    }
-    if (
-      row.state !== "pending" ||
-      row.closed_at !== null ||
-      row.delivery_state !== "pending" ||
-      row.task_lifecycle_state !== "running" ||
-      row.task_input_state !== "awaiting_input" ||
-      row.execution_lifecycle_state !== "running" ||
-      row.claim_status !== "held"
-    ) {
+    });
+    if (result === undefined) {
       throwFailure(
         "operation_conflict",
         "Question cannot receive an answer",
-        String(row.task_id),
+        taskId,
       );
     }
-    if (
-      capacityValue("general_receipts") >= (options.receiptCapacity ?? 100_000)
-    ) {
-      throwFailure(
-        "tombstone_capacity",
-        "general receipt capacity is exhausted",
-      );
+    return result;
+  } catch (error) {
+    if (releasedControlBytes > 0) {
+      try {
+        reconcilePhysicalControlReserve();
+      } catch {
+        throwFailure(
+          "storage_unavailable",
+          "physical control reserve reconciliation failed",
+        );
+      }
     }
-    requirePhysicalHeadroom(
-      physicalAdmissionBytes,
-      Buffer.byteLength(answerJson, "utf8") + 4 * pageSize,
-    );
-    const accepted = db
-      .prepare(
-        "UPDATE questions SET state='accepted',answer_fingerprint=?,answer_json=?,accepted_actor_principal_id=?,accepted_at=?,input_expiry_closed_at=? WHERE question_id=? AND state='pending' AND delivery_state='pending' AND closed_at IS NULL",
-      )
-      .run(
-        answerFingerprint,
-        answerJson,
-        principalId,
-        stamp,
-        stamp,
-        questionId,
-      );
-    if (accepted.changes !== 1) {
-      throwFailure(
-        "operation_conflict",
-        "Question answer lost its first-answer race",
-        String(row.task_id),
-      );
-    }
-    db.prepare(
-      "UPDATE executions SET accounting_phase='active',accounting_phase_started_at=?,updated_at=? WHERE execution_id=? AND accounting_phase='pure_wait'",
-    ).run(stamp, stamp, row.execution_id);
-    db.prepare(
-      "INSERT INTO operation_receipts(scope,operation_id,operation_type,target_id,fingerprint,actor_principal_id,result_json,created_at) VALUES(?,?, 'reply',?,?,?,?,?)",
-    ).run(
-      scope,
-      operationId,
-      questionId,
-      fingerprint,
-      principalId,
-      JSON.stringify({ taskId: row.task_id, questionId, answerFingerprint }),
-      stamp,
-    );
-    changeCapacity("general_receipts", 1);
-    const questionRow = db
-      .prepare("SELECT * FROM questions WHERE question_id=?")
-      .get(questionId) as Record<string, unknown>;
-    const taskRow = db
-      .prepare("SELECT * FROM tasks WHERE task_id=?")
-      .get(row.task_id) as Record<string, unknown>;
-    const executionRow = db
-      .prepare(
-        "SELECT e.*,w.status AS claim_status FROM executions e JOIN execution_workspace_claims w ON w.execution_id=e.execution_id WHERE e.execution_id=?",
-      )
-      .get(row.execution_id) as Record<string, unknown>;
-    requirePhysicalHeadroom(physicalAdmissionBytes);
-    return {
-      execution: execution(executionRow),
-      question: question(questionRow),
-      task: task(taskRow),
-      replayed: false,
-    };
-  });
-  if (result === undefined) {
-    throwFailure(
-      "operation_conflict",
-      "Question cannot receive an answer",
-      taskId,
-    );
+    throw error;
   }
-  return result;
 }
 
 /**
@@ -3247,6 +3351,8 @@ function receipt(
   operationType: string,
   targetId: string | null,
   fingerprint: string,
+  authorizedAgents?: readonly string[],
+  expectedAgentId?: string,
 ) {
   const existing = db
     .prepare(
@@ -3254,11 +3360,36 @@ function receipt(
     )
     .get(scope, operationId) as Record<string, unknown> | undefined;
   if (!existing) return undefined;
-  const result: unknown = JSON.parse(String(existing.result_json));
   const existingTaskId =
-    isRecord(result) && typeof result.taskId === "string"
-      ? result.taskId
-      : undefined;
+    typeof existing.retained_task_id === "string"
+      ? existing.retained_task_id
+      : legacyReceiptTaskId(existing);
+  if (authorizedAgents !== undefined) {
+    if (existingTaskId === undefined) {
+      throwFailure("not_found", "Resource not found");
+    }
+    const taskAgent = db
+      .prepare(
+        actualTables.has("task_expiry_markers")
+          ? `SELECT agent_id FROM tasks WHERE task_id=?
+             UNION ALL
+             SELECT agent_id FROM task_expiry_markers WHERE task_id=?
+             LIMIT 1`
+          : "SELECT agent_id FROM tasks WHERE task_id=? LIMIT 1",
+      )
+      .get(
+        ...(actualTables.has("task_expiry_markers")
+          ? [existingTaskId, existingTaskId]
+          : [existingTaskId]),
+      ) as { agent_id: string } | undefined;
+    if (
+      taskAgent === undefined ||
+      !authorizedAgents.includes(taskAgent.agent_id) ||
+      (expectedAgentId !== undefined && taskAgent.agent_id !== expectedAgentId)
+    ) {
+      throwFailure("not_found", "Resource not found");
+    }
+  }
   if (
     existing.operation_type !== operationType ||
     existing.target_id !== targetId ||
@@ -3269,7 +3400,27 @@ function receipt(
       "operationId was already used for a different operation",
       existingTaskId,
     );
+  if (typeof existing.expired_at === "string") {
+    throwFailure(
+      "result_expired",
+      "retained operation result has expired",
+      existingTaskId,
+    );
+  }
+  const result: unknown = JSON.parse(String(existing.result_json));
   return result;
+}
+function legacyReceiptTaskId(
+  existing: Record<string, unknown>,
+): string | undefined {
+  try {
+    const result: unknown = JSON.parse(String(existing.result_json));
+    return isRecord(result) && typeof result.taskId === "string"
+      ? result.taskId
+      : undefined;
+  } catch {
+    return undefined;
+  }
 }
 function emit(
   scope: string,
@@ -3283,9 +3434,15 @@ function emit(
       (
         db
           .prepare(
-            "SELECT COALESCE(MAX(cursor), 0) AS cursor FROM task_events WHERE scope=?",
+            actualTables.has("task_expiry_markers")
+              ? "SELECT MAX(cursor) AS cursor FROM (SELECT COALESCE(MAX(cursor),0) AS cursor FROM task_events WHERE scope=? UNION ALL SELECT COALESCE(MAX(max_event_cursor),0) AS cursor FROM task_expiry_markers WHERE scope=?)"
+              : "SELECT COALESCE(MAX(cursor),0) AS cursor FROM task_events WHERE scope=?",
           )
-          .get(scope) as { cursor: number }
+          .get(
+            ...(actualTables.has("task_expiry_markers")
+              ? [scope, scope]
+              : [scope]),
+          ) as { cursor: number }
       ).cursor,
     ) + 1;
   const sequence =
@@ -3325,6 +3482,12 @@ function releaseRegistryCommitFence(): void {
   Atomics.store(registryRevisionFence, 1, 0);
   Atomics.notify(registryRevisionFence, 1);
 }
+function waitAtTestCommitBarrier(): void {
+  if (Atomics.load(testCommitBarrier, 0) !== 1) return;
+  Atomics.store(testCommitBarrier, 1, 1);
+  Atomics.notify(testCommitBarrier, 1);
+  Atomics.wait(testCommitBarrier, 0, 1);
+}
 function registryFencedTransaction<T>(
   expectedRevision: unknown,
   operation: () => T,
@@ -3333,11 +3496,7 @@ function registryFencedTransaction<T>(
   try {
     requireRegistryRevision(expectedRevision);
     const result = operation();
-    if (Atomics.load(testCommitBarrier, 0) === 1) {
-      Atomics.store(testCommitBarrier, 1, 1);
-      Atomics.notify(testCommitBarrier, 1);
-      Atomics.wait(testCommitBarrier, 0, 1);
-    }
+    waitAtTestCommitBarrier();
     acquireRegistryCommitFence();
     try {
       requireRegistryRevision(expectedRevision);
@@ -3349,6 +3508,18 @@ function registryFencedTransaction<T>(
   } catch (error) {
     if (db.inTransaction) db.exec("ROLLBACK");
     throw error;
+  }
+}
+function registryFencedRead<T>(
+  expectedRevision: unknown,
+  operation: () => T,
+): T {
+  acquireRegistryCommitFence();
+  try {
+    requireRegistryRevision(expectedRevision);
+    return operation();
+  } finally {
+    releaseRegistryCommitFence();
   }
 }
 function transitionTasks(p: Record<string, unknown>): void {
@@ -3446,10 +3617,47 @@ function submit(p: Record<string, unknown>) {
   const principalId = String(p.principalId);
   checkpointWal();
   const estimatedGrowth = submitGrowthEstimate(instruction, binding);
+  const reusesFreelist = reusableFreelistBytes(physicalAdmissionBytes) > 0;
   try {
-    return registryFencedTransaction(p.expectedRegistryRevision, () => {
-      const old = receipt(scope, operationId, "submit", null, fingerprint);
+    const result = registryFencedTransaction(p.expectedRegistryRevision, () => {
+      const old = receipt(
+        scope,
+        operationId,
+        "submit",
+        null,
+        fingerprint,
+        [agentId],
+        agentId,
+      );
       if (old) return { task: old, replayed: true };
+      const expiredIdentity = db
+        .prepare(
+          "SELECT scope,agent_id FROM task_expiry_markers WHERE task_id=?",
+        )
+        .get(taskId) as { scope: string; agent_id: string } | undefined;
+      if (expiredIdentity !== undefined) {
+        if (
+          expiredIdentity.scope === scope &&
+          expiredIdentity.agent_id === agentId
+        ) {
+          throwFailure(
+            "result_expired",
+            "retained Task result has expired",
+            taskId,
+          );
+        }
+        throwFailure("operation_conflict", "Task identity is unavailable");
+      }
+      if (
+        existingContextId === undefined &&
+        db
+          .prepare(
+            "SELECT 1 FROM task_expiry_markers WHERE context_id=? LIMIT 1",
+          )
+          .get(contextId) !== undefined
+      ) {
+        throwFailure("operation_conflict", "Context identity is unavailable");
+      }
       const existingContext =
         existingContextId === undefined
           ? undefined
@@ -3534,9 +3742,9 @@ function submit(p: Record<string, unknown>) {
           (
             db
               .prepare(
-                "SELECT COALESCE(MAX(queue_order),0) AS q FROM tasks WHERE scope=?",
+                "SELECT MAX(q) AS q FROM (SELECT COALESCE(MAX(queue_order),0) AS q FROM tasks WHERE scope=? UNION ALL SELECT COALESCE(MAX(queue_order),0) AS q FROM task_expiry_markers WHERE scope=?)",
               )
-              .get(scope) as { q: number }
+              .get(scope, scope) as { q: number }
           ).q,
         ) + 1;
       if (existingContext === undefined) {
@@ -3583,7 +3791,7 @@ function submit(p: Record<string, unknown>) {
         "INSERT INTO task_reservations(task_id,control_receipts,control_events,control_bytes) VALUES(?,?,?,?)",
       ).run(
         taskId,
-        options.controlReceiptReserve ?? 1,
+        options.controlReceiptReserve ?? 2,
         options.controlEventReserve ?? 2,
         taskControlReserveBytes,
       );
@@ -3613,6 +3821,8 @@ function submit(p: Record<string, unknown>) {
       requirePhysicalHeadroom(physicalAdmissionBytes);
       return { task: result, replayed: false };
     });
+    if (reusesFreelist) checkpointWal();
+    return result;
   } catch (error) {
     try {
       reconcilePhysicalControlReserve();
@@ -3647,7 +3857,14 @@ function edit(p: Record<string, unknown>) {
   const stamp = typeof p.now === "string" ? p.now : now();
   checkpointWal();
   return registryFencedTransaction(p.expectedRegistryRevision, () => {
-    const old = receipt(scope, operationId, "edit", taskId, fingerprint);
+    const old = receipt(
+      scope,
+      operationId,
+      "edit",
+      taskId,
+      fingerprint,
+      authorizedAgentIds(p.allowedAgentIds),
+    );
     if (old) return { task: old, replayed: true };
     const agentIds = authorizedAgentIds(p.allowedAgentIds);
     const row =
@@ -3657,7 +3874,15 @@ function edit(p: Record<string, unknown>) {
             .prepare(
               `SELECT t.* FROM tasks t
                WHERE t.scope=? AND t.task_id=?
-                 AND t.agent_id IN (${agentIds.map(() => "?").join(",")})`,
+                 AND t.agent_id IN (${agentIds.map(() => "?").join(",")})
+                 ${
+                   actualTables.has("task_expiry_markers")
+                     ? `AND NOT EXISTS (
+                   SELECT 1 FROM task_expiry_markers marker
+                   WHERE marker.task_id=t.task_id
+                 )`
+                     : ""
+                 }`,
             )
             .get(scope, taskId, ...agentIds) as
             Record<string, unknown> | undefined);
@@ -3763,7 +3988,14 @@ function resumeContext(p: Record<string, unknown>) {
   }
   checkpointWal();
   return registryFencedTransaction(p.expectedRegistryRevision, () => {
-    const prior = receipt(scope, operationId, "resume", contextId, fingerprint);
+    const prior = receipt(
+      scope,
+      operationId,
+      "resume",
+      contextId,
+      fingerprint,
+      authorizedAgentIds(p.allowedAgentIds),
+    );
     if (prior !== undefined) return { task: prior, replayed: true };
     const agentIds = authorizedAgentIds(p.allowedAgentIds);
     const context =
@@ -3779,6 +4011,21 @@ function resumeContext(p: Record<string, unknown>) {
             Record<string, unknown> | undefined);
     if (context === undefined)
       throwFailure("not_found", "context was not found");
+    if (
+      capacityValue("general_receipts") >= (options.receiptCapacity ?? 100_000)
+    ) {
+      throwFailure(
+        "tombstone_capacity",
+        "general receipt capacity is exhausted",
+      );
+    }
+    requirePhysicalHeadroom(
+      physicalAdmissionBytes,
+      (typeof contextSummary === "string"
+        ? Buffer.byteLength(contextSummary, "utf8")
+        : 0) +
+        4 * pageSize,
+    );
     if (Number(context.revision) !== expectedRevision) {
       throwFailure("operation_conflict", "context revision is stale");
     }
@@ -3873,6 +4120,7 @@ function resumeContext(p: Record<string, unknown>) {
       stamp,
     );
     changeCapacity("general_receipts", 1);
+    requirePhysicalHeadroom(physicalAdmissionBytes);
     return { task: result, replayed: false };
   });
 }
@@ -3902,6 +4150,7 @@ function acknowledgeInterruption(p: Record<string, unknown>) {
         "acknowledge_interruption",
         taskId,
         fingerprint,
+        authorizedAgentIds(p.allowedAgentIds),
       );
       if (prior !== undefined) return { task: prior, replayed: true };
       const agentIds = authorizedAgentIds(p.allowedAgentIds);
@@ -4025,11 +4274,20 @@ function cancel(p: Record<string, unknown>) {
   checkpointWal();
   try {
     return registryFencedTransaction(p.expectedRegistryRevision, () => {
-      const old = receipt(scope, operationId, "cancel", taskId, fingerprint);
+      const old = receipt(
+        scope,
+        operationId,
+        "cancel",
+        taskId,
+        fingerprint,
+        Array.isArray(p.allowedAgentIds)
+          ? authorizedAgentIds(p.allowedAgentIds)
+          : undefined,
+      );
       if (old) return { task: old, replayed: true };
       const row = db
         .prepare(
-          "SELECT t.*,b.workspace_id FROM tasks t JOIN contexts c ON c.context_id=t.context_id JOIN binding_snapshots b ON b.binding_snapshot_id=c.binding_snapshot_id WHERE t.scope=? AND t.task_id=?",
+          `SELECT t.*,b.workspace_id FROM tasks t JOIN contexts c ON c.context_id=t.context_id JOIN binding_snapshots b ON b.binding_snapshot_id=c.binding_snapshot_id WHERE t.scope=? AND t.task_id=? ${actualTables.has("task_expiry_markers") ? "AND NOT EXISTS (SELECT 1 FROM task_expiry_markers marker WHERE marker.task_id=t.task_id)" : ""}`,
         )
         .get(scope, taskId) as Record<string, unknown> | undefined;
       if (!row || !allowed(row.agent_id, p.allowedAgentIds))
@@ -4197,6 +4455,295 @@ function allowed(agentId: unknown, values: unknown): boolean {
 function authorizedAgentIds(values: unknown): string[] {
   return Array.isArray(values) ? values.map(String) : [];
 }
+
+function expiredTaskMarker(
+  scope: string,
+  taskId: string,
+  agentIds: readonly string[],
+): Record<string, unknown> | undefined {
+  if (agentIds.length === 0 || !actualTables.has("task_expiry_markers")) {
+    return undefined;
+  }
+  return db
+    .prepare(
+      `SELECT * FROM task_expiry_markers
+       WHERE scope=? AND task_id=?
+         AND agent_id IN (${agentIds.map(() => "?").join(",")})`,
+    )
+    .get(scope, taskId, ...agentIds) as Record<string, unknown> | undefined;
+}
+
+function retentionSequence(
+  scope: string,
+  agentIds: readonly string[],
+  filters: { agentId?: string; state?: string; taskId?: string } = {},
+): number {
+  if (agentIds.length === 0 || !actualTables.has("task_expiry_markers")) {
+    return 0;
+  }
+  const clauses = [
+    "scope=?",
+    `agent_id IN (${agentIds.map(() => "?").join(",")})`,
+  ];
+  const parameters: unknown[] = [scope, ...agentIds];
+  if (filters.agentId !== undefined) {
+    clauses.push("agent_id=?");
+    parameters.push(filters.agentId);
+  }
+  if (filters.state !== undefined) {
+    clauses.push("terminal_state=?");
+    parameters.push(filters.state);
+  }
+  if (filters.taskId !== undefined) {
+    clauses.push("task_id=?");
+    parameters.push(filters.taskId);
+  }
+  return Number(
+    (
+      db
+        .prepare(
+          `SELECT COALESCE(MAX(expiry_sequence),0) AS value
+           FROM task_expiry_markers WHERE ${clauses.join(" AND ")}`,
+        )
+        .get(...parameters) as { value: number }
+    ).value,
+  );
+}
+
+function expireRetainedData(p: Record<string, unknown>) {
+  requireWritableLifecycle();
+  const asOf = String(p.asOf);
+  const parsedAsOf = Date.parse(asOf);
+  const batchLimit = Number(p.batchLimit ?? 50);
+  if (
+    !Number.isFinite(parsedAsOf) ||
+    new Date(parsedAsOf).toISOString() !== asOf ||
+    !Number.isSafeInteger(batchLimit) ||
+    batchLimit < 1 ||
+    batchLimit > 100
+  ) {
+    throwFailure("operation_conflict", "retention request is invalid");
+  }
+  const cutoff = new Date(
+    parsedAsOf - terminalRetentionMilliseconds,
+  ).toISOString();
+  return db.transaction(() => {
+    const rows = db
+      .prepare(
+        `SELECT t.task_id,t.scope,t.agent_id,t.context_id,t.queue_order,
+                e.execution_id,
+                COALESCE(terminal.terminal_state,t.lifecycle_state,t.state) AS terminal_state,
+                COALESCE(terminal.committed_at,t.updated_at) AS terminal_committed_at,
+                COALESCE((SELECT MAX(event.cursor) FROM task_events event WHERE event.task_id=t.task_id),0) AS max_event_cursor,
+                LENGTH(CAST(t.instruction AS BLOB)) AS instruction_bytes
+         FROM tasks t
+         LEFT JOIN executions e ON e.task_id=t.task_id
+         LEFT JOIN execution_terminals terminal ON terminal.execution_id=e.execution_id
+         LEFT JOIN execution_workspace_claims claim ON claim.execution_id=e.execution_id
+         WHERE NOT EXISTS (
+                 SELECT 1 FROM task_expiry_markers marker
+                 WHERE marker.task_id=t.task_id
+               )
+           AND COALESCE(terminal.terminal_state,t.lifecycle_state,t.state)
+                 IN ('completed','failed','canceled','interrupted')
+           AND COALESCE(terminal.committed_at,t.updated_at)<=?
+           AND COALESCE(claim.status,'released') NOT IN ('held','quarantined')
+         ORDER BY terminal_committed_at,t.queue_order,t.task_id
+         LIMIT ?`,
+      )
+      .all(cutoff, batchLimit) as Record<string, unknown>[];
+    let receiptsTombstoned = 0;
+    let eventsExpired = 0;
+    let admissionBytesReleased = 0;
+
+    for (const row of rows) {
+      const taskId = String(row.task_id);
+      const contextId = String(row.context_id);
+      const executionId =
+        typeof row.execution_id === "string" ? row.execution_id : undefined;
+      db.prepare(
+        "INSERT INTO task_expiry_markers(task_id,scope,agent_id,context_id,queue_order,terminal_state,terminal_committed_at,expired_at,max_event_cursor) VALUES(?,?,?,?,?,?,?,?,?)",
+      ).run(
+        taskId,
+        row.scope,
+        row.agent_id,
+        contextId,
+        row.queue_order,
+        row.terminal_state,
+        row.terminal_committed_at,
+        asOf,
+        row.max_event_cursor,
+      );
+      receiptsTombstoned += db
+        .prepare(
+          "UPDATE operation_receipts SET result_json=json_object('taskId',retained_task_id),expired_at=? WHERE retained_task_id=? AND expired_at IS NULL",
+        )
+        .run(asOf, taskId).changes;
+      eventsExpired += Number(
+        (
+          db
+            .prepare(
+              "SELECT COUNT(*) AS count FROM task_events WHERE task_id=?",
+            )
+            .get(taskId) as { count: number }
+        ).count,
+      );
+      admissionBytesReleased += Number(row.instruction_bytes ?? 0);
+
+      db.prepare("DELETE FROM questions WHERE task_id=?").run(taskId);
+      db.prepare("DELETE FROM task_events WHERE task_id=?").run(taskId);
+      db.prepare("DELETE FROM task_workspace_queue WHERE task_id=?").run(
+        taskId,
+      );
+      db.prepare("DELETE FROM task_reservations WHERE task_id=?").run(taskId);
+      db.prepare(
+        "UPDATE tasks SET created_by='',instruction='',reason=NULL,input_state=NULL WHERE task_id=?",
+      ).run(taskId);
+
+      if (executionId !== undefined) {
+        db.prepare(
+          "DELETE FROM execution_observations WHERE execution_id=?",
+        ).run(executionId);
+        db.prepare(
+          "UPDATE execution_terminals SET result_json=NULL WHERE execution_id=?",
+        ).run(executionId);
+        const executionStillRequired =
+          db
+            .prepare(
+              `SELECT 1
+               WHERE EXISTS (
+                 SELECT 1 FROM runtime_session_tokens
+                 WHERE source_execution_id=?
+               ) OR EXISTS (
+                 SELECT 1 FROM context_continuations
+                 WHERE consumed_by_execution_id=?
+               )`,
+            )
+            .get(executionId, executionId) !== undefined;
+        if (!executionStillRequired) {
+          db.prepare(
+            "DELETE FROM execution_recovery_stop_confirmations WHERE execution_id=?",
+          ).run(executionId);
+          db.prepare(
+            "DELETE FROM execution_terminals WHERE execution_id=?",
+          ).run(executionId);
+          db.prepare(
+            "DELETE FROM execution_workspace_claims WHERE execution_id=?",
+          ).run(executionId);
+          db.prepare("DELETE FROM workspace_claims WHERE execution_id=?").run(
+            executionId,
+          );
+          db.prepare("DELETE FROM executions WHERE execution_id=?").run(
+            executionId,
+          );
+        }
+      }
+
+      const structuralTaskStillRequired =
+        db
+          .prepare(
+            `SELECT 1
+             WHERE EXISTS (
+               SELECT 1 FROM tasks WHERE predecessor_task_id=?
+             ) OR EXISTS (
+               SELECT 1 FROM context_blockers WHERE predecessor_task_id=?
+             ) OR EXISTS (
+               SELECT 1 FROM context_continuations WHERE target_task_id=?
+             ) OR EXISTS (
+               SELECT 1 FROM executions WHERE task_id=?
+             )`,
+          )
+          .get(taskId, taskId, taskId, taskId) !== undefined;
+      if (!structuralTaskStillRequired) {
+        db.prepare("DELETE FROM tasks WHERE task_id=?").run(taskId);
+      }
+    }
+
+    const retiredContexts = db
+      .prepare(
+        `SELECT c.context_id
+         FROM contexts c
+         WHERE EXISTS (
+                 SELECT 1 FROM task_expiry_markers marker
+                 WHERE marker.context_id=c.context_id
+               )
+           AND NOT EXISTS (
+                 SELECT 1 FROM tasks t
+                 WHERE t.context_id=c.context_id
+                   AND NOT EXISTS (
+                     SELECT 1 FROM task_expiry_markers marker
+                     WHERE marker.task_id=t.task_id
+                   )
+               )`,
+      )
+      .all() as { context_id: string }[];
+    for (const { context_id: contextId } of retiredContexts) {
+      const bindingIds = (
+        db
+          .prepare(
+            `SELECT binding_snapshot_id AS id FROM contexts WHERE context_id=?
+             UNION
+             SELECT e.binding_snapshot_id AS id FROM executions e JOIN tasks t ON t.task_id=e.task_id WHERE t.context_id=?
+             UNION
+             SELECT token.binding_snapshot_id AS id FROM runtime_session_tokens token WHERE token.context_id=?`,
+          )
+          .all(contextId, contextId, contextId) as { id: string }[]
+      ).map(({ id }) => id);
+      db.prepare("DELETE FROM context_continuations WHERE context_id=?").run(
+        contextId,
+      );
+      db.prepare("DELETE FROM context_blockers WHERE context_id=?").run(
+        contextId,
+      );
+      db.prepare("DELETE FROM runtime_session_tokens WHERE context_id=?").run(
+        contextId,
+      );
+      db.prepare(
+        "DELETE FROM execution_recovery_stop_confirmations WHERE execution_id IN (SELECT e.execution_id FROM executions e JOIN tasks t ON t.task_id=e.task_id WHERE t.context_id=?)",
+      ).run(contextId);
+      db.prepare(
+        "DELETE FROM execution_terminals WHERE execution_id IN (SELECT e.execution_id FROM executions e JOIN tasks t ON t.task_id=e.task_id WHERE t.context_id=?)",
+      ).run(contextId);
+      db.prepare(
+        "DELETE FROM execution_observations WHERE execution_id IN (SELECT e.execution_id FROM executions e JOIN tasks t ON t.task_id=e.task_id WHERE t.context_id=?)",
+      ).run(contextId);
+      db.prepare(
+        "DELETE FROM execution_workspace_claims WHERE execution_id IN (SELECT e.execution_id FROM executions e JOIN tasks t ON t.task_id=e.task_id WHERE t.context_id=?)",
+      ).run(contextId);
+      db.prepare(
+        "DELETE FROM workspace_claims WHERE execution_id IN (SELECT e.execution_id FROM executions e JOIN tasks t ON t.task_id=e.task_id WHERE t.context_id=?)",
+      ).run(contextId);
+      db.prepare(
+        "DELETE FROM executions WHERE task_id IN (SELECT task_id FROM tasks WHERE context_id=?)",
+      ).run(contextId);
+      db.prepare("DELETE FROM tasks WHERE context_id=?").run(contextId);
+      db.prepare("DELETE FROM contexts WHERE context_id=?").run(contextId);
+      for (const bindingId of bindingIds) {
+        db.prepare(
+          `DELETE FROM binding_snapshots
+           WHERE binding_snapshot_id=?
+             AND NOT EXISTS (SELECT 1 FROM contexts WHERE binding_snapshot_id=?)
+             AND NOT EXISTS (SELECT 1 FROM executions WHERE binding_snapshot_id=?
+             )
+             AND NOT EXISTS (SELECT 1 FROM runtime_session_tokens WHERE binding_snapshot_id=?)`,
+        ).run(bindingId, bindingId, bindingId, bindingId);
+      }
+    }
+    if (admissionBytesReleased > 0) {
+      changeCapacity("admission_bytes", -admissionBytesReleased);
+    }
+    maybeFail();
+    waitAtTestCommitBarrier();
+    return {
+      contextsExpired: retiredContexts.length,
+      tasksExpired: rows.length,
+      receiptsTombstoned,
+      eventsExpired,
+      asOf,
+      cutoff,
+    };
+  })();
+}
 parentPort?.on("message", (message: Request) => {
   try {
     let result: unknown;
@@ -4221,6 +4768,8 @@ parentPort?.on("message", (message: Request) => {
     } else if (message.command === "recordAuditGap") {
       recordAuditGap(p);
       result = undefined;
+    } else if (message.command === "expireRetainedData") {
+      result = expireRetainedData(p);
     } else if (message.command === "lookupReceipt")
       result = receipt(
         scope,
@@ -4228,6 +4777,8 @@ parentPort?.on("message", (message: Request) => {
         String(p.operationType),
         typeof p.targetId === "string" ? p.targetId : null,
         String(p.fingerprint),
+        authorizedAgentIds(p.allowedAgentIds),
+        typeof p.expectedAgentId === "string" ? p.expectedAgentId : undefined,
       );
     else if (message.command === "submit") {
       requireWritableLifecycle();
@@ -4266,7 +4817,9 @@ parentPort?.on("message", (message: Request) => {
       result = claimAndPrepare(p);
     } else if (message.command === "getTaskForDispatch") {
       const row = db
-        .prepare("SELECT * FROM tasks WHERE task_id=?")
+        .prepare(
+          `SELECT * FROM tasks WHERE task_id=? ${actualTables.has("task_expiry_markers") ? "AND NOT EXISTS (SELECT 1 FROM task_expiry_markers marker WHERE marker.task_id=tasks.task_id)" : ""}`,
+        )
         .get(String(p.taskId)) as Record<string, unknown> | undefined;
       result = row === undefined ? undefined : task(row);
     } else if (message.command === "listEligibleContextHeads") {
@@ -4307,13 +4860,21 @@ parentPort?.on("message", (message: Request) => {
       const agentIds = authorizedAgentIds(p.allowedAgentIds);
       const row = db
         .prepare(
-          `SELECT e.*,w.status AS claim_status FROM executions e JOIN tasks t ON t.task_id=e.task_id LEFT JOIN execution_workspace_claims w ON w.execution_id=e.execution_id WHERE t.scope=? AND e.task_id=? AND t.agent_id IN (${agentIds.map(() => "?").join(",")})`,
+          `SELECT e.*,w.status AS claim_status FROM executions e JOIN tasks t ON t.task_id=e.task_id LEFT JOIN execution_workspace_claims w ON w.execution_id=e.execution_id WHERE t.scope=? AND e.task_id=? AND t.agent_id IN (${agentIds.map(() => "?").join(",")}) ${actualTables.has("task_expiry_markers") ? "AND NOT EXISTS (SELECT 1 FROM task_expiry_markers marker WHERE marker.task_id=t.task_id)" : ""}`,
         )
         .get(scope, String(p.taskId), ...agentIds) as
         Record<string, unknown> | undefined;
       result = row === undefined ? undefined : execution(row);
     } else if (message.command === "getTaskProjection") {
       const agentIds = authorizedAgentIds(p.allowedAgentIds);
+      const marker = expiredTaskMarker(scope, String(p.taskId), agentIds);
+      if (marker !== undefined) {
+        throwFailure(
+          "result_expired",
+          "retained Task result has expired",
+          String(p.taskId),
+        );
+      }
       const taskRow =
         agentIds.length === 0
           ? undefined
@@ -4323,9 +4884,8 @@ parentPort?.on("message", (message: Request) => {
               )
               .get(scope, String(p.taskId), ...agentIds) as
               Record<string, unknown> | undefined);
-      if (taskRow === undefined) {
-        result = undefined;
-      } else {
+      if (taskRow === undefined) result = undefined;
+      else {
         const executionRow = db
           .prepare(
             "SELECT e.*,w.status AS claim_status FROM executions e LEFT JOIN execution_workspace_claims w ON w.execution_id=e.execution_id WHERE e.task_id=?",
@@ -4342,6 +4902,15 @@ parentPort?.on("message", (message: Request) => {
         };
       }
     } else if (message.command === "get") {
+      const agentIds = authorizedAgentIds(p.allowedAgentIds);
+      const marker = expiredTaskMarker(scope, String(p.taskId), agentIds);
+      if (marker !== undefined) {
+        throwFailure(
+          "result_expired",
+          "retained Task result has expired",
+          String(p.taskId),
+        );
+      }
       const r = db
         .prepare("SELECT * FROM tasks WHERE scope=? AND task_id=?")
         .get(scope, String(p.taskId)) as Record<string, unknown> | undefined;
@@ -4349,11 +4918,46 @@ parentPort?.on("message", (message: Request) => {
         r && allowed(r.agent_id, p.allowedAgentIds) ? task(r) : undefined;
     } else if (message.command === "list") {
       const agentIds = authorizedAgentIds(p.allowedAgentIds);
+      const currentRetentionSequence = retentionSequence(scope, agentIds, {
+        ...(typeof p.agentId === "string" ? { agentId: p.agentId } : {}),
+        ...(typeof p.state === "string" ? { state: p.state } : {}),
+      });
+      if (
+        p.afterQueueOrder !== undefined &&
+        Number(p.retentionSequence ?? -1) < currentRetentionSequence
+      ) {
+        const expiredAfterCursor = db
+          .prepare(
+            `SELECT 1 FROM task_expiry_markers
+             WHERE scope=?
+               AND agent_id IN (${agentIds.map(() => "?").join(",")})
+               AND expiry_sequence>? AND queue_order>?
+               ${typeof p.agentId === "string" ? "AND agent_id=?" : ""}
+               ${typeof p.state === "string" ? "AND terminal_state=?" : ""}
+             LIMIT 1`,
+          )
+          .get(
+            scope,
+            ...agentIds,
+            Number(p.retentionSequence ?? -1),
+            Number(p.afterQueueOrder),
+            ...(typeof p.agentId === "string" ? [p.agentId] : []),
+            ...(typeof p.state === "string" ? [p.state] : []),
+          );
+        if (expiredAfterCursor !== undefined) {
+          throwFailure("cursor_expired", "Task list cursor has expired");
+        }
+      }
       const filters = [
         "scope=?",
         `agent_id IN (${agentIds.map(() => "?").join(",")})`,
         "queue_order>?",
       ];
+      if (actualTables.has("task_expiry_markers")) {
+        filters.push(
+          "NOT EXISTS (SELECT 1 FROM task_expiry_markers marker WHERE marker.task_id=tasks.task_id)",
+        );
+      }
       const parameters: unknown[] = [
         scope,
         ...agentIds,
@@ -4364,7 +4968,7 @@ parentPort?.on("message", (message: Request) => {
         parameters.push(p.agentId);
       }
       if (typeof p.state === "string") {
-        filters.push("state=?");
+        filters.push("COALESCE(input_state,lifecycle_state,state)=?");
         parameters.push(p.state);
       }
       parameters.push(Number(p.limit));
@@ -4377,9 +4981,62 @@ parentPort?.on("message", (message: Request) => {
               )
               .all(...parameters) as Record<string, unknown>[]);
       const tasks = rows.map(task);
-      result = { tasks, lastQueueOrder: tasks.at(-1)?.queueOrder };
+      result = {
+        tasks,
+        lastQueueOrder: tasks.at(-1)?.queueOrder,
+        retentionSequence: currentRetentionSequence,
+      };
     } else if (message.command === "events") {
       const agentIds = authorizedAgentIds(p.allowedAgentIds);
+      if (typeof p.taskId === "string") {
+        const marker = expiredTaskMarker(scope, p.taskId, agentIds);
+        if (marker !== undefined) {
+          throwFailure(
+            p.afterCursor === undefined ? "result_expired" : "cursor_expired",
+            "retained Task event history has expired",
+            p.taskId,
+          );
+        }
+        const currentTask =
+          agentIds.length === 0
+            ? undefined
+            : db
+                .prepare(
+                  `SELECT 1 FROM tasks WHERE scope=? AND task_id=?
+                   AND agent_id IN (${agentIds.map(() => "?").join(",")})`,
+                )
+                .get(scope, p.taskId, ...agentIds);
+        if (currentTask === undefined) {
+          throwFailure("not_found", "Task was not found");
+        }
+      }
+      const currentRetentionSequence = retentionSequence(scope, agentIds, {
+        ...(typeof p.taskId === "string" ? { taskId: p.taskId } : {}),
+      });
+      if (
+        p.afterCursor !== undefined &&
+        Number(p.retentionSequence ?? -1) < currentRetentionSequence
+      ) {
+        const expiredAfterCursor = db
+          .prepare(
+            `SELECT 1 FROM task_expiry_markers
+             WHERE scope=?
+               AND agent_id IN (${agentIds.map(() => "?").join(",")})
+               AND expiry_sequence>? AND max_event_cursor>?
+               ${typeof p.taskId === "string" ? "AND task_id=?" : ""}
+             LIMIT 1`,
+          )
+          .get(
+            scope,
+            ...agentIds,
+            Number(p.retentionSequence ?? -1),
+            Number(p.afterCursor),
+            ...(typeof p.taskId === "string" ? [p.taskId] : []),
+          );
+        if (expiredAfterCursor !== undefined) {
+          throwFailure("cursor_expired", "event cursor has expired");
+        }
+      }
       const filters = [
         "e.scope=?",
         "e.cursor>?",
@@ -4412,7 +5069,11 @@ parentPort?.on("message", (message: Request) => {
         taskRevision: r.revision,
         occurredAt: r.created_at,
       }));
-      result = { events, lastCursor: events.at(-1)?.cursor };
+      result = {
+        events,
+        lastCursor: events.at(-1)?.cursor,
+        retentionSequence: currentRetentionSequence,
+      };
     } else if (message.command === "probe") {
       if (p.probe === "failNextCommit") failNextCommit = true;
       else if (p.probe === "failNextAuditGap") failNextAuditGap = true;
@@ -4493,6 +5154,8 @@ parentPort?.on("message", (message: Request) => {
       else if (p.probe === "inspectPhysicalCapacity")
         result = {
           ...physicalUsage(),
+          pageCount: Number(db.pragma("page_count", { simple: true })),
+          freelistCount: Number(db.pragma("freelist_count", { simple: true })),
           availableFilesystemBytes: availableFilesystemBytes(),
           pageSize,
           physicalAdmissionBytes,

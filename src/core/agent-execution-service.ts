@@ -148,6 +148,8 @@ export interface ControlledRuntimeDispatchLifecycle {
 
 const STORAGE_CODES = new Set<ApplicationErrorCode>([
   "not_found",
+  "result_expired",
+  "cursor_expired",
   "operation_conflict",
   "invalid_state",
   "queue_capacity",
@@ -155,6 +157,13 @@ const STORAGE_CODES = new Set<ApplicationErrorCode>([
   "storage_capacity",
   "storage_unavailable",
   "observation_unavailable",
+]);
+
+const TERMINAL_TASK_STATES = new Set<TaskSnapshot["state"]>([
+  "completed",
+  "failed",
+  "canceled",
+  "interrupted",
 ]);
 
 function isApplicationStorageCode(code: string): code is ApplicationErrorCode {
@@ -602,6 +611,9 @@ export class DurableAgentExecutionService implements AgentExecutionService {
         "Stop evidence is not trusted",
       );
     }
+    // A storage timeout is commit-ambiguous, so no preterminal snapshot may
+    // remain eligible for stale fallback once terminalization is attempted.
+    this.#snapshots.clear();
     try {
       const result = await this.store.commitTerminal({
         evidence: verified,
@@ -698,6 +710,8 @@ export class DurableAgentExecutionService implements AgentExecutionService {
       try {
         const receipt = await this.store.lookupReceipt({
           accessScopeId: authorization.accessScopeId,
+          allowedAgentIds: allowedAgentIds(authorization),
+          expectedAgentId: input.agentId,
           operationId: input.operationId,
           operationType: "submit",
           fingerprint,
@@ -799,7 +813,8 @@ export class DurableAgentExecutionService implements AgentExecutionService {
         if (
           cached !== undefined &&
           cached.accessScopeId === authorization.accessScopeId &&
-          authorization.allowedAgentIds.has(cached.snapshot.agentId)
+          authorization.allowedAgentIds.has(cached.snapshot.agentId) &&
+          !TERMINAL_TASK_STATES.has(cached.snapshot.state)
         ) {
           return {
             ...cached.snapshot,
@@ -996,6 +1011,7 @@ export class DurableAgentExecutionService implements AgentExecutionService {
     }
     const limit = input.limit ?? 50;
     let afterQueueOrder: number | undefined;
+    let retentionSequence: number | undefined;
     if (input.cursor !== undefined) {
       const cursor = this.#cursorCodec.decode(input.cursor);
       if (
@@ -1005,11 +1021,18 @@ export class DurableAgentExecutionService implements AgentExecutionService {
         cursor["accessScopeId"] !== authorization.accessScopeId ||
         cursor["agentId"] !== (input.agentId ?? null) ||
         cursor["state"] !== (input.state ?? null) ||
-        !Number.isSafeInteger(cursor["afterQueueOrder"])
+        !Number.isSafeInteger(cursor["afterQueueOrder"]) ||
+        (cursor["retentionSequence"] !== undefined &&
+          (!Number.isSafeInteger(cursor["retentionSequence"]) ||
+            Number(cursor["retentionSequence"]) < 0))
       ) {
         throw new ApplicationError("not_found", "Resource not found");
       }
       afterQueueOrder = cursor["afterQueueOrder"] as number;
+      retentionSequence =
+        cursor["retentionSequence"] === undefined
+          ? 0
+          : (cursor["retentionSequence"] as number);
     }
     try {
       const result = await this.store.listTasks({
@@ -1018,6 +1041,7 @@ export class DurableAgentExecutionService implements AgentExecutionService {
         ...(input.agentId === undefined ? {} : { agentId: input.agentId }),
         ...(input.state === undefined ? {} : { state: input.state }),
         ...(afterQueueOrder === undefined ? {} : { afterQueueOrder }),
+        ...(retentionSequence === undefined ? {} : { retentionSequence }),
         limit: limit + 1,
       });
       const hasMore = result.tasks.length > limit;
@@ -1034,6 +1058,7 @@ export class DurableAgentExecutionService implements AgentExecutionService {
                 agentId: input.agentId ?? null,
                 state: input.state ?? null,
                 afterQueueOrder: last,
+                retentionSequence: result.retentionSequence,
               })
             : null,
       };
@@ -1047,11 +1072,9 @@ export class DurableAgentExecutionService implements AgentExecutionService {
     input: GetEventsInput,
   ): Promise<EventPage> {
     const authorization = this.#authorize(actor);
-    if (input.taskId !== undefined) {
-      await this.#getCurrentTask(authorization, input.taskId);
-    }
     const limit = input.limit ?? 50;
     let afterCursor: number | undefined;
+    let retentionSequence: number | undefined;
     if (input.afterCursor !== undefined) {
       const cursor = this.#cursorCodec.decode(input.afterCursor);
       if (
@@ -1060,11 +1083,18 @@ export class DurableAgentExecutionService implements AgentExecutionService {
         cursor["kind"] !== "events" ||
         cursor["accessScopeId"] !== authorization.accessScopeId ||
         cursor["taskId"] !== (input.taskId ?? null) ||
-        !Number.isSafeInteger(cursor["afterCursor"])
+        !Number.isSafeInteger(cursor["afterCursor"]) ||
+        (cursor["retentionSequence"] !== undefined &&
+          (!Number.isSafeInteger(cursor["retentionSequence"]) ||
+            Number(cursor["retentionSequence"]) < 0))
       ) {
         throw new ApplicationError("not_found", "Resource not found");
       }
       afterCursor = cursor["afterCursor"] as number;
+      retentionSequence =
+        cursor["retentionSequence"] === undefined
+          ? 0
+          : (cursor["retentionSequence"] as number);
     }
     try {
       const result = await this.store.getEvents({
@@ -1072,6 +1102,7 @@ export class DurableAgentExecutionService implements AgentExecutionService {
         allowedAgentIds: allowedAgentIds(authorization),
         ...(input.taskId === undefined ? {} : { taskId: input.taskId }),
         ...(afterCursor === undefined ? {} : { afterCursor }),
+        ...(retentionSequence === undefined ? {} : { retentionSequence }),
         limit: limit + 1,
       });
       const hasMore = result.events.length > limit;
@@ -1087,6 +1118,7 @@ export class DurableAgentExecutionService implements AgentExecutionService {
                 accessScopeId: authorization.accessScopeId,
                 taskId: input.taskId ?? null,
                 afterCursor: last,
+                retentionSequence: result.retentionSequence,
               })
             : null,
       };

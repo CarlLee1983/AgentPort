@@ -189,6 +189,22 @@ export interface StoredTaskProjection {
   question: StoredQuestion | null;
 }
 
+export interface ExpireRetainedDataRequest {
+  /** Trusted maintenance time, never Caller supplied. */
+  asOf: string;
+  /** Maximum number of Tasks processed by one short transaction. */
+  batchLimit?: number;
+}
+
+export interface RetentionRunSummary {
+  contextsExpired: number;
+  tasksExpired: number;
+  receiptsTombstoned: number;
+  eventsExpired: number;
+  asOf: string;
+  cutoff: string;
+}
+
 export interface PersistStoredQuestionRequest extends RuntimeQuestionIdentity {
   reference: StoredQuestion["reference"];
   ordinal: number;
@@ -271,6 +287,8 @@ export interface StoreFailure {
     | "storage_unavailable"
     | "observation_unavailable"
     | "authorization_changed"
+    | "result_expired"
+    | "cursor_expired"
     | "not_found";
   message: string;
   taskId?: string;
@@ -307,6 +325,9 @@ export interface DurableAdmissionStoreOptions {
   taskControlReserveBytes?: number;
   controlReceiptReserve?: number;
   controlEventReserve?: number;
+  terminalRetentionDays?: number;
+  /** Internal maintenance cadence; never exposed to an MCP Caller. */
+  retentionSweepIntervalMs?: number;
   busyTimeoutMs?: number;
   requestTimeoutMs?: number;
 }
@@ -323,6 +344,8 @@ const positiveIntegerOptions = [
   "taskControlReserveBytes",
   "controlReceiptReserve",
   "controlEventReserve",
+  "terminalRetentionDays",
+  "retentionSweepIntervalMs",
   "busyTimeoutMs",
   "requestTimeoutMs",
 ] as const satisfies readonly (keyof DurableAdmissionStoreOptions)[];
@@ -373,6 +396,21 @@ function validateOptions(options: DurableAdmissionStoreOptions): void {
       "controlEventReserve must reserve restart and cancellation events",
     );
   }
+  if (
+    options.controlReceiptReserve !== undefined &&
+    options.controlReceiptReserve < 2
+  ) {
+    throw new TypeError(
+      "controlReceiptReserve must reserve reply and terminal control receipts",
+    );
+  }
+  if (
+    options.terminalRetentionDays !== undefined &&
+    options.terminalRetentionDays >
+      Math.floor(Number.MAX_SAFE_INTEGER / (24 * 60 * 60 * 1_000))
+  ) {
+    throw new TypeError("terminalRetentionDays is too large");
+  }
   const queueGlobal = options.queueGlobal ?? 256;
   const physicalControlReserveBytes =
     options.physicalControlReserveBytes ?? 256 * 1024 * 1024;
@@ -385,8 +423,12 @@ function validateOptions(options: DurableAdmissionStoreOptions): void {
   }
   const taskControlReserveBytes = options.taskControlReserveBytes ?? 128 * 1024;
   const maximumTaskControlReserve = taskControlReserveBytes * queueGlobal;
+  if (taskControlReserveBytes < 128 * 1024) {
+    throw new TypeError(
+      "taskControlReserveBytes must reserve at least 128 KiB for reply control writes",
+    );
+  }
   if (
-    taskControlReserveBytes < 3 ||
     !Number.isSafeInteger(maximumTaskControlReserve) ||
     maximumTaskControlReserve > physicalControlReserveBytes
   ) {
@@ -486,6 +528,8 @@ export interface TransitionStoredTasksRequest {
 
 export interface LookupStoredReceiptRequest {
   accessScopeId: string;
+  allowedAgentIds: readonly string[];
+  expectedAgentId?: string;
   operationId: string;
   operationType:
     "submit" | "cancel" | "edit" | "resume" | "acknowledge_interruption";
@@ -553,6 +597,9 @@ export class SqliteDurableAdmissionStore {
   #closePromise?: Promise<void>;
   #terminalError?: Error;
   readonly #timeoutMs: number;
+  readonly #retentionSweepIntervalMs: number;
+  readonly #retentionEnabled: boolean;
+  #retentionTimer: NodeJS.Timeout | undefined;
 
   constructor(options: DurableAdmissionStoreOptions) {
     validateOptions(options);
@@ -562,6 +609,9 @@ export class SqliteDurableAdmissionStore {
     };
     this.#timeoutMs = options.requestTimeoutMs ?? 2_000;
     this.#auditQueueCapacity = options.auditCapacity ?? 10_000;
+    this.#retentionSweepIntervalMs =
+      options.retentionSweepIntervalMs ?? 60 * 60 * 1_000;
+    this.#retentionEnabled = options.recoveryOnly !== true;
     const siblingWorker = new URL(
       "./sqlite-durable-admission-worker.js",
       import.meta.url,
@@ -615,6 +665,7 @@ export class SqliteDurableAdmissionStore {
 
   async ready(): Promise<void> {
     await this.#request("ready", {}, false, Math.max(this.#timeoutMs, 2_000));
+    this.#scheduleRetention();
   }
   async lookupReceipt(
     request: LookupStoredReceiptRequest,
@@ -816,6 +867,8 @@ export class SqliteDurableAdmissionStore {
   async commitTerminal(request: {
     evidence: TerminalStopEvidence;
     activeElapsedMs?: number;
+    /** Trusted terminal-commit clock for deterministic maintenance tests. */
+    now?: string;
   }): Promise<StoredTerminalCommit> {
     return this.#request(
       "commitTerminal",
@@ -903,10 +956,16 @@ export class SqliteDurableAdmissionStore {
     state?: StoredTaskState;
     afterQueueOrder?: number;
     limit: number;
-  }): Promise<{ tasks: StoredTask[]; lastQueueOrder?: number }> {
+    retentionSequence?: number;
+  }): Promise<{
+    tasks: StoredTask[];
+    lastQueueOrder?: number;
+    retentionSequence: number;
+  }> {
     return this.#request("list", request) as Promise<{
       tasks: StoredTask[];
       lastQueueOrder?: number;
+      retentionSequence: number;
     }>;
   }
   async getEvents(request: {
@@ -914,12 +973,37 @@ export class SqliteDurableAdmissionStore {
     allowedAgentIds: readonly string[];
     taskId?: string;
     afterCursor?: number;
+    retentionSequence?: number;
     limit: number;
-  }): Promise<{ events: StoredEvent[]; lastCursor?: number }> {
+  }): Promise<{
+    events: StoredEvent[];
+    lastCursor?: number;
+    retentionSequence: number;
+  }> {
     return this.#request("events", request) as Promise<{
       events: StoredEvent[];
       lastCursor?: number;
+      retentionSequence: number;
     }>;
+  }
+  async expireRetainedData(
+    request: ExpireRetainedDataRequest,
+  ): Promise<RetentionRunSummary> {
+    const parsed = Date.parse(request.asOf);
+    if (
+      !Number.isFinite(parsed) ||
+      new Date(parsed).toISOString() !== request.asOf ||
+      (request.batchLimit !== undefined &&
+        (!Number.isSafeInteger(request.batchLimit) ||
+          request.batchLimit < 1 ||
+          request.batchLimit > 100))
+    ) {
+      throw new TypeError("retention request is invalid");
+    }
+    return this.#request(
+      "expireRetainedData",
+      request,
+    ) as Promise<RetentionRunSummary>;
   }
   /** Test-only probes stay in the worker and cannot create a process or execution seam. */
   async probe(
@@ -977,6 +1061,10 @@ export class SqliteDurableAdmissionStore {
   async close(): Promise<void> {
     if (this.#closePromise !== undefined) return this.#closePromise;
     this.#closing = true;
+    if (this.#retentionTimer !== undefined) {
+      clearTimeout(this.#retentionTimer);
+      this.#retentionTimer = undefined;
+    }
     this.#closePromise = (async () => {
       await this.#waitForAuditIdle().catch(() => undefined);
       this.#closed = true;
@@ -994,6 +1082,37 @@ export class SqliteDurableAdmissionStore {
       Atomics.compareExchange(this.#registryRevisionFence, 1, 0, 1) !== 0
     ) {
       await new Promise<void>((resolve) => setImmediate(resolve));
+    }
+  }
+
+  #scheduleRetention(delayMs = this.#retentionSweepIntervalMs): void {
+    if (
+      !this.#retentionEnabled ||
+      this.#closed ||
+      this.#closing ||
+      this.#retentionTimer !== undefined
+    ) {
+      return;
+    }
+    this.#retentionTimer = setTimeout(() => {
+      this.#retentionTimer = undefined;
+      void this.#runRetentionSweep();
+    }, delayMs);
+    this.#retentionTimer.unref();
+  }
+
+  async #runRetentionSweep(): Promise<void> {
+    if (this.#closed || this.#closing) return;
+    try {
+      const result = await this.expireRetainedData({
+        asOf: new Date().toISOString(),
+        batchLimit: 100,
+      });
+      this.#scheduleRetention(
+        result.tasksExpired === 100 ? 0 : this.#retentionSweepIntervalMs,
+      );
+    } catch {
+      this.#scheduleRetention();
     }
   }
 

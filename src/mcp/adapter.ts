@@ -42,6 +42,8 @@ const ERROR_MESSAGES: Readonly<Record<ExternalErrorCode, string>> = {
   internal_error: "The requested operation could not be completed",
   invalid_state: "The Task cannot be changed in its current state",
   not_found: "Resource not found",
+  result_expired: "The retained Task result has expired",
+  cursor_expired: "The requested cursor has expired; request a fresh snapshot",
   observation_unavailable: "The current observation is unavailable",
   operation_conflict: "operationId conflicts with a previous operation",
   queue_capacity: "Task admission capacity is exhausted",

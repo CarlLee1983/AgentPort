@@ -89,6 +89,40 @@ AP-001 AC-09, deployment, or production-readiness claim.
   AgentPort-controlled capacity; it cannot prevent an unrelated host writer or
   administrator from deleting or exhausting the same filesystem.
 
+## Terminal retention and expiry
+
+- Terminal Task retention defaults to 30 days from the durable terminal commit.
+  Administrators may set `terminalRetentionDays`; MCP Callers cannot provide a
+  cleanup time or change the policy. The store runs an internal hourly sweep by
+  default, using short transactions of at most 100 Tasks, and immediately drains
+  another bounded batch while a backlog remains.
+- Cleanup selects each eligible terminal Task independently. A queued, paused,
+  awaiting-input, starting, running, stopping, recovering, stop-unknown, held, or
+  quarantined Task is never selected. A caller-acknowledged `interrupted` Task is
+  concluded and follows the terminal retention window. A Context and the minimum structural rows
+  needed by an unexpired or nonterminal follow-up remain until its final Task
+  expires.
+- One SQLite transaction writes the authorized Task marker and tombstones every
+  related operation receipt before removing events, questions, observations,
+  instructions, answers, and result payload. A cleanup failure rolls the entire
+  batch back. AgentPort does not delete a Runtime vendor transcript.
+- Under the `GATE-027` contract, authorized `get_task`, task-scoped event lookup,
+  and an identical expired operation retry return `result_expired`; list results
+  omit expired Tasks. A signed list or event cursor returns `cursor_expired` only
+  when history after its recorded position was removed. A fresh snapshot records
+  the current retention sequence and remains usable.
+- The general receipt/tombstone limit defaults to 100,000. Saturation rejects new
+  `submit`, `edit`, and `resume_context` mutations. Existing `reply`, `cancel`,
+  and `acknowledge_interruption` operations use the accepted Task's control
+  capacity and remain available until physical storage/control reserve failure.
+  A first reply consumes one bounded receipt and half of the Task's physical
+  control tranche; its exact `operationId` retry is write-free, while a different
+  operation cannot create another receipt for the accepted answer. The 2 GiB
+  database-plus-WAL admission boundary retains in-period results and rejects new
+  work rather than evicting them. After a successful WAL checkpoint, admission
+  planning may reuse SQLite freelist pages released by expiry; the committed
+  DB-plus-WAL and total physical-capacity checks remain authoritative.
+
 ## Acceptance contract decisions
 
 - `GATE-006` and `GATE-009`: every Registry authorization or binding change
@@ -98,6 +132,9 @@ AP-001 AC-09, deployment, or production-readiness claim.
   accepted-Task control reserve on the same filesystem.
 - `GATE-010`: audit overflow uses ring overwrite with a persistent gap counter
   and never blocks reserved Task control operations.
+- `GATE-027`: expiry retains a minimal authorized marker, returns
+  `result_expired` for direct result lookup and identical retry, omits the Task
+  from lists, and retires the Context only after its final Task expires.
 
 These are product-contract decisions recorded for operations. Their Work Item,
 Gate, verification, and Human Review state is not projected here; query
@@ -120,13 +157,14 @@ and repository gate entries as one coherent change. Do not point older code at
 this database or silently replace the durable store with an in-memory
 implementation.
 
-After schema v3 has been applied, neither AP-002 nor AP-003 code may open the
-live database. Never delete a schema marker to simulate compatibility. Stop the
-listener and preserve the database together with WAL/SHM/control-reserve
-companions. Use the v3-aware store with `recoveryOnly: true`: startup moves all
+After any newer schema, including the v13 retention-marker schema, has been
+applied, older code must not open the live database. Never delete a schema
+marker to simulate compatibility. Stop the listener and preserve the database
+together with WAL/SHM/control-reserve companions. A compatible store in
+`recoveryOnly: true` keeps the established recovery restrictions: it moves
 unconfirmed Executions to `recovering`, quarantines their Workspace claims,
 permits authorized query and cancellation control, and rejects new admission,
-preparation, and worker observations.
+preparation, worker observations, and retention cleanup.
 
 An offline restore is valid only after dispatch is disabled and external
 execution effects have been reconciled or left fail-closed. Restore a

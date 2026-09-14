@@ -495,6 +495,8 @@ describe("storage reserves", () => {
     "taskControlReserveBytes",
     "controlReceiptReserve",
     "controlEventReserve",
+    "terminalRetentionDays",
+    "retentionSweepIntervalMs",
     "busyTimeoutMs",
     "requestTimeoutMs",
   ] as const)("rejects an invalid %s before starting storage", (option) => {
@@ -505,6 +507,18 @@ describe("storage reserves", () => {
           [option]: 0,
         }),
     ).toThrow(`${option} must be a positive safe integer`);
+  });
+
+  it("reserves separate reply and terminal control receipts", () => {
+    expect(
+      () =>
+        new SqliteDurableAdmissionStore({
+          databasePath: "/does/not/matter.sqlite",
+          controlReceiptReserve: 1,
+        }),
+    ).toThrow(
+      "controlReceiptReserve must reserve reply and terminal control receipts",
+    );
   });
 
   it("requires event reserve for both restart and cancellation", () => {
@@ -527,6 +541,17 @@ describe("storage reserves", () => {
           taskControlReserveBytes: 128 * 1024,
         }),
     ).toThrow("must cover every queued Task reserve");
+  });
+
+  it("reserves enough per-Task control bytes for the reply write tranche", () => {
+    expect(
+      () =>
+        new SqliteDurableAdmissionStore({
+          databasePath: "/does/not/matter.sqlite",
+          physicalControlReserveBytes: 256 * 1024 * 1024,
+          taskControlReserveBytes: 64 * 1024,
+        }),
+    ).toThrow("must reserve at least 128 KiB for reply control writes");
   });
 
   it.each([

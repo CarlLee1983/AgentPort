@@ -295,6 +295,8 @@ export const applicationErrorSchema = z
         code: z.enum([
           "access_denied",
           "not_found",
+          "result_expired",
+          "cursor_expired",
           "operation_conflict",
           "invalid_state",
           "queue_capacity",

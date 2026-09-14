@@ -68,7 +68,7 @@ describe("storage restart", () => {
         actors: ["principal-a"],
         reservations: 1,
         reservationState: [
-          { controlReceipts: 1, controlEvents: 1, controlBytes: 65_536 },
+          { controlReceipts: 2, controlEvents: 1, controlBytes: 65_536 },
         ],
         capacity: [
           { key: "active_global", value: 1 },

@@ -16,6 +16,8 @@ import type {
   StoredTaskProjection,
   StoredTerminalCommit,
   TerminalStopEvidence,
+  ExpireRetainedDataRequest,
+  RetentionRunSummary,
   ResumeStoredContextRequest,
   AcknowledgeStoredInterruptionRequest,
 } from "../storage/sqlite-durable-admission-store.js";
@@ -127,6 +129,7 @@ export interface DurableAdmissionStore {
   commitTerminal(request: {
     evidence: TerminalStopEvidence;
     activeElapsedMs?: number;
+    now?: string;
   }): Promise<StoredTerminalCommit>;
   recoverExecutions(): Promise<StoredExecution[]>;
   quarantineExecution(request: {
@@ -155,13 +158,26 @@ export interface DurableAdmissionStore {
     agentId?: string;
     state?: StoredTaskState;
     afterQueueOrder?: number;
+    retentionSequence?: number;
     limit: number;
-  }): Promise<{ tasks: StoredTask[]; lastQueueOrder?: number }>;
+  }): Promise<{
+    tasks: StoredTask[];
+    lastQueueOrder?: number;
+    retentionSequence: number;
+  }>;
   getEvents(request: {
     accessScopeId: string;
     allowedAgentIds: readonly string[];
     taskId?: string;
     afterCursor?: number;
+    retentionSequence?: number;
     limit: number;
-  }): Promise<{ events: StoredEvent[]; lastCursor?: number }>;
+  }): Promise<{
+    events: StoredEvent[];
+    lastCursor?: number;
+    retentionSequence: number;
+  }>;
+  expireRetainedData(
+    request: ExpireRetainedDataRequest,
+  ): Promise<RetentionRunSummary>;
 }

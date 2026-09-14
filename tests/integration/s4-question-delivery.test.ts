@@ -234,7 +234,7 @@ describe("S4 native Question delivery", () => {
           { principalId: "principal-a" },
           { ...reply, operationId: "native-question-same-answer" },
         ),
-      ).resolves.toMatchObject({ replayed: true });
+      ).rejects.toMatchObject({ code: "operation_conflict" });
       await expect(
         fixture.service.reply(
           { principalId: "principal-a" },

@@ -289,7 +289,13 @@ describe("S4 migration and restart recovery", () => {
       const legacy = new Database(databasePath);
       try {
         legacy.exec(
-          "DROP TABLE task_workspace_queue; DELETE FROM schema_migrations WHERE version=12;",
+          `DROP TRIGGER operation_receipts_capture_task_id;
+           DROP INDEX operation_receipts_retained_task;
+           DROP TABLE task_expiry_markers;
+           ALTER TABLE operation_receipts DROP COLUMN expired_at;
+           ALTER TABLE operation_receipts DROP COLUMN retained_task_id;
+           DROP TABLE task_workspace_queue;
+           DELETE FROM schema_migrations WHERE version IN (12,13);`,
         );
       } finally {
         legacy.close();
@@ -297,7 +303,7 @@ describe("S4 migration and restart recovery", () => {
 
       store = await SqliteDurableAdmissionStore.open({ databasePath });
       await expect(store.probe("inspectSchemaVersions")).resolves.toEqual([
-        1, 2, 3, 4, 5, 6, 7, 8, 9, 10, 11, 12,
+        1, 2, 3, 4, 5, 6, 7, 8, 9, 10, 11, 12, 13,
       ]);
       await expect(
         store.getEligibleTasksForDispatch({
@@ -327,7 +333,7 @@ describe("S4 migration and restart recovery", () => {
         databasePath: seeded.databasePath,
       });
       await expect(store.probe("inspectSchemaVersions")).resolves.toEqual([
-        1, 2, 3, 4, 5, 6, 7, 8, 9, 10, 11, 12,
+        1, 2, 3, 4, 5, 6, 7, 8, 9, 10, 11, 12, 13,
       ]);
       await store.close();
       store = undefined;
