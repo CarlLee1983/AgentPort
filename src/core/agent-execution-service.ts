@@ -16,6 +16,7 @@ import {
 import { CursorCodec, operationFingerprint } from "./codec.js";
 import { ApplicationError, type ApplicationErrorCode } from "./errors.js";
 import type { DurableAdmissionStore } from "./ports.js";
+import type { StorageIncidentSafety } from "./storage-incident-safety.js";
 import type {
   AgentExecutionService,
   AcknowledgeInterruptionInput,
@@ -58,6 +59,7 @@ export interface ServiceOptions {
   /** Trusted production control seam; cancellation is persisted before it is requested. */
   stopRequester?: ExecutionStopRequestPort;
   stopEvidenceVerifier?: StopEvidenceVerifier;
+  storageIncidentSafety?: StorageIncidentSafety;
 }
 
 /** Narrow internal control port; the core does not expose Supervisor operations to MCP. */
@@ -109,6 +111,10 @@ export interface ControlledRuntimeDispatchLifecycle {
     taskId: string,
     launcherDaemonEpoch: string,
   ): Promise<RuntimeDispatchPreparation>;
+  assertDispatchStartAllowed(
+    taskId: string,
+    reference: ExecutionReference,
+  ): void;
   markExecutionRunning(
     reference: ExecutionReference,
   ): Promise<{ kind: "running" } | { kind: "stop_required" }>;
@@ -227,6 +233,7 @@ export class DurableAgentExecutionService implements AgentExecutionService {
   readonly #daemonEpoch: string;
   readonly #stopRequester: ExecutionStopRequestPort | undefined;
   readonly #stopEvidenceVerifier: StopEvidenceVerifier | undefined;
+  readonly #storageIncidentSafety: StorageIncidentSafety | undefined;
   readonly #snapshots = new Map<
     string,
     { accessScopeId: string; snapshot: TaskSnapshot }
@@ -246,6 +253,7 @@ export class DurableAgentExecutionService implements AgentExecutionService {
     this.#snapshotCacheEntries = options.snapshotCacheEntries ?? 256;
     this.#stopRequester = options.stopRequester;
     this.#stopEvidenceVerifier = options.stopEvidenceVerifier;
+    this.#storageIncidentSafety = options.storageIncidentSafety;
     if (
       !Number.isSafeInteger(this.#snapshotCacheEntries) ||
       this.#snapshotCacheEntries < 1
@@ -286,7 +294,7 @@ export class DurableAgentExecutionService implements AgentExecutionService {
       });
       const recovering = await this.store.recoverExecutions();
       if (recoverySupervisor === undefined) return;
-      await Promise.all(
+      const reconciled = await Promise.all(
         recovering.map(async (execution) => {
           const reference: ExecutionReference = {
             executionId: execution.executionId,
@@ -295,6 +303,7 @@ export class DurableAgentExecutionService implements AgentExecutionService {
             launchProfileId: execution.launchProfileId,
             workspaceIdentity: execution.workspaceId,
           };
+          this.#storageIncidentSafety?.track(execution.taskId, reference);
           try {
             const reconciliation =
               await recoverySupervisor.reconcile(reference);
@@ -315,13 +324,27 @@ export class DurableAgentExecutionService implements AgentExecutionService {
                 evidence: verified,
                 now: this.#now().toISOString(),
               });
+              return true;
             }
+            return false;
           } catch {
             // Unknown external state stays durably recovering and quarantined.
+            return false;
           }
         }),
       );
+      if (
+        this.#storageIncidentSafety !== undefined &&
+        reconciled.some((value) => !value)
+      ) {
+        this.#storageIncidentSafety.report();
+        throw new ApplicationError(
+          "storage_unavailable",
+          "Execution recovery is not yet verified",
+        );
+      }
     } catch (error) {
+      if (error instanceof ApplicationError) throw error;
       throw storageError(error);
     }
   }
@@ -330,7 +353,19 @@ export class DurableAgentExecutionService implements AgentExecutionService {
     taskId: string,
     launcherDaemonEpoch: string,
   ): Promise<RuntimeDispatchPreparation> {
-    const task = await this.store.getTaskForDispatch(taskId);
+    let task: Awaited<ReturnType<DurableAdmissionStore["getTaskForDispatch"]>>;
+    try {
+      task = await this.store.getTaskForDispatch(taskId);
+    } catch (error) {
+      const mapped = storageError(error);
+      if (
+        mapped.code === "observation_unavailable" ||
+        mapped.code === "storage_unavailable"
+      ) {
+        this.#storageIncidentSafety?.report();
+      }
+      throw mapped;
+    }
     if (task === undefined) {
       throw new ApplicationError("not_found", "Resource not found");
     }
@@ -354,18 +389,29 @@ export class DurableAgentExecutionService implements AgentExecutionService {
     if (binding === undefined) {
       throw new ApplicationError("not_found", "Resource not found");
     }
+    const executionId = this.#newId();
+    const generation = this.#newId();
+    const bindingSnapshotId = this.#newId();
+    const reference: ExecutionReference = {
+      executionId,
+      generation,
+      daemonEpoch: launcherDaemonEpoch,
+      launchProfileId: binding.launchProfileId,
+      workspaceIdentity: binding.workspace.filesystemIdentity,
+    };
+    this.#storageIncidentSafety?.track(taskId, reference);
     try {
       const execution = await this.store.claimAndPrepare({
         accessScopeId: authorization.accessScopeId,
         allowedAgentIds: allowedAgentIds(authorization),
         expectedRegistryRevision: this.#mutationRevision(authorization),
-        executionId: this.#newId(),
+        executionId,
         taskId,
-        generation: this.#newId(),
+        generation,
         daemonEpoch: launcherDaemonEpoch,
         dispatchIntent: true,
         binding: {
-          bindingSnapshotId: this.#newId(),
+          bindingSnapshotId,
           accessScopeId: authorization.accessScopeId,
           agentId: task.agentId,
           workspaceIdentity: { ...binding.workspace },
@@ -382,13 +428,7 @@ export class DurableAgentExecutionService implements AgentExecutionService {
         this.#monotonicNow(),
       );
       return {
-        reference: {
-          executionId: execution.executionId,
-          generation: execution.generation,
-          daemonEpoch: execution.daemonEpoch,
-          launchProfileId: execution.launchProfileId,
-          workspaceIdentity: execution.workspaceId,
-        },
+        reference,
         policy: {
           executionLimitSeconds:
             task.executionLimitSeconds ??
@@ -402,11 +442,21 @@ export class DurableAgentExecutionService implements AgentExecutionService {
           : { continuation: execution.launchContinuation }),
       };
     } catch (error) {
+      if (this.#storageIncidentSafety?.isLatched() !== true) {
+        this.#storageIncidentSafety?.release(taskId, reference);
+      }
       if (this.#isRegistryRevisionChange(error)) {
         throw this.#registryChanged(error);
       }
       throw storageError(error);
     }
+  }
+
+  assertDispatchStartAllowed(
+    taskId: string,
+    reference: ExecutionReference,
+  ): void {
+    this.#storageIncidentSafety?.assertStartAllowed(taskId, reference);
   }
 
   async markExecutionRunning(
@@ -623,6 +673,10 @@ export class DurableAgentExecutionService implements AgentExecutionService {
         ),
       });
       this.#activeAccountingStarted.delete(verified.reference.executionId);
+      this.#storageIncidentSafety?.release(
+        result.task.taskId,
+        verified.reference,
+      );
       return result;
     } catch (error) {
       throw storageError(error);
@@ -785,6 +839,9 @@ export class DurableAgentExecutionService implements AgentExecutionService {
     input: GetTaskInput,
   ): Promise<TaskSnapshot> {
     const authorization = this.#authorize(actor);
+    if (this.#storageIncidentSafety?.isLatched() === true) {
+      return this.#staleTaskOrUnavailable(authorization, input.taskId);
+    }
     try {
       const projection = await this.store.getTaskProjection({
         accessScopeId: authorization.accessScopeId,
@@ -809,19 +866,11 @@ export class DurableAgentExecutionService implements AgentExecutionService {
         mapped.code === "observation_unavailable" ||
         mapped.code === "storage_unavailable"
       ) {
-        const cached = this.#snapshots.get(input.taskId);
-        if (
-          cached !== undefined &&
-          cached.accessScopeId === authorization.accessScopeId &&
-          authorization.allowedAgentIds.has(cached.snapshot.agentId) &&
-          !TERMINAL_TASK_STATES.has(cached.snapshot.state)
-        ) {
-          return {
-            ...cached.snapshot,
-            observedAt: this.#now().toISOString(),
-            observationStatus: "stale",
-          };
-        }
+        return this.#staleTaskOrUnavailable(
+          authorization,
+          input.taskId,
+          mapped,
+        );
       }
       throw mapped;
     }
@@ -988,6 +1037,9 @@ export class DurableAgentExecutionService implements AgentExecutionService {
         authorization,
         result.task.taskId,
       );
+      if (TERMINAL_TASK_STATES.has(task.state)) {
+        this.#storageIncidentSafety?.release(input.taskId);
+      }
       this.#remember(authorization.accessScopeId, task);
       return { task, replayed: result.replayed };
     } catch (error) {
@@ -1529,6 +1581,31 @@ export class DurableAgentExecutionService implements AgentExecutionService {
       if (oldest === undefined) break;
       this.#snapshots.delete(oldest);
     }
+  }
+
+  #staleTaskOrUnavailable(
+    authorization: PrincipalAuthorization,
+    taskId: string,
+    cause?: unknown,
+  ): TaskSnapshot {
+    const cached = this.#snapshots.get(taskId);
+    if (
+      cached !== undefined &&
+      cached.accessScopeId === authorization.accessScopeId &&
+      authorization.allowedAgentIds.has(cached.snapshot.agentId) &&
+      !TERMINAL_TASK_STATES.has(cached.snapshot.state)
+    ) {
+      return {
+        ...cached.snapshot,
+        observedAt: this.#now().toISOString(),
+        observationStatus: "stale",
+      };
+    }
+    throw new ApplicationError(
+      "observation_unavailable",
+      "The current Task observation is unavailable",
+      cause === undefined ? {} : { cause },
+    );
   }
 
   #snapshot(

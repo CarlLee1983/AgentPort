@@ -15,10 +15,10 @@
     "format:check": "prettier --check '.github/**/*.yml' 'compatibility/**/*.ts' 'config/**/*.json' 'src/**/*.ts' 'tests/**/*.ts' '*.json' 'pnpm-*.yaml' 'docs/toolchain-compatibility.md' 'docs/durable-admission-operations.md' 'specs/stories/*/verification.md'",
     "lint": "eslint .",
     "test": "vitest run",
-    "test:mcp": "vitest run tests/mcp-compatibility.test.ts tests/acceptance/durable-admission.test.ts tests/acceptance/authorization.test.ts tests/acceptance/product-audit.test.ts",
+    "test:mcp": "vitest run tests/mcp-compatibility.test.ts tests/acceptance/durable-admission.test.ts tests/acceptance/authorization.test.ts tests/acceptance/product-audit.test.ts tests/acceptance/s5-storage-failure-mcp.test.ts",
     "test:linux": "node scripts/require-g1-linux.mjs && vitest run --no-file-parallelism tests/linux tests/contracts/linux-stop-evidence.test.ts tests/contracts/runtime-worker-ipc.test.ts tests/contracts/g1-no-production-dispatch.test.ts",
     "test:claude": "/bin/sh scripts/run-g1-claude.sh",
-    "test:faults": "vitest run tests/integration/s3-dispatch-transaction.test.ts tests/integration/s3-runtime-ingress.test.ts",
+    "test:faults": "vitest run tests/integration/s3-dispatch-transaction.test.ts tests/integration/s3-runtime-ingress.test.ts tests/integration/s5-retention-capacity.test.ts tests/integration/storage-reserve.test.ts tests/integration/s5-capacity-storage-failure.test.ts tests/integration/s5-storage-failure-convergence.test.ts tests/integration/s5-storage-failure-recovery.test.ts",
     "test:platform-neutral": "pnpm run build && vitest run tests/unit tests/integration tests/contracts tests/acceptance",
     "test:sqlite": "vitest run tests/sqlite-compatibility.test.ts",
     "typecheck": "tsc --noEmit"

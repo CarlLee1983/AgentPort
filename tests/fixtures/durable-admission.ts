@@ -10,6 +10,7 @@ import {
   DurableAgentExecutionService,
   type ServiceOptions,
 } from "../../src/core/agent-execution-service.js";
+import type { StorageIncidentSafety } from "../../src/core/storage-incident-safety.js";
 import type {
   ExecutionLifecycleSnapshot,
   ExecutionReference,
@@ -60,7 +61,9 @@ export async function createDurableAdmissionFixture(
     | "snapshotCacheEntries"
     | "stopRequester"
     | "stopEvidenceVerifier"
+    | "storageIncidentSafety"
   > = {},
+  storageIncident?: StorageIncidentSafety,
 ): Promise<DurableAdmissionFixture> {
   const directory = await mkdtemp(join(tmpdir(), "agentport-ap002-"));
   const workspaceA = join(directory, "workspace-a");
@@ -132,10 +135,13 @@ export async function createDurableAdmissionFixture(
     ],
   };
   const databasePath = join(directory, "agentport.sqlite");
-  const store = await SqliteDurableAdmissionStore.open({
-    databasePath,
-    ...storeOverrides,
-  });
+  const store = await SqliteDurableAdmissionStore.open(
+    {
+      databasePath,
+      ...storeOverrides,
+    },
+    storageIncident,
+  );
   const registry = await AgentRegistry.create(registryConfiguration, store);
   let sequence = 0;
   const preparation =

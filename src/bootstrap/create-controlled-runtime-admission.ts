@@ -25,6 +25,7 @@ import {
   type DurableAdmissionStoreOptions,
 } from "../storage/sqlite-durable-admission-store.js";
 import { AgentRegistry, type RegistryConfiguration } from "./registry.js";
+import { StorageIncidentCoordinator } from "./storage-incident-coordinator.js";
 
 export interface ControlledRuntimeAdmissionConfiguration {
   registry: RegistryConfiguration;
@@ -107,13 +108,20 @@ export async function createControlledRuntimeAdmission(
     configuration.launcher.workerIngressDirectory,
     configuration.launcher.runtimeGroupId,
   );
-  const store = await SqliteDurableAdmissionStore.open(configuration.storage);
+  const launcher = new LinuxLauncherClient({
+    socketPath: configuration.launcher.socketPath,
+  });
+  const supervisor = new LinuxExecutionSupervisor(launcher);
+  const storageIncidents = new StorageIncidentCoordinator(
+    supervisor,
+    configuration.storage.activeExecutionCapacity ?? 4,
+  );
+  const store = await SqliteDurableAdmissionStore.open(
+    configuration.storage,
+    storageIncidents,
+  );
   try {
     const registry = await AgentRegistry.create(configuration.registry, store);
-    const launcher = new LinuxLauncherClient({
-      socketPath: configuration.launcher.socketPath,
-    });
-    const supervisor = new LinuxExecutionSupervisor(launcher);
     const service = new DurableAgentExecutionService(registry, store, {
       cursorSecret: configuration.cursorSecret,
       stopRequester: {
@@ -125,6 +133,7 @@ export async function createControlledRuntimeAdmission(
         },
       },
       stopEvidenceVerifier: linuxStopEvidenceVerifier(),
+      storageIncidentSafety: storageIncidents,
     });
     const ingressFactory: RuntimeIngressFactory = {
       async open({ reference, lifecycle }) {

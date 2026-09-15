@@ -2,6 +2,7 @@ import { randomUUID } from "node:crypto";
 import { existsSync, realpathSync } from "node:fs";
 import { basename, dirname, isAbsolute, join } from "node:path";
 import { Worker } from "node:worker_threads";
+import type { StorageIncidentReporter } from "../core/storage-incident-safety.js";
 import type {
   BindingSnapshotRecord,
   ExecutionReference,
@@ -292,6 +293,8 @@ export interface StoreFailure {
     | "not_found";
   message: string;
   taskId?: string;
+  /** Internal classification; never projected to an MCP Caller. */
+  incident?: boolean;
 }
 
 export class DurableAdmissionStoreError extends Error {
@@ -541,6 +544,7 @@ interface Pending {
   resolve(value: unknown): void;
   reject(reason: unknown): void;
   timer?: NodeJS.Timeout;
+  incidentOnStorageFailure: boolean;
 }
 
 interface QueuedAudit {
@@ -558,6 +562,30 @@ interface AuditIdleWaiter {
   resolve(): void;
   reject(reason: unknown): void;
 }
+
+const STORAGE_MUTATION_COMMANDS = new Set([
+  "acknowledgeInterruption",
+  "acknowledgeQuestionDelivery",
+  "cancel",
+  "claimAndPrepare",
+  "commitExecutionObservation",
+  "commitRuntimeObservation",
+  "commitTerminal",
+  "confirmRecoveryStopped",
+  "edit",
+  "expireRetainedData",
+  "installRegistryRevision",
+  "interruptExecution",
+  "markExecutionRunning",
+  "markQuestionDeliveryUnknown",
+  "persistQuestionObservation",
+  "quarantineExecution",
+  "quarantineExecutionForDispatch",
+  "replyToQuestion",
+  "resumeContext",
+  "submit",
+  "transitionTasks",
+]);
 
 function canonicalDatabasePath(databasePath: string): string {
   if (
@@ -601,7 +629,10 @@ export class SqliteDurableAdmissionStore {
   readonly #retentionEnabled: boolean;
   #retentionTimer: NodeJS.Timeout | undefined;
 
-  constructor(options: DurableAdmissionStoreOptions) {
+  constructor(
+    options: DurableAdmissionStoreOptions,
+    private readonly storageIncident?: StorageIncidentReporter,
+  ) {
     validateOptions(options);
     const resolvedOptions = {
       ...options,
@@ -635,6 +666,7 @@ export class SqliteDurableAdmissionStore {
       this.#onReply(reply);
     });
     this.#worker.on("error", (error: Error) => {
+      this.storageIncident?.report();
       this.#terminalError = error;
       this.#failAll(error);
     });
@@ -644,6 +676,7 @@ export class SqliteDurableAdmissionStore {
         code: "storage_unavailable",
         message: `storage worker exited (${String(code)})`,
       });
+      this.storageIncident?.report();
       this.#terminalError ??= error;
       this.#failAll(this.#terminalError);
     });
@@ -651,8 +684,9 @@ export class SqliteDurableAdmissionStore {
 
   static async open(
     options: DurableAdmissionStoreOptions,
+    storageIncident?: StorageIncidentReporter,
   ): Promise<SqliteDurableAdmissionStore> {
-    const store = new SqliteDurableAdmissionStore(options);
+    const store = new SqliteDurableAdmissionStore(options, storageIncident);
     try {
       await store.ready();
       return store;
@@ -1016,6 +1050,9 @@ export class SqliteDurableAdmissionStore {
       | "failNextAuditGap"
       | "failAuditGapPermanently"
       | "failNextCommit"
+      | "failNextStorageBusy"
+      | "failNextStorageFull"
+      | "failNextStorageIo"
       | "largeRead"
       | "makeSchemaIncomplete"
       | "inspectPhysicalCapacity"
@@ -1260,6 +1297,18 @@ export class SqliteDurableAdmissionStore {
     allowClosed = false,
     timeoutMs: number | null = this.#timeoutMs,
   ): Promise<unknown> {
+    const incidentOnStorageFailure = STORAGE_MUTATION_COMMANDS.has(command);
+    if (
+      incidentOnStorageFailure &&
+      this.storageIncident?.isLatched() === true
+    ) {
+      return Promise.reject(
+        new DurableAdmissionStoreError({
+          code: "storage_unavailable",
+          message: "storage incident requires restart recovery",
+        }),
+      );
+    }
     if (this.#terminalError !== undefined) {
       return Promise.reject(this.#terminalError);
     }
@@ -1272,13 +1321,20 @@ export class SqliteDurableAdmissionStore {
       );
     const requestId = this.#nextRequestId++;
     return new Promise((resolve, reject) => {
-      const pending: Pending = { resolve, reject };
+      const pending: Pending = {
+        resolve,
+        reject,
+        incidentOnStorageFailure,
+      };
       if (timeoutMs !== null) {
         pending.timer = setTimeout(() => {
           this.#pending.delete(requestId);
+          if (pending.incidentOnStorageFailure) this.storageIncident?.report();
           reject(
             new DurableAdmissionStoreError({
-              code: "observation_unavailable",
+              code: pending.incidentOnStorageFailure
+                ? "storage_unavailable"
+                : "observation_unavailable",
               message: "storage request timed out",
             }),
           );
@@ -1294,6 +1350,13 @@ export class SqliteDurableAdmissionStore {
     this.#pending.delete(reply.requestId);
     if (pending.timer !== undefined) clearTimeout(pending.timer);
     if (reply.failure) {
+      if (
+        reply.failure.incident === true ||
+        (pending.incidentOnStorageFailure &&
+          reply.failure.code === "storage_unavailable")
+      ) {
+        this.storageIncident?.report();
+      }
       pending.reject(new DurableAdmissionStoreError(reply.failure));
     } else pending.resolve(reply.result);
   }

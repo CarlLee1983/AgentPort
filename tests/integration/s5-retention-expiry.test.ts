@@ -42,6 +42,7 @@ async function completeTask(
     },
   });
   await fixture.store.commitTerminal({
+    now: "2026-09-14T00:00:03.000Z",
     evidence: {
       platform: "linux-cgroup-v2",
       reference: preparation.reference,
@@ -349,7 +350,7 @@ describe("S5 terminal retention expiry", () => {
     try {
       await fixture.store.probe("waitForCommitBarrier");
       await expect(committing).rejects.toMatchObject({
-        code: "observation_unavailable",
+        code: "storage_unavailable",
       });
     } finally {
       await fixture.store.probe("releaseCommitBarrier");

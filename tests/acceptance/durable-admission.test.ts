@@ -252,7 +252,7 @@ describe("AP-002 durable admission through the official MCP Client", () => {
     expect(structured(timedOut)).toMatchObject({
       ok: false,
       error: {
-        code: "observation_unavailable",
+        code: "storage_unavailable",
         retryable: true,
         safeRetry: "same_operation_id",
       },

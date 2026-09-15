@@ -365,7 +365,7 @@ describe("storage responsiveness", () => {
             },
           },
         }),
-      ).rejects.toMatchObject({ code: "observation_unavailable" });
+      ).rejects.toMatchObject({ code: "storage_unavailable" });
       await fixture.store.close();
       const reopened = await SqliteDurableAdmissionStore.open({
         databasePath: join(fixture.directory, "store.sqlite"),

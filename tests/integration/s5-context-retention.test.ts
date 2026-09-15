@@ -30,6 +30,7 @@ async function completeTask(
     },
   });
   await fixture.store.commitTerminal({
+    now: "2026-09-14T00:00:03.000Z",
     evidence: {
       platform: "linux-cgroup-v2",
       reference: preparation.reference,

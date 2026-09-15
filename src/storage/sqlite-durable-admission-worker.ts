@@ -82,6 +82,7 @@ interface Failure {
     | "not_found";
   message: string;
   taskId?: string;
+  incident?: boolean;
 }
 const options = workerData as Options;
 const continuationEncryptionKey = continuationKey(
@@ -659,6 +660,9 @@ if (!auditStateColumns.has("last_gap_operation_id")) {
 // lock until the connection closes, so a second daemon cannot start concurrently.
 db.exec("BEGIN IMMEDIATE; COMMIT;");
 let failNextCommit = false;
+let failNextStorageBusy = false;
+let failNextStorageFull = false;
+let failNextStorageIo = false;
 let failNextAuditGap = false;
 let failAuditGapPermanently = false;
 initializeCapacityMetadata();
@@ -981,7 +985,7 @@ function recordAuditGap(p: Record<string, unknown>): void {
   }
   if (failAuditGapPermanently || failNextAuditGap) {
     failNextAuditGap = false;
-    throw new Error("injected product audit gap failure");
+    throwFailure("storage_unavailable", "injected product audit gap failure");
   }
   db.transaction(() => {
     const state = db
@@ -2189,6 +2193,7 @@ function commitExecutionObservation(p: Record<string, unknown>) {
       );
     }
     requirePhysicalHeadroom(physicalAdmissionBytes);
+    maybeFail();
     return { replayed: false as const };
   });
   if ("failure" in outcome) {
@@ -3460,6 +3465,24 @@ function emit(
   ).run(scope, cursor, taskId, sequence, revision, eventType, "{}", occurredAt);
 }
 function maybeFail(): void {
+  if (failNextStorageBusy) {
+    failNextStorageBusy = false;
+    const error = new Error("injected SQLite write lock");
+    Object.assign(error, { code: "SQLITE_BUSY" });
+    throw error;
+  }
+  if (failNextStorageFull) {
+    failNextStorageFull = false;
+    const error = new Error("injected physical storage full");
+    Object.assign(error, { code: "SQLITE_FULL" });
+    throw error;
+  }
+  if (failNextStorageIo) {
+    failNextStorageIo = false;
+    const error = new Error("injected physical storage I/O failure");
+    Object.assign(error, { code: "SQLITE_IOERR" });
+    throw error;
+  }
   if (failNextCommit) {
     failNextCommit = false;
     throwFailure("storage_unavailable", "injected commit failure");
@@ -3496,6 +3519,11 @@ function registryFencedTransaction<T>(
   try {
     requireRegistryRevision(expectedRevision);
     const result = operation();
+    // The deterministic commit fault applies to every registry-fenced mutation,
+    // including reserved controls such as reply. Individual operations may call
+    // this earlier to target a narrower crash window; the one-shot flag makes
+    // this final boundary a no-op in those cases.
+    maybeFail();
     waitAtTestCommitBarrier();
     acquireRegistryCommitFence();
     try {
@@ -5076,6 +5104,9 @@ parentPort?.on("message", (message: Request) => {
       };
     } else if (message.command === "probe") {
       if (p.probe === "failNextCommit") failNextCommit = true;
+      else if (p.probe === "failNextStorageBusy") failNextStorageBusy = true;
+      else if (p.probe === "failNextStorageFull") failNextStorageFull = true;
+      else if (p.probe === "failNextStorageIo") failNextStorageIo = true;
       else if (p.probe === "failNextAuditGap") failNextAuditGap = true;
       else if (p.probe === "failAuditGapPermanently")
         failAuditGapPermanently = true;
@@ -5228,12 +5259,14 @@ parentPort?.on("message", (message: Request) => {
       candidate.storageFailure ??
       (sqliteCode === "SQLITE_FULL"
         ? {
-            code: "storage_capacity" as const,
+            code: "storage_unavailable" as const,
             message: "physical storage capacity is exhausted",
+            incident: true,
           }
         : {
             code: "storage_unavailable" as const,
             message: "storage operation failed",
+            incident: true,
           });
     parentPort?.postMessage({ requestId: message.requestId, failure });
   }

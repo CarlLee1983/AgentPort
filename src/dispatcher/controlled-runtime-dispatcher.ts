@@ -87,6 +87,9 @@ export class ControlledRuntimeDispatcher {
           },
         });
       }
+      // This synchronous fence and the start call share one main-thread turn;
+      // an already-observed storage incident cannot cross the final start seam.
+      this.lifecycle.assertDispatchStartAllowed(taskId, reference);
       result = await this.supervisor.start(
         reference,
         ingress?.session,

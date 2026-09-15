@@ -1,9 +1,8 @@
 # Durable admission operations and rollback
 
-This note covers the AP-002 platform-neutral, non-dispatch development slice
-and the data-preserving AP-003 schema rollback layered on it. It is not a
-production runbook and provides no Runtime execution, Stop Evidence, Linux G1,
-AP-001 AC-09, deployment, or production-readiness claim.
+This note covers durable admission, data-preserving recovery, and the S5
+storage-incident behavior exercised by the development compositions. It is not
+a production runbook or a deployment or production-readiness claim.
 
 ## Operating boundary
 
@@ -88,6 +87,45 @@ AP-001 AC-09, deployment, or production-readiness claim.
   inconsistent or the allocation cannot be restored. This protects
   AgentPort-controlled capacity; it cannot prevent an unrelated host writer or
   administrator from deleting or exhausting the same filesystem.
+
+## Storage incident convergence
+
+- Expected configured queue, receipt, database-plus-WAL, or per-Task reserve
+  saturation rejects only the new load with its existing capacity code. It does
+  not trip the composition incident latch or evict retained data.
+- A physical SQLite full/I/O failure, control-reserve reconciliation failure,
+  commit-ambiguous mutation timeout, or unexpected storage-worker loss latches
+  the controlled composition closed. Later mutations and dispatch preparation
+  return the existing sanitized unavailable projection; the same process never
+  reopens the latch.
+- The controlled composition keeps a bounded ephemeral set of exact active
+  Execution References, limited by the configured active-execution capacity.
+  On an incident it calls the independent Supervisor's existing
+  `revokeAndStop` operation once per exact Reference. This safety set is not a
+  lifecycle store: it cannot publish terminal state, release a Workspace claim,
+  or authorize a replacement generation.
+- A failed or timed-out mutation remains commit-ambiguous. Do not infer
+  rejection or issue a different operation ID. Preserve the database, WAL,
+  shared-memory, and control-reserve files; retain Supervisor evidence; then
+  replace the controlled composition only after the filesystem and reserve are
+  healthy.
+- New-composition startup opens and validates SQLite, reconciles the physical
+  reserve, pauses queued work, recovers exact References, and reconciles them
+  with the Supervisor before exposing dispatch. It never automatically starts
+  a Task or redelivers an accepted answer. A recovered claim remains
+  quarantined until matching trusted Stop Evidence and the later durable
+  recovery acknowledgement complete.
+- During an incident, `get_task` may return only a previously committed,
+  bounded snapshot that still belongs to the current Access Scope and Agent
+  allowlist, marked `stale`. Without that evidence it returns
+  `observation_unavailable`. SQLite paths, SQL/lock details, Supervisor data,
+  exact References, and foreign-scope cached content are never projected.
+
+Operational recovery is therefore replacement, not an in-process reset: stop
+the listener, preserve evidence, repair or restore the same-filesystem durable
+artifacts, and start a new compatible composition. If storage health or
+Supervisor reconciliation is still uncertain, leave dispatch closed and the
+claims quarantined.
 
 ## Terminal retention and expiry
 
