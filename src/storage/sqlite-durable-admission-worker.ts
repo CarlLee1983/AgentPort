@@ -663,6 +663,7 @@ let failNextCommit = false;
 let failNextStorageBusy = false;
 let failNextStorageFull = false;
 let failNextStorageIo = false;
+let failNextReadDiagnostic = false;
 let failNextAuditGap = false;
 let failAuditGapPermanently = false;
 initializeCapacityMetadata();
@@ -4945,6 +4946,10 @@ parentPort?.on("message", (message: Request) => {
       result =
         r && allowed(r.agent_id, p.allowedAgentIds) ? task(r) : undefined;
     } else if (message.command === "list") {
+      if (failNextReadDiagnostic) {
+        failNextReadDiagnostic = false;
+        throw new Error("AP014-PRIVATE-DIAGNOSTIC-MARKER");
+      }
       const agentIds = authorizedAgentIds(p.allowedAgentIds);
       const currentRetentionSequence = retentionSequence(scope, agentIds, {
         ...(typeof p.agentId === "string" ? { agentId: p.agentId } : {}),
@@ -5107,6 +5112,8 @@ parentPort?.on("message", (message: Request) => {
       else if (p.probe === "failNextStorageBusy") failNextStorageBusy = true;
       else if (p.probe === "failNextStorageFull") failNextStorageFull = true;
       else if (p.probe === "failNextStorageIo") failNextStorageIo = true;
+      else if (p.probe === "failNextReadDiagnostic")
+        failNextReadDiagnostic = true;
       else if (p.probe === "failNextAuditGap") failNextAuditGap = true;
       else if (p.probe === "failAuditGapPermanently")
         failAuditGapPermanently = true;

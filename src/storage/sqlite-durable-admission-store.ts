@@ -1048,6 +1048,7 @@ export class SqliteDurableAdmissionStore {
       | "exhaustRestartEventReserve"
       | "exitClean"
       | "failNextAuditGap"
+      | "failNextReadDiagnostic"
       | "failAuditGapPermanently"
       | "failNextCommit"
       | "failNextStorageBusy"
