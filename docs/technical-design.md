@@ -198,12 +198,14 @@ resume_context 依第 5 節 preserve／明確 fresh_session 選擇處理原生�
 | instruction／HTTP body | 64 KiB／128 KiB；接受前拒絕超限 |
 | 問題／回答 | 各 32 KiB，符合問題 schema，不當作 Driver options |
 | 單 Task 公開內容 | 1 MiB；進度有界摘要，另預留問題／控制／結案空間；最終結果不完整時明示 output_limit，不假報成功 |
-| 查詢頁／回應 | 預設 50、最多 100 筆、8 MiB；不切斷單筆結果假裝完整 |
+| 查詢頁／回應 | `limit` 預設 50、最多 100，均為筆數上限而非保證筆數。terminal `agentport_list_tasks` 的 8 MiB（8,388,608 bytes，含上限）權威層是 AgentPort 產生的完整未壓縮 UTF-8 JSON-RPC response body，包含 JSON-RPC envelope、`structuredContent`、等值 JSON TextContent 及 echoed request ID 等有界 envelope 欄位，不含 HTTP headers、transfer framing、compression、TLS 或 proxy-specific encoding。若 requested/default count 超限，在 cursor 封存前選取可安全容納的完整 Task prefix，回 non-null `nextCursor`；沿 cursor 必須無重複、無遺漏取得餘項。不得切斷 summary、在較大頁 cursor 封存後才裁切、以 terminal cursor 省略項目，或為 page capacity 新增 `output_limit`。其他工具若要套用相同 wire contract，須有各自 worst-case Evidence 與核准 Story。 |
 | 終態保存 | 結案後預設 30 天，可調；未結束、paused／recovering／停止未知不因 TTL 刪除 |
 | 儲存 admission 預算 | 初值 2 GiB，另留 256 MiB 結案／控制空間；先拒絕新工作，不提早淘汰 30 天內結果 |
 | 一般去重 tombstone | 初值最多 100,000；滿時拒絕 submit／edit／resume；既有 Task 控制另有預留容量，不以 TTL 打開重跑風險 |
 
 以上為調校初值；需核算 JSON escaping、audit、DB 頁面及 WAL，不能以內容大小當磁碟上限。接受前保留問題／取消／終態空間；實體磁碟錯誤遵守第 9 節降級。
+
+terminal `agentport_list_tasks` 的 capacity selection 僅在完成目前授權後進行；既有 scope／filter／retention cursor binding、foreign `not_found`、revoked `access_denied`、工具名稱、schema、public code 與 cursor format 不變，private instruction／result 不進 capacity evidence、audit 或 log。Caller 必須把 50／100 視為 requested upper bound 並沿 `nextCursor` 取完，不可假設成功頁一定回精確筆數。此契約不需 DB、schema 或 cursor migration；若日後回滾實作而恢復精確 50／100 筆，也會重新引入超過權威上限的 AgentPort response body，必須明示接受該 operational risk。完整決策與被拒方案見 [ADR-0005](adr/0005-terminal-summary-response-capacity.md)。
 
 Context 至少保留至相關非終態與可查詢 Task 結案／到期，不沿用一小時自動遺失續接。原生 Session 是否續接仍看實際可用性；transcript 保存／刪除由管理者配置，不因清理 AgentPort 資料而刪供應商歷史。
 
