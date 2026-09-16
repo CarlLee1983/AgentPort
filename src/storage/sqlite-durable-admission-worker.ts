@@ -664,6 +664,7 @@ let failNextStorageBusy = false;
 let failNextStorageFull = false;
 let failNextStorageIo = false;
 let failNextReadDiagnostic = false;
+let nextReadDiagnosticMarker = "AP014-PRIVATE-DIAGNOSTIC-MARKER";
 let failNextAuditGap = false;
 let failAuditGapPermanently = false;
 initializeCapacityMetadata();
@@ -1042,11 +1043,27 @@ function initializeCapacityMetadata(): void {
                AND e.stop_reason='cancellation'
                AND EXISTS (SELECT 1 FROM operation_receipts o WHERE o.scope=t.scope AND o.operation_type='cancel' AND o.target_id=t.task_id)
                AND EXISTS (SELECT 1 FROM task_events ev WHERE ev.task_id=t.task_id AND ev.event_type='cancel_requested') THEN 0
-             WHEN EXISTS (SELECT 1 FROM questions q WHERE q.task_id=t.task_id AND q.state='accepted') THEN 1
+            WHEN EXISTS (
+              SELECT 1 FROM questions q
+              JOIN operation_receipts reply ON reply.scope=t.scope
+                AND reply.operation_type='reply'
+                AND reply.target_id=q.question_id
+              WHERE q.task_id=t.task_id
+                AND q.accepted_at IS NOT NULL
+                AND q.answer_fingerprint IS NOT NULL
+            ) THEN 1
              ELSE ?
            END
            OR r.control_bytes < CASE
-             WHEN EXISTS (SELECT 1 FROM questions q WHERE q.task_id=t.task_id AND q.state='accepted') THEN ?
+            WHEN EXISTS (
+              SELECT 1 FROM questions q
+              JOIN operation_receipts reply ON reply.scope=t.scope
+                AND reply.operation_type='reply'
+                AND reply.target_id=q.question_id
+              WHERE q.task_id=t.task_id
+                AND q.accepted_at IS NOT NULL
+                AND q.answer_fingerprint IS NOT NULL
+            ) THEN ?
              WHEN t.state='queued' THEN ?
              ELSE ?
            END
@@ -4948,7 +4965,7 @@ parentPort?.on("message", (message: Request) => {
     } else if (message.command === "list") {
       if (failNextReadDiagnostic) {
         failNextReadDiagnostic = false;
-        throw new Error("AP014-PRIVATE-DIAGNOSTIC-MARKER");
+        throw new Error(nextReadDiagnosticMarker);
       }
       const agentIds = authorizedAgentIds(p.allowedAgentIds);
       const currentRetentionSequence = retentionSequence(scope, agentIds, {
@@ -5112,9 +5129,13 @@ parentPort?.on("message", (message: Request) => {
       else if (p.probe === "failNextStorageBusy") failNextStorageBusy = true;
       else if (p.probe === "failNextStorageFull") failNextStorageFull = true;
       else if (p.probe === "failNextStorageIo") failNextStorageIo = true;
-      else if (p.probe === "failNextReadDiagnostic")
+      else if (p.probe === "failNextReadDiagnostic") {
+        nextReadDiagnosticMarker = "AP014-PRIVATE-DIAGNOSTIC-MARKER";
         failNextReadDiagnostic = true;
-      else if (p.probe === "failNextAuditGap") failNextAuditGap = true;
+      } else if (p.probe === "failNextAp015ReadDiagnostic") {
+        nextReadDiagnosticMarker = "AP015-PRIVATE-DIAGNOSTIC-MARKER";
+        failNextReadDiagnostic = true;
+      } else if (p.probe === "failNextAuditGap") failNextAuditGap = true;
       else if (p.probe === "failAuditGapPermanently")
         failAuditGapPermanently = true;
       else if (p.probe === "setFutureSchemaVersion")

@@ -94,8 +94,11 @@ export async function startDurableAdmissionMcpEndpoint(
     transcript,
     flushAudit: () => server.flushAudit(),
     close: async () => {
-      await server.close();
-      await handler.close();
+      try {
+        await server.close();
+      } finally {
+        await handler.close();
+      }
     },
   };
 }

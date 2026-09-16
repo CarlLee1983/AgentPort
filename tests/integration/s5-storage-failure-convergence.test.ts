@@ -140,7 +140,7 @@ describe("S5 storage-failure convergence", () => {
     const supervisor = new RecordingSupervisor();
     const incidents = new StorageIncidentCoordinator(supervisor, 4);
     const fixture = await createDurableAdmissionFixture(
-      { requestTimeoutMs: 50 },
+      { requestTimeoutMs: 200 },
       { storageIncidentSafety: incidents },
       incidents,
     );
@@ -167,7 +167,7 @@ describe("S5 storage-failure convergence", () => {
         supervisor,
       );
       await dispatcher.dispatch(running.task.taskId);
-      const blocking = fixture.store.probe("block", 200).catch(() => undefined);
+      const blocking = fixture.store.probe("block", 800).catch(() => undefined);
 
       await expect(
         dispatcher.dispatch(waiting.task.taskId),
@@ -177,10 +177,28 @@ describe("S5 storage-failure convergence", () => {
         .poll(() => supervisor.stopCalls)
         .toEqual([supervisor.startCalls[0]]);
       await blocking;
-      await new Promise((resolve) => setTimeout(resolve, 200));
-      await expect(
-        dispatcher.dispatch(waiting.task.taskId),
-      ).rejects.toMatchObject({ code: "storage_unavailable" });
+      await expect
+        .poll(
+          async () => {
+            try {
+              await fixture.store.probe("inspectDurability");
+              return true;
+            } catch {
+              return false;
+            }
+          },
+          { interval: 100, timeout: 5000 },
+        )
+        .toBe(true);
+      const retryError: unknown = await dispatcher
+        .dispatch(waiting.task.taskId)
+        .then(
+          () => undefined,
+          (error: unknown) => error,
+        );
+      expect(retryError).toMatchObject({
+        code: "storage_unavailable",
+      });
       expect(supervisor.startCalls).toHaveLength(1);
     } finally {
       await fixture.close();

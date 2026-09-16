@@ -7,7 +7,240 @@ import { createDurableAdmissionFixture } from "../fixtures/durable-admission.js"
 
 const ACTOR = { principalId: "principal-a" };
 
+async function revokeBeforeCommit(
+  fixture: Awaited<ReturnType<typeof createDurableAdmissionFixture>>,
+  pending: Promise<unknown>,
+): Promise<void> {
+  await fixture.store.probe("waitForCommitBarrier");
+  const replacement = fixture.registry.replace({
+    ...fixture.registryConfiguration,
+    principals: fixture.registryConfiguration.principals.map((principal) =>
+      principal.principalId === ACTOR.principalId
+        ? { ...principal, active: false }
+        : principal,
+    ),
+  });
+  await fixture.store.probe("waitForRegistryRevision", 2);
+  await fixture.store.probe("releaseCommitBarrier");
+  await expect(pending).rejects.toMatchObject({
+    code: "storage_unavailable",
+    retryable: true,
+  });
+  await replacement;
+}
+
 describe("Registry revision fence", () => {
+  it("rolls back an in-flight edit and leaves no receipt after membership revocation", async () => {
+    const fixture = await createDurableAdmissionFixture();
+    try {
+      const submitted = await fixture.service.submitTask(ACTOR, {
+        operationId: "edit-revocation-submit",
+        agentId: "agent-a",
+        instruction: "original instruction",
+      });
+      const input = {
+        operationId: "edit-revocation-race",
+        taskId: submitted.task.taskId,
+        expectedRevision: submitted.task.revision,
+        instruction: "must not commit after revocation",
+      };
+      await fixture.store.probe("armCommitBarrier");
+      const pending = fixture.service.editTask(ACTOR, input);
+      await revokeBeforeCommit(fixture, pending);
+      await expect(
+        fixture.store.getTask({
+          accessScopeId: "scope-a",
+          allowedAgentIds: ["agent-a"],
+          taskId: submitted.task.taskId,
+        }),
+      ).resolves.toMatchObject({
+        revision: submitted.task.revision,
+        instruction: "original instruction",
+      });
+      await fixture.registry.replace(fixture.registryConfiguration);
+      await expect(
+        fixture.service.editTask(ACTOR, input),
+      ).resolves.toMatchObject({
+        replayed: false,
+        task: { revision: submitted.task.revision + 1 },
+      });
+    } finally {
+      await fixture.store.probe("releaseCommitBarrier").catch(() => undefined);
+      await fixture.close();
+    }
+  });
+
+  it("rolls back an in-flight first answer and leaves no receipt after membership revocation", async () => {
+    const fixture = await createDurableAdmissionFixture();
+    try {
+      const submitted = await fixture.service.submitTask(ACTOR, {
+        operationId: "reply-revocation-submit",
+        agentId: "agent-a",
+        instruction: "Ask for one answer",
+      });
+      const { reference } = await fixture.service.prepareForDispatch(
+        submitted.task.taskId,
+        "reply-revocation-epoch",
+      );
+      await fixture.service.markExecutionRunning(reference);
+      await fixture.store.persistQuestionObservation({
+        reference,
+        questionId: "reply-revocation-question",
+        toolUseId: "reply-revocation-tool",
+        requestId: "reply-revocation-request",
+        ordinal: 1,
+        toolActivity: "none",
+        activeElapsedMs: 0,
+        schema: [
+          {
+            question: "Choose a color",
+            header: "Color",
+            options: [
+              { label: "Blue", description: "Use blue" },
+              { label: "Red", description: "Use red" },
+            ],
+            multiSelect: false,
+          },
+        ],
+        expiresAt: "2026-09-15T00:00:00.000Z",
+        now: "2026-09-14T00:00:00.000Z",
+      });
+      const input = {
+        operationId: "reply-revocation-race",
+        taskId: submitted.task.taskId,
+        questionId: "reply-revocation-question",
+        answer: { "Choose a color": "Blue" },
+      };
+      await fixture.store.probe("armCommitBarrier");
+      const pending = fixture.service.reply(ACTOR, input);
+      await revokeBeforeCommit(fixture, pending);
+      await expect(
+        fixture.store.getTaskProjection({
+          accessScopeId: "scope-a",
+          allowedAgentIds: ["agent-a"],
+          taskId: submitted.task.taskId,
+        }),
+      ).resolves.toMatchObject({
+        question: { state: "pending", answer: null },
+      });
+      await fixture.registry.replace(fixture.registryConfiguration);
+      await expect(fixture.service.reply(ACTOR, input)).resolves.toMatchObject({
+        replayed: false,
+        task: { question: { state: "accepted" } },
+      });
+    } finally {
+      await fixture.store.probe("releaseCommitBarrier").catch(() => undefined);
+      await fixture.close();
+    }
+  });
+
+  it("rolls back an in-flight Context resume and leaves its blocker intact after membership revocation", async () => {
+    const fixture = await createDurableAdmissionFixture();
+    try {
+      const predecessor = await fixture.service.submitTask(ACTOR, {
+        operationId: "resume-revocation-predecessor",
+        agentId: "agent-a",
+        instruction: "Cancel before a follow-up",
+      });
+      const successor = await fixture.service.submitTask(ACTOR, {
+        operationId: "resume-revocation-successor",
+        agentId: "agent-a",
+        contextId: predecessor.task.contextId,
+        instruction: "Do not unblock under revoked membership",
+      });
+      await fixture.service.cancelTask(ACTOR, {
+        operationId: "resume-revocation-cancel",
+        taskId: predecessor.task.taskId,
+      });
+      const blocked = await fixture.service.getTask(ACTOR, {
+        taskId: successor.task.taskId,
+      });
+      expect(blocked).toMatchObject({ state: "paused", blocker: {} });
+      const input = {
+        operationId: "resume-revocation-race",
+        contextId: predecessor.task.contextId,
+        expectedRevision: blocked.contextRevision,
+        continuationMode: "fresh_session" as const,
+        contextSummary: "Explicitly resume after the canceled predecessor",
+      };
+      await fixture.store.probe("armCommitBarrier");
+      const pending = fixture.service.resumeContext(ACTOR, input);
+      await revokeBeforeCommit(fixture, pending);
+      await expect(
+        fixture.store.getTask({
+          accessScopeId: "scope-a",
+          allowedAgentIds: ["agent-a"],
+          taskId: successor.task.taskId,
+        }),
+      ).resolves.toMatchObject({ state: "paused", blocker: {} });
+      await fixture.registry.replace(fixture.registryConfiguration);
+      await expect(
+        fixture.service.resumeContext(ACTOR, input),
+      ).resolves.toMatchObject({
+        replayed: false,
+        task: { state: "queued", blocker: null },
+      });
+    } finally {
+      await fixture.store.probe("releaseCommitBarrier").catch(() => undefined);
+      await fixture.close();
+    }
+  });
+
+  it("rolls back an in-flight interruption acknowledgement after membership revocation", async () => {
+    const fixture = await createDurableAdmissionFixture();
+    try {
+      const submitted = await fixture.service.submitTask(ACTOR, {
+        operationId: "ack-revocation-submit",
+        agentId: "agent-revokable",
+        instruction: "Recover before acknowledgement",
+      });
+      const { reference } = await fixture.service.prepareForDispatch(
+        submitted.task.taskId,
+        "ack-revocation-epoch",
+      );
+      await fixture.service.markExecutionRunning(reference);
+      await fixture.store.recoverExecutions();
+      const recovering = await fixture.service.getTask(ACTOR, {
+        taskId: submitted.task.taskId,
+      });
+      expect(recovering).toMatchObject({ state: "recovering" });
+      await fixture.store.confirmRecoveryStopped({
+        evidence: {
+          platform: "linux-cgroup-v2",
+          reference,
+          executionUnitId: "ack-revocation-unit",
+          generationSealedAt: "2026-09-14T00:00:01.000Z",
+          unitEmptyObservedAt: "2026-09-14T00:00:02.000Z",
+        },
+        now: "2026-09-14T00:00:03.000Z",
+      });
+      const input = {
+        operationId: "ack-revocation-race",
+        taskId: submitted.task.taskId,
+        expectedRevision: recovering.revision,
+      };
+      await fixture.store.probe("armCommitBarrier");
+      const pending = fixture.service.acknowledgeInterruption(ACTOR, input);
+      await revokeBeforeCommit(fixture, pending);
+      await expect(
+        fixture.store.getTask({
+          accessScopeId: "scope-a",
+          allowedAgentIds: ["agent-revokable"],
+          taskId: submitted.task.taskId,
+        }),
+      ).resolves.toMatchObject({ state: "recovering" });
+      await fixture.registry.replace(fixture.registryConfiguration);
+      await expect(
+        fixture.service.acknowledgeInterruption(ACTOR, input),
+      ).resolves.toMatchObject({
+        replayed: false,
+        task: { state: "interrupted" },
+      });
+    } finally {
+      await fixture.store.probe("releaseCommitBarrier").catch(() => undefined);
+      await fixture.close();
+    }
+  });
   it("fences a replayed submit before returning its receipt after membership revocation", async () => {
     const fixture = await createDurableAdmissionFixture();
     const input = {
