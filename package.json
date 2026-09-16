@@ -17,6 +17,7 @@
     "test": "vitest run --exclude tests/observation-load.test.ts --exclude tests/control-load.test.ts",
     "test:observation-load": "vitest run tests/observation-load.test.ts --testTimeout 60000",
     "test:serialized-load": "vitest run tests/acceptance/s5-mcp-serialized-observation-load.test.ts --testTimeout 60000",
+    "test:terminal-summary-capacity": "vitest run tests/acceptance/s5-mcp-terminal-summary-capacity.test.ts --testTimeout 120000",
     "test:control-load": "vitest run tests/integration/s5-outer-control-load.test.ts tests/integration/s5-control-storage-pressure.test.ts tests/acceptance/s5-outer-mcp-control-load.test.ts tests/control-load.test.ts --testTimeout 60000",
     "test:mcp": "vitest run tests/mcp-compatibility.test.ts tests/acceptance/durable-admission.test.ts tests/acceptance/authorization.test.ts tests/acceptance/product-audit.test.ts tests/acceptance/s5-storage-failure-mcp.test.ts tests/acceptance/s5-mcp-authorization-matrix.test.ts tests/acceptance/s5-outer-mcp-observation-load.test.ts tests/acceptance/s5-outer-mcp-control-load.test.ts",
     "test:linux": "node scripts/require-g1-linux.mjs && vitest run --no-file-parallelism tests/linux tests/contracts/linux-stop-evidence.test.ts tests/contracts/runtime-worker-ipc.test.ts tests/contracts/g1-no-production-dispatch.test.ts",

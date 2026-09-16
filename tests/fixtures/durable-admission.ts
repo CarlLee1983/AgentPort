@@ -58,6 +58,7 @@ export async function createDurableAdmissionFixture(
     ServiceOptions,
     | "now"
     | "monotonicNow"
+    | "newId"
     | "snapshotCacheEntries"
     | "stopRequester"
     | "stopEvidenceVerifier"
