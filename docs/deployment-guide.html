@@ -1,0 +1,683 @@
+<!DOCTYPE html>
+<html lang="zh-TW">
+<head>
+  <meta charset="UTF-8">
+  <meta name="viewport" content="width=device-width, initial-scale=1.0">
+  <title>AgentPort 完整部署與運維手冊</title>
+  <link rel="preconnect" href="https://fonts.googleapis.com">
+  <link rel="preconnect" href="https://fonts.gstatic.com" crossorigin>
+  <link href="https://fonts.googleapis.com/css2?family=Fira+Code:wght@400;500;600&family=Inter:wght@400;500;600;700&display=swap" rel="stylesheet">
+  <style>
+    :root {
+      --bg-primary: #0d1117;
+      --bg-secondary: #161b22;
+      --bg-tertiary: #21262d;
+      --border-color: #30363d;
+      --text-main: #c9d1d9;
+      --text-bright: #f0f6fc;
+      --text-muted: #8b949e;
+      --accent: #58a6ff;
+      --accent-hover: #79c0ff;
+      --accent-dim: rgba(56, 139, 253, 0.15);
+      --success: #3fb950;
+      --warning: #d29922;
+      --danger: #f85149;
+      --code-bg: #11141a;
+    }
+
+    * {
+      box-sizing: border-box;
+      margin: 0;
+      padding: 0;
+    }
+
+    body {
+      font-family: 'Inter', -apple-system, BlinkMacSystemFont, "Segoe UI", Roboto, Helvetica, Arial, sans-serif;
+      background-color: var(--bg-primary);
+      color: var(--text-main);
+      line-height: 1.65;
+      font-size: 15px;
+      display: flex;
+    }
+
+    /* Sidebar Navigation */
+    .sidebar {
+      width: 280px;
+      height: 100vh;
+      position: sticky;
+      top: 0;
+      background-color: var(--bg-secondary);
+      border-right: 1px solid var(--border-color);
+      padding: 2rem 1.5rem;
+      overflow-y: auto;
+      flex-shrink: 0;
+    }
+
+    .sidebar-title {
+      font-size: 1.15rem;
+      font-weight: 700;
+      color: var(--text-bright);
+      margin-bottom: 0.25rem;
+      display: flex;
+      align-items: center;
+      gap: 0.5rem;
+    }
+
+    .badge {
+      font-size: 0.7rem;
+      font-weight: 600;
+      background: var(--accent-dim);
+      color: var(--accent);
+      padding: 0.15rem 0.4rem;
+      border-radius: 4px;
+      border: 1px solid rgba(56, 139, 253, 0.3);
+    }
+
+    .sidebar-desc {
+      font-size: 0.8rem;
+      color: var(--text-muted);
+      margin-bottom: 1.5rem;
+      padding-bottom: 1rem;
+      border-bottom: 1px solid var(--border-color);
+    }
+
+    .nav-list {
+      list-style: none;
+      display: flex;
+      flex-direction: column;
+      gap: 0.25rem;
+    }
+
+    .nav-list a {
+      color: var(--text-muted);
+      text-decoration: none;
+      font-size: 0.85rem;
+      padding: 0.45rem 0.65rem;
+      border-radius: 6px;
+      transition: all 0.15s ease;
+      display: block;
+    }
+
+    .nav-list a:hover {
+      color: var(--text-bright);
+      background-color: var(--bg-tertiary);
+    }
+
+    /* Main Content */
+    .content {
+      flex: 1;
+      max-width: 960px;
+      margin: 0 auto;
+      padding: 3rem 4rem;
+    }
+
+    h1, h2, h3, h4 {
+      color: var(--text-bright);
+      font-weight: 600;
+      margin-top: 2rem;
+      margin-bottom: 1rem;
+      scroll-margin-top: 2rem;
+    }
+
+    h1 {
+      font-size: 2.25rem;
+      border-bottom: 1px solid var(--border-color);
+      padding-bottom: 0.75rem;
+      margin-top: 0;
+    }
+
+    h2 {
+      font-size: 1.5rem;
+      border-bottom: 1px solid rgba(48, 54, 61, 0.6);
+      padding-bottom: 0.5rem;
+      margin-top: 2.5rem;
+    }
+
+    h3 {
+      font-size: 1.15rem;
+    }
+
+    p {
+      margin-bottom: 1.2rem;
+    }
+
+    ul, ol {
+      margin-bottom: 1.2rem;
+      padding-left: 1.5rem;
+    }
+
+    li {
+      margin-bottom: 0.4rem;
+    }
+
+    /* Callout Card */
+    .alert-box {
+      background: var(--bg-secondary);
+      border: 1px solid var(--border-color);
+      border-left: 4px solid var(--accent);
+      border-radius: 6px;
+      padding: 1rem 1.25rem;
+      margin: 1.5rem 0;
+    }
+
+    .alert-box.warning {
+      border-left-color: var(--warning);
+    }
+
+    .alert-title {
+      font-weight: 600;
+      color: var(--text-bright);
+      margin-bottom: 0.4rem;
+      display: flex;
+      align-items: center;
+      gap: 0.4rem;
+    }
+
+    /* Tables */
+    table {
+      width: 100%;
+      border-collapse: collapse;
+      margin: 1.5rem 0;
+      background: var(--bg-secondary);
+      border-radius: 8px;
+      overflow: hidden;
+      border: 1px solid var(--border-color);
+    }
+
+    th, td {
+      padding: 0.85rem 1rem;
+      text-align: left;
+      border-bottom: 1px solid var(--border-color);
+      font-size: 0.9rem;
+    }
+
+    th {
+      background: var(--bg-tertiary);
+      color: var(--text-bright);
+      font-weight: 600;
+    }
+
+    tr:last-child td {
+      border-bottom: none;
+    }
+
+    /* Code & Pre */
+    code {
+      font-family: 'Fira Code', monospace;
+      font-size: 0.85em;
+      background: var(--bg-tertiary);
+      color: var(--accent-hover);
+      padding: 0.2em 0.4em;
+      border-radius: 4px;
+      border: 1px solid rgba(255, 255, 255, 0.05);
+    }
+
+    pre {
+      background-color: var(--code-bg);
+      border: 1px solid var(--border-color);
+      border-radius: 8px;
+      padding: 1rem 1.25rem;
+      margin: 1rem 0 1.5rem 0;
+      overflow-x: auto;
+      font-size: 0.88rem;
+    }
+
+    pre code {
+      background: transparent;
+      padding: 0;
+      border: none;
+      color: #e6edf3;
+      font-family: 'Fira Code', monospace;
+      line-height: 1.5;
+    }
+
+    .ascii-diagram {
+      font-family: 'Fira Code', monospace;
+      line-height: 1.2;
+      color: #7ee787;
+      background: #090d12;
+      border-left: 3px solid #238636;
+    }
+
+    /* Copy Button */
+    .code-container {
+      position: relative;
+    }
+
+    .copy-btn {
+      position: absolute;
+      top: 0.5rem;
+      right: 0.5rem;
+      background: var(--bg-tertiary);
+      border: 1px solid var(--border-color);
+      color: var(--text-muted);
+      padding: 0.25rem 0.55rem;
+      border-radius: 4px;
+      font-size: 0.75rem;
+      cursor: pointer;
+      transition: all 0.2s;
+    }
+
+    .copy-btn:hover {
+      color: var(--text-bright);
+      background: #30363d;
+    }
+
+    /* Footer */
+    footer {
+      margin-top: 4rem;
+      padding-top: 1.5rem;
+      border-top: 1px solid var(--border-color);
+      font-size: 0.85rem;
+      color: var(--text-muted);
+      display: flex;
+      justify-content: space-between;
+    }
+  </style>
+</head>
+<body>
+
+  <!-- Navigation Sidebar -->
+  <aside class="sidebar">
+    <div class="sidebar-title">
+      AgentPort
+      <span class="badge">v0.1</span>
+    </div>
+    <div class="sidebar-desc">部署與系統運維手冊</div>
+    <ul class="nav-list">
+      <li><a href="#architecture">1. 系統架構與拓撲</a></li>
+      <li><a href="#prerequisites">2. 環境與系統需求</a></li>
+      <li><a href="#host-setup">3. Linux 主機前置設定</a></li>
+      <li><a href="#configuration">4. 設定檔配置</a></li>
+      <li><a href="#preflight">5. 部署前環境預檢</a></li>
+      <li><a href="#systemd">6. Systemd 服務管理</a></li>
+      <li><a href="#proxy">7. 反向代理與 TLS</a></li>
+      <li><a href="#mcp-client">8. MCP Client 串接</a></li>
+      <li><a href="#maintenance">9. 備份與災害復原</a></li>
+    </ul>
+  </aside>
+
+  <!-- Main Documentation -->
+  <main class="content">
+    <h1>AgentPort 完整部署與運維手冊</h1>
+    <p>本手冊涵蓋 AgentPort v0.1 的正式生產部署架構、Linux 帳號權限隔離、多專案配置、自動預檢以及日常備份復原實務。</p>
+
+    <!-- Section 1 -->
+    <h2 id="architecture">1. 系統架構與拓撲規範</h2>
+    <p>AgentPort 嚴格採用 <strong>三權分立（Separation of Privilege）</strong> 架構，防止 AI Worker 越權取得主機資料庫或逃逸出所屬工作區：</p>
+
+    <div class="code-container">
+      <pre class="ascii-diagram"><code>┌────────────────────────────────────────────────────────┐
+│                   External MCP Caller                  │
+│       (Claude Desktop, Cursor, Automated Scripts)      │
+└───────────────────────────┬────────────────────────────┘
+                            │ HTTPS (TLS + Bearer Token)
+                            ▼
+┌────────────────────────────────────────────────────────┐
+│                   Reverse TLS Proxy                    │
+│                 (Nginx / Caddy / Envoy)                │
+└───────────────────────────┬────────────────────────────┘
+                            │ Forward to 127.0.0.1 (Loopback)
+                            ▼
+┌────────────────────────────────────────────────────────┐
+│               AgentPort Daemon Process                 │
+│                 (User: agentport-daemon)               │
+│  - MCP Adapter (Streamable HTTP / JSON-RPC)            │
+│  - AgentExecutionService (Invariants & Fencing)        │
+│  - SQLite WAL Store (/var/lib/agentport/store.db)      │
+└──────────────┬──────────────────────────┬──────────────┘
+               │                          │
+      IPC      ▼                          ▼  Dedicated Worker
+┌──────────────────────────┐   ┌─────────────────────────┐
+│   Root Launcher Daemon   │   │  Storage Incident Sync  │
+│      (User: root)        │   │    & Capacity Reserve   │
+│  - cgroup v2 controller  │   └─────────────────────────┘
+│  - StopEvidence verifier │
+└──────────────┬───────────┘
+               │ Fork / Drop Privileges
+               ▼
+┌────────────────────────────────────────────────────────┐
+│               Isolated Runtime Worker                  │
+│                (User: agentport-runtime)               │
+│  - Claude Code CLI / Agent SDK                         │
+│  - Restricted Workspace (/var/agentport/workspaces/..) │
+└────────────────────────────────────────────────────────┘</code></pre>
+    </div>
+
+    <h3>三大角色權限職責</h3>
+    <table>
+      <thead>
+        <tr>
+          <th>身份主體</th>
+          <th>系統帳號</th>
+          <th>擁有權限與職責</th>
+          <th>安全限制（嚴格禁止）</th>
+        </tr>
+      </thead>
+      <tbody>
+        <tr>
+          <td><strong>Root Launcher</strong></td>
+          <td><code>root</code> (uid 0)</td>
+          <td>管理 cgroup v2、設定資源配額、啟動/終止進程樹、簽發 Stop Evidence。</td>
+          <td>不對外暴露網路請求，僅監聽受保護的本機 UNIX Socket。</td>
+        </tr>
+        <tr>
+          <td><strong>Daemon Service</strong></td>
+          <td><code>agentport-daemon</code></td>
+          <td>執行 MCP Adapter、核心狀態機、獨占 SQLite 交易讀寫。</td>
+          <td>無 root 權限，無法直接繞過 Launcher 操作進程或 cgroup。</td>
+        </tr>
+        <tr>
+          <td><strong>Runtime Worker</strong></td>
+          <td><code>agentport-runtime</code></td>
+          <td>在指定 Workspace 內執行 Claude Code CLI 與代碼修改/測試。</td>
+          <td><strong>嚴禁</strong>存取 SQLite 資料庫、WAL 檔、Launcher Socket 與審計記錄。</td>
+        </tr>
+      </tbody>
+    </table>
+
+    <!-- Section 2 -->
+    <h2 id="prerequisites">2. 環境與系統需求</h2>
+    <ul>
+      <li><strong>生產環境 OS</strong>：Linux（Kernel 5.8+，支援 cgroup v2 與 systemd）。</li>
+      <li><strong>Node.js</strong>：<code>24.21.0</code>（嚴格鎖定版號，確保內嵌 SQLite 與 MCP SDK 穩定）。</li>
+      <li><strong>套件管理工具</strong>：<code>pnpm 12.4.1</code>。</li>
+      <li><strong>本地資料庫</strong>：SQLite 3.51.3+（包含 WAL 修正版本）。</li>
+      <li><strong>底層 Runtime</strong>：已安裝並授權的 Claude Code CLI / Agent SDK。</li>
+    </ul>
+
+    <!-- Section 3 -->
+    <h2 id="host-setup">3. Linux 主機前置設定</h2>
+
+    <h3>3.1 建立系統專用帳號與群組</h3>
+    <div class="code-container">
+      <pre><code># 1. 建立 Launcher 通訊群組
+sudo groupadd -r agentport-launcher
+
+# 2. 建立 Daemon 服務帳號（加入 launcher 群組）
+sudo useradd -r -s /usr/sbin/nologin -g agentport-launcher -M agentport-daemon
+
+# 3. 建立 Runtime 沙盒帳號（完全隔離）
+sudo useradd -r -s /bin/bash -m -d /home/agentport-runtime agentport-runtime</code></pre>
+    </div>
+
+    <h3>3.2 目錄與權限規劃</h3>
+    <div class="code-container">
+      <pre><code># 配置檔目錄 (root 專用)
+sudo mkdir -p /etc/agentport
+sudo chmod 700 /etc/agentport
+
+# 資料庫持久化目錄 (daemon 專用)
+sudo mkdir -p /var/lib/agentport
+sudo chown -R agentport-daemon:agentport-launcher /var/lib/agentport
+sudo chmod 700 /var/lib/agentport
+
+# Supervisor Ledger 帳本目錄 (root 專用)
+sudo mkdir -p /var/lib/agentport/ledger
+sudo chown -R root:root /var/lib/agentport/ledger
+sudo chmod 700 /var/lib/agentport/ledger
+
+# Worker Ingress 通訊目錄 (root 擁有，runtime 可讀)
+sudo mkdir -p /run/agentport/ingress
+sudo chown root:agentport-runtime /run/agentport/ingress
+sudo chmod 750 /run/agentport/ingress
+
+# 多專案工作區目錄根路徑
+sudo mkdir -p /var/agentport/workspaces
+sudo chown -R agentport-runtime:agentport-runtime /var/agentport/workspaces
+sudo chmod 750 /var/agentport/workspaces</code></pre>
+    </div>
+
+    <!-- Section 4 -->
+    <h2 id="configuration">4. 設定檔配置</h2>
+
+    <h3>4.1 Root Launcher 設定 (<code>/etc/agentport/launcher.json</code>)</h3>
+    <p>定義 cgroup v2 資源配額與各專案的隔離 Profile（權限必須為 <code>0600</code>）：</p>
+    <div class="code-container">
+      <pre><code>{
+  "socketPath": "/run/agentport/launcher.sock",
+  "socketGroup": "agentport-launcher",
+  "ledgerDirectory": "/var/lib/agentport/ledger",
+  "workspaceRoot": "/var/agentport/workspaces",
+  "runtimeUser": "agentport-runtime",
+  "runtimeGroup": "agentport-runtime",
+  "runtimeHome": "/home/agentport-runtime",
+  "nodeExecutable": "/usr/bin/node",
+  "profiles": {
+    "profile-project-a": {
+      "workspaceIdentity": "ws-project-a",
+      "workspacePath": "/var/agentport/workspaces/project-a",
+      "workerEntrypoint": "/opt/agentport/dist/src/runtime/worker/entrypoint.js",
+      "workerArguments": [],
+      "memoryMaxBytes": 4294967296,
+      "tasksMax": 512,
+      "cpuQuotaPercent": 200
+    },
+    "profile-project-b": {
+      "workspaceIdentity": "ws-project-b",
+      "workspacePath": "/var/agentport/workspaces/project-b",
+      "workerEntrypoint": "/opt/agentport/dist/src/runtime/worker/entrypoint.js",
+      "workerArguments": [],
+      "memoryMaxBytes": 4294967296,
+      "tasksMax": 512,
+      "cpuQuotaPercent": 200
+    }
+  },
+  "commandTimeoutMilliseconds": 30000,
+  "stopTimeoutMilliseconds": 15000
+}</code></pre>
+    </div>
+
+    <h3>4.2 Agent Registry 設定 (<code>/etc/agentport/registry.json</code>)</h3>
+    <p>定義呼叫端認證 Token、權限範圍以及多專案 Logical Agent 的映射：</p>
+    <div class="code-container">
+      <pre><code>{
+  "credentials": {
+    "sk_live_agentport_secure_bearer_token_abc123": "caller-operator"
+  },
+  "principals": [
+    {
+      "principalId": "caller-operator",
+      "accessScopeId": "scope-default",
+      "active": true,
+      "allowedAgentIds": ["project-a-agent", "project-b-agent"]
+    }
+  ],
+  "agents": [
+    {
+      "agentId": "project-a-agent",
+      "description": "前端專案 A (Web App)",
+      "workspacePath": "/var/agentport/workspaces/project-a",
+      "configurationRevision": "v1",
+      "runtimeDriver": "claude-code",
+      "runtimeVersion": "0.3.269",
+      "launchProfileId": "profile-project-a",
+      "policy": {
+        "maximumExecutionLimitSeconds": 3600,
+        "maximumInputWaitSeconds": 86400
+      }
+    },
+    {
+      "agentId": "project-b-agent",
+      "description": "後端專案 B (API Service)",
+      "workspacePath": "/var/agentport/workspaces/project-b",
+      "configurationRevision": "v1",
+      "runtimeDriver": "claude-code",
+      "runtimeVersion": "0.3.269",
+      "launchProfileId": "profile-project-b",
+      "policy": {
+        "maximumExecutionLimitSeconds": 3600,
+        "maximumInputWaitSeconds": 86400
+      }
+    }
+  ]
+}</code></pre>
+    </div>
+
+    <!-- Section 5 -->
+    <h2 id="preflight">5. 部署前環境預檢 (Preflight Check)</h2>
+    <p>在啟動服務前，透過內建預檢指令驗證路徑與隔離：</p>
+    <div class="code-container">
+      <pre><code>cd /opt/agentport
+pnpm run build
+
+sudo node dist/src/operations/linux-preflight-main.js \
+  /etc/agentport/launcher.json \
+  agentport-daemon \
+  /var/lib/agentport/store.db \
+  /run/agentport/ingress</code></pre>
+    </div>
+
+    <div class="alert-box">
+      <div class="alert-title">預期合格輸出</div>
+      <p>必須回傳 <code>"status": "preparation_valid"</code> 且結束碼為 0：</p>
+      <pre><code>{"status":"preparation_valid","dispatchEligible":false,"checks":[{"code":"configuration_fields","outcome":"pass"},{"code":"platform_supported","outcome":"pass"},{"code":"daemon_account_isolated","outcome":"pass"},{"code":"database_path_isolated","outcome":"pass"},{"code":"ingress_permissions_valid","outcome":"pass"}]}</code></pre>
+    </div>
+
+    <!-- Section 6 -->
+    <h2 id="systemd">6. Systemd 服務管理配置</h2>
+
+    <h3>6.1 <code>/etc/systemd/system/agentport-launcher.service</code></h3>
+    <div class="code-container">
+      <pre><code>[Unit]
+Description=AgentPort Root Execution Launcher
+Before=agentport.service
+
+[Service]
+Type=simple
+User=root
+Group=root
+ExecStart=/usr/bin/node /opt/agentport/dist/src/supervisor/linux/launcher-main.js /etc/agentport/launcher.json
+Restart=always
+RestartSec=3
+KillMode=process
+
+[Install]
+WantedBy=multi-user.target</code></pre>
+    </div>
+
+    <h3>6.2 <code>/etc/systemd/system/agentport.service</code></h3>
+    <div class="code-container">
+      <pre><code>[Unit]
+Description=AgentPort MCP Daemon Service
+After=network.target agentport-launcher.service
+Requires=agentport-launcher.service
+
+[Service]
+Type=simple
+User=agentport-daemon
+Group=agentport-launcher
+WorkingDirectory=/opt/agentport
+Environment=NODE_ENV=production
+Environment=AGENTPORT_DB=/var/lib/agentport/store.db
+Environment=AGENTPORT_REGISTRY=/etc/agentport/registry.json
+Environment=AGENTPORT_PORT=3333
+ExecStart=/usr/bin/node /opt/agentport/dist/src/mcp/loopback-server.js
+Restart=always
+RestartSec=5
+LimitNOFILE=65536
+
+[Install]
+WantedBy=multi-user.target</code></pre>
+    </div>
+
+    <div class="code-container">
+      <pre><code># 啟用並啟動服務
+sudo systemctl daemon-reload
+sudo systemctl enable --now agentport-launcher.service
+sudo systemctl enable --now agentport.service</code></pre>
+    </div>
+
+    <!-- Section 7 -->
+    <h2 id="proxy">7. 反向代理與 TLS 設定 (Nginx)</h2>
+    <p>AgentPort MCP 僅監聽本機 <code>127.0.0.1:3333</code>。請透過 Nginx 封裝 TLS 與轉送 Bearer Token：</p>
+    <div class="code-container">
+      <pre><code>server {
+    listen 443 ssl http2;
+    server_name agentport.internal.yourcompany.com;
+
+    ssl_certificate /etc/ssl/certs/agentport.crt;
+    ssl_certificate_key /etc/ssl/private/agentport.key;
+
+    client_max_body_size 16M;
+
+    location /mcp {
+        proxy_pass http://127.0.0.1:3333;
+        proxy_http_version 1.1;
+
+        proxy_set_header Host $host;
+        proxy_set_header X-Real-IP $remote_addr;
+        proxy_set_header X-Forwarded-For $proxy_add_x_forwarded_for;
+        proxy_set_header X-Forwarded-Proto $scheme;
+        proxy_set_header Authorization $http_authorization;
+
+        proxy_buffering off;
+        proxy_read_timeout 300s;
+    }
+}</code></pre>
+    </div>
+
+    <!-- Section 8 -->
+    <h2 id="mcp-client">8. MCP Client 串接</h2>
+    <p>在 Claude Desktop <code>claude_desktop_config.json</code> 中設定連線：</p>
+    <div class="code-container">
+      <pre><code>{
+  "mcpServers": {
+    "agentport": {
+      "url": "https://agentport.internal.yourcompany.com/mcp",
+      "headers": {
+        "Authorization": "Bearer sk_live_agentport_secure_bearer_token_abc123"
+      }
+    }
+  }
+}</code></pre>
+    </div>
+
+    <!-- Section 9 -->
+    <h2 id="maintenance">9. 備份與災害復原</h2>
+
+    <h3>9.1 線上安全備份 (SQLite Online Backup)</h3>
+    <div class="code-container">
+      <pre><code>sudo -u agentport-daemon sqlite3 /var/lib/agentport/store.db \
+  ".backup '/var/backups/agentport/store-$(date +%Y%m%d%H%M%S).db'"</code></pre>
+    </div>
+
+    <h3>9.2 離線復原步驟</h3>
+    <ol>
+      <li>停止服務：<code>sudo systemctl stop agentport.service</code></li>
+      <li>復原備份檔案並清除舊 WAL/SHM 緩衝檔：
+        <div class="code-container">
+          <pre><code>sudo cp /var/backups/agentport/store-20260917.db /var/lib/agentport/store.db
+sudo rm -f /var/lib/agentport/store.db-wal /var/lib/agentport/store.db-shm
+sudo chown agentport-daemon:agentport-launcher /var/lib/agentport/store.db
+sudo chmod 600 /var/lib/agentport/store.db</code></pre>
+        </div>
+      </li>
+      <li>重新啟動服務：<code>sudo systemctl start agentport.service</code>。重啟後系統將自動審計未結案任務並轉為安全暫停（Paused）狀態，不進行盲目重跑。</li>
+    </ol>
+
+    <footer>
+      <div>AgentPort Documentation &bull; v0.1</div>
+      <div>Generated: 2026-09-17</div>
+    </footer>
+  </main>
+
+  <script>
+    // Simple Copy Code Snippet Handler
+    document.querySelectorAll('.code-container').forEach(container => {
+      const pre = container.querySelector('pre');
+      if (!pre) return;
+      const btn = document.createElement('button');
+      btn.className = 'copy-btn';
+      btn.textContent = '複製';
+      btn.addEventListener('click', () => {
+        navigator.clipboard.writeText(pre.innerText).then(() => {
+          btn.textContent = '已複製!';
+          setTimeout(() => { btn.textContent = '複製'; }, 2000);
+        });
+      });
+      container.appendChild(btn);
+    });
+  </script>
+</body>
+</html>
