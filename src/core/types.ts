@@ -220,6 +220,11 @@ export interface TaskPage {
   nextCursor: string | null;
 }
 
+/** Internal selection seam for a response-specific capacity contract. */
+export interface TaskPageSelection {
+  fits(page: TaskPage): boolean;
+}
+
 export interface EventPage {
   events: TaskEvent[];
   nextCursor: string | null;
@@ -334,7 +339,11 @@ export interface AgentExecutionService {
     input: SubmitTaskInput,
   ): Promise<MutationResult>;
   getTask(actor: CredentialSubject, input: GetTaskInput): Promise<TaskSnapshot>;
-  listTasks(actor: CredentialSubject, input: ListTasksInput): Promise<TaskPage>;
+  listTasks(
+    actor: CredentialSubject,
+    input: ListTasksInput,
+    selection?: TaskPageSelection,
+  ): Promise<TaskPage>;
   getEvents(
     actor: CredentialSubject,
     input: GetEventsInput,

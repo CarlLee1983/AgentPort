@@ -154,6 +154,83 @@ describe("DurableAgentExecutionService", () => {
     }
   });
 
+  it("selects a capacity-safe Task prefix only after validating its cursor and filters", async () => {
+    const fixture = await createDurableAdmissionFixture();
+    try {
+      await fixture.service.submitTask(ACTOR_A, {
+        operationId: "submit-capacity-one",
+        agentId: "agent-a",
+        instruction: "first",
+      });
+      await fixture.service.submitTask(ACTOR_A, {
+        operationId: "submit-capacity-two",
+        agentId: "agent-a",
+        instruction: "second",
+      });
+      const candidates: Array<{
+        taskCount: number;
+        nextCursor: string | null;
+      }> = [];
+      const first = await fixture.service.listTasks(
+        ACTOR_A,
+        { agentId: "agent-a", limit: 2 },
+        {
+          fits(page) {
+            candidates.push({
+              taskCount: page.tasks.length,
+              nextCursor: page.nextCursor,
+            });
+            return page.tasks.length === 1;
+          },
+        },
+      );
+
+      expect(
+        candidates.map(({ taskCount, nextCursor }) => ({
+          taskCount,
+          hasCursor: nextCursor !== null,
+        })),
+      ).toEqual([
+        { taskCount: 2, hasCursor: false },
+        { taskCount: 1, hasCursor: true },
+      ]);
+      expect(first.tasks).toHaveLength(1);
+      expect(typeof first.tasks[0]?.taskId).toBe("string");
+      if (first.nextCursor === null) throw new Error("Expected a cursor");
+
+      let selectorRan = false;
+      const selector = {
+        fits() {
+          selectorRan = true;
+          return true;
+        },
+      };
+      await expect(
+        fixture.service.listTasks(
+          ACTOR_A,
+          { agentId: "agent-revokable", cursor: first.nextCursor },
+          selector,
+        ),
+      ).rejects.toMatchObject({ code: "not_found" });
+      await expect(
+        fixture.service.listTasks(ACTOR_A, { cursor: "malformed" }, selector),
+      ).rejects.toMatchObject({ code: "not_found" });
+      expect(selectorRan).toBe(false);
+
+      const second = await fixture.service.listTasks(
+        ACTOR_A,
+        { agentId: "agent-a", cursor: first.nextCursor },
+        selector,
+      );
+      expect(selectorRan).toBe(true);
+      expect(second.tasks).toHaveLength(1);
+      expect(typeof second.tasks[0]?.taskId).toBe("string");
+      expect(second.nextCursor).toBeNull();
+    } finally {
+      await fixture.close();
+    }
+  });
+
   it("keeps Workspace capacity bound to filesystem identity after a directory rename", async () => {
     const fixture = await createDurableAdmissionFixture({
       queueGlobal: 10,

@@ -23,6 +23,14 @@ a production runbook or a deployment or production-readiness claim.
 - Keep `cursorSecret` stable across daemon restart. Rotating it invalidates
   existing opaque cursors, which then fail with the same `not_found` projection
   used for unauthorized or unknown cursors.
+- For terminal `agentport_list_tasks`, treat `limit` (default 50, maximum 100)
+  as an upper bound. AgentPort selects a complete authorized prefix before
+  sealing its cursor so the generated uncompressed UTF-8 JSON-RPC response body
+  remains at or below 8,388,608 bytes. Callers must follow a non-null
+  `nextCursor` until it is null; they must not assume a successful page has its
+  requested cardinality. This excludes HTTP headers, transfer framing,
+  compression, TLS, and proxy-specific encodings, and does not extend the
+  capacity contract to another tool.
 - S4 Claude `preserve` continuation requires `continuationEncryptionKey`: a
   base64url-encoded 256-bit key held outside SQLite. Configure the same key
   before accepting any execution that can report a resumable session token, and

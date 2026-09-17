@@ -41,9 +41,16 @@ export class CursorCodec {
   encode(value: CanonicalValue): string {
     const payload = Buffer.from(canonicalize(value)).toString("base64url");
     const signature = this.sign(payload);
-    return Buffer.from(JSON.stringify({ payload, signature })).toString(
-      "base64url",
-    );
+    return this.#encodeEnvelope({ payload, signature });
+  }
+
+  /** Projects an opaque cursor's final byte length without sealing it. */
+  encodedLength(value: CanonicalValue): number {
+    const payload = Buffer.from(canonicalize(value)).toString("base64url");
+    return this.#encodeEnvelope({
+      payload,
+      signature: "0".repeat(64),
+    }).length;
   }
 
   decode(cursor: string): unknown {
@@ -77,5 +84,9 @@ export class CursorCodec {
 
   private sign(payload: string): string {
     return createHmac("sha256", this.secret).update(payload).digest("hex");
+  }
+
+  #encodeEnvelope(envelope: CursorEnvelope): string {
+    return Buffer.from(JSON.stringify(envelope)).toString("base64url");
   }
 }

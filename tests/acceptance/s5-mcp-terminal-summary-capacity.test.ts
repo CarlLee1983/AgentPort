@@ -14,7 +14,12 @@ import type {
 import type { ExecutionReference } from "../../src/core/types.js";
 import { ControlledRuntimeDispatcher } from "../../src/dispatcher/controlled-runtime-dispatcher.js";
 import { MCP_PROTOCOL_VERSION } from "../../src/mcp/protocol.js";
+import { LOOPBACK_MAX_REQUEST_BODY_BYTES } from "../../src/mcp/loopback-server.js";
 import { listTasksSuccessSchema } from "../../src/mcp/schemas.js";
+import {
+  TERMINAL_TASK_PAGE_RESPONSE_BYTES,
+  terminalTaskPageResponseBody,
+} from "../../src/mcp/terminal-task-page-response.js";
 import { RuntimeWorkerIngress } from "../../src/runtime/worker/ingress.js";
 import { RuntimeWorkerIngressClient } from "../../src/runtime/worker/ingress-client.js";
 import {
@@ -34,11 +39,11 @@ import {
   startDurableAdmissionMcpEndpoint,
 } from "../fixtures/durable-admission-mcp.js";
 
-const PRIVATE_INSTRUCTION = "AP017-PRIVATE-INSTRUCTION-MARKER";
-const PRIVATE_RESULT = "AP017-PRIVATE-RESULT-MARKER";
-const SYNTHETIC_REFERENCE = "ap017-synthetic-terminal-reference";
-const RESULT_DIRECTORY = "node_modules/.cache/agentport-ap017";
-const TARGET_BYTES = 8 * 1024 * 1024;
+const PRIVATE_INSTRUCTION = "AP019-PRIVATE-INSTRUCTION-MARKER";
+const PRIVATE_RESULT = "AP019-PRIVATE-RESULT-MARKER";
+const SYNTHETIC_REFERENCE = "ap019-synthetic-terminal-reference";
+const RESULT_DIRECTORY = "node_modules/.cache/agentport-ap019";
+const TARGET_BYTES = TERMINAL_TASK_PAGE_RESPONSE_BYTES;
 const TASK_COUNT = 100;
 
 type ToolResult = Awaited<ReturnType<Client["callTool"]>>;
@@ -88,12 +93,14 @@ interface SanitizedFixtureRecord {
     rejectionOwner: BoundaryObservation["rejectionOwner"];
   };
   expected: {
-    defaultFirst: { itemCount: 50; nextCursor: "non-null" };
-    defaultContinuation: { itemCount: 50; nextCursor: "null" };
-    maximum: { itemCount: 100; nextCursor: "null" };
+    requestedUpperBounds: { default: 50; maximum: 100 };
+    responseBodyMaximumBytes: number;
   };
   actual: {
-    officialClient: Record<string, { itemCount: number; nextCursor: string }>;
+    officialClient: Record<
+      string,
+      { itemCount: number; pageCount: number; nextCursor: string }
+    >;
     rawLoopback: Record<
       string,
       {
@@ -375,20 +382,16 @@ function structured(result: ToolResult): Record<string, unknown> {
 function assertPage(
   payload: Record<string, unknown>,
   summary: string,
-  expectedCount: number,
-  cursor: "null" | "non-null",
+  maximumCount: number,
 ): PageObservation {
   const parsed = listTasksSuccessSchema.safeParse(payload);
   if (!parsed.success)
     throw new Error("Task page failed its public output schema");
-  if (parsed.data.tasks.length !== expectedCount) {
-    throw new Error("Task page returned an incomplete item count");
-  }
   if (
-    (cursor === "null" && parsed.data.nextCursor !== null) ||
-    (cursor === "non-null" && parsed.data.nextCursor === null)
+    parsed.data.tasks.length === 0 ||
+    parsed.data.tasks.length > maximumCount
   ) {
-    throw new Error("Task page returned the wrong cursor outcome");
+    throw new Error("Task page violated its requested-count upper bound");
   }
   for (const task of parsed.data.tasks) {
     if (Object.prototype.hasOwnProperty.call(task, "instruction")) {
@@ -412,8 +415,7 @@ async function officialPage(
   client: Client,
   args: Record<string, unknown>,
   summary: string,
-  expectedCount: number,
-  cursor: "null" | "non-null",
+  maximumCount: number,
 ): Promise<PageObservation> {
   return assertPage(
     structured(
@@ -423,8 +425,7 @@ async function officialPage(
       }),
     ),
     summary,
-    expectedCount,
-    cursor,
+    maximumCount,
   );
 }
 
@@ -433,11 +434,12 @@ let rawRequestSequence = 0;
 function rawCall(
   name: string,
   args: Record<string, unknown>,
+  requestId?: string,
 ): Record<string, unknown> {
-  rawRequestSequence += 1;
+  const id = requestId ?? `ap019-raw-${(++rawRequestSequence).toString()}`;
   return {
     jsonrpc: "2.0",
-    id: `ap017-raw-${rawRequestSequence.toString()}`,
+    id,
     method: "tools/call",
     params: {
       name,
@@ -445,7 +447,7 @@ function rawCall(
       _meta: {
         "io.modelcontextprotocol/protocolVersion": MCP_PROTOCOL_VERSION,
         "io.modelcontextprotocol/clientInfo": {
-          name: "ap017-capacity-reader",
+          name: "ap019-capacity-reader",
           version: "1.0.0",
         },
         "io.modelcontextprotocol/clientCapabilities": {},
@@ -471,10 +473,10 @@ async function rawPage(
   url: URL,
   args: Record<string, unknown>,
   summary: string,
-  expectedCount: number,
-  cursor: "null" | "non-null",
+  maximumCount: number,
+  requestId?: string,
 ): Promise<RawPageObservation> {
-  const call = rawCall("agentport_list_tasks", args);
+  const call = rawCall("agentport_list_tasks", args, requestId);
   const response = await fetch(url, {
     method: "POST",
     headers: rawHeaders("agentport_list_tasks"),
@@ -526,13 +528,19 @@ async function rawPage(
   if (first?.type !== "text" || first.text === undefined) {
     throw new Error("Raw Task page omitted JSON TextContent");
   }
-  return {
-    ...assertPage(
-      result.structuredContent as Record<string, unknown>,
-      summary,
-      expectedCount,
-      cursor,
+  const payload = result.structuredContent as Record<string, unknown>;
+  const parsed = listTasksSuccessSchema.safeParse(payload);
+  if (!parsed.success)
+    throw new Error("Raw Task page failed its output schema");
+  expect(
+    terminalTaskPageResponseBody(
+      { tasks: parsed.data.tasks, nextCursor: parsed.data.nextCursor },
+      call.id,
     ),
+  ).toBe(body);
+  expect(Buffer.byteLength(body, "utf8")).toBeLessThanOrEqual(TARGET_BYTES);
+  return {
+    ...assertPage(payload, summary, maximumCount),
     layerBytes: {
       structuredResult: Buffer.byteLength(
         JSON.stringify(result.structuredContent),
@@ -546,6 +554,72 @@ async function rawPage(
       jsonRpcResponseBody: Buffer.byteLength(body, "utf8"),
     },
   };
+}
+
+function largestLegalRequestId(args: Record<string, unknown>): string {
+  const bodyWithEmptyId = JSON.stringify(
+    rawCall("agentport_list_tasks", args, ""),
+  );
+  const remainingBytes =
+    LOOPBACK_MAX_REQUEST_BODY_BYTES -
+    Buffer.byteLength(bodyWithEmptyId, "utf8");
+  if (remainingBytes < 1) {
+    throw new Error("Raw Task request envelope left no legal request-id bytes");
+  }
+  return "i".repeat(remainingBytes);
+}
+
+async function drainOfficialPages(
+  client: Client,
+  input: Record<string, unknown>,
+  summary: string,
+): Promise<PageObservation[]> {
+  const pages: PageObservation[] = [];
+  let cursor: string | undefined;
+  const maximumCount = typeof input.limit === "number" ? input.limit : 50;
+  do {
+    const page = await officialPage(
+      client,
+      {
+        ...input,
+        ...(cursor === undefined ? {} : { cursor }),
+      },
+      summary,
+      maximumCount,
+    );
+    pages.push(page);
+    cursor = page.nextCursor ?? undefined;
+  } while (cursor !== undefined);
+  return pages;
+}
+
+async function drainRawPages(
+  url: URL,
+  input: Record<string, unknown>,
+  summary: string,
+  requestIdFor?: (args: Record<string, unknown>) => string,
+): Promise<RawPageObservation[]> {
+  const pages: RawPageObservation[] = [];
+  let cursor: string | undefined;
+  const maximumCount = typeof input.limit === "number" ? input.limit : 50;
+  do {
+    const page = await rawPage(
+      url,
+      {
+        ...input,
+        ...(cursor === undefined ? {} : { cursor }),
+      },
+      summary,
+      maximumCount,
+      requestIdFor?.({
+        ...input,
+        ...(cursor === undefined ? {} : { cursor }),
+      }),
+    );
+    pages.push(page);
+    cursor = page.nextCursor ?? undefined;
+  } while (cursor !== undefined);
+  return pages;
 }
 
 function rejected(result: ToolResult, code: string): void {
@@ -687,7 +761,7 @@ async function writeRecord(
   const sourceSha256After = await sourceDigest();
   expect(sourceSha256After).toBe(sourceSha256Before);
   const content = {
-    scenario: "ap017-terminal-summary-capacity-characterization",
+    scenario: "ap019-terminal-summary-capacity-safe-pagination",
     candidate: {
       baseRevision: execFileSync("git", ["rev-parse", "HEAD"], {
         encoding: "utf8",
@@ -708,13 +782,12 @@ async function writeRecord(
     },
     target: {
       documentedBytes: TARGET_BYTES,
-      authoritativeLayer: "unresolved",
-      capacityVerdict: "not-selected-by-ap017",
+      authoritativeLayer: "complete-uncompressed-utf8-json-rpc-response-body",
+      capacityVerdict: "all-emitted-terminal-pages-at-most-8388608-bytes",
     },
     fixtures,
     residualDecisions: [
-      "authoritative response layer remains unresolved",
-      "pagination and output_limit behavior remain unresolved",
+      "other MCP tools require their own response-capacity evidence and Story",
       "five-second Client outage and production backpressure remain unproven",
       "Linux Stop Evidence, complete G5, S6, and release acceptance remain unproven",
     ],
@@ -787,63 +860,67 @@ async function characterizeFixture(
     client = await connectDurableAdmissionClient(endpoint.url, SCOPE_A_TOKEN);
     foreign = await connectDurableAdmissionClient(endpoint.url, SCOPE_B_TOKEN);
 
-    const officialFirst = await officialPage(
+    const officialDefault = await drainOfficialPages(
       client,
       {},
       boundary.summary,
-      50,
-      "non-null",
     );
+    const officialFirst = officialDefault[0];
+    if (officialFirst === undefined) throw new Error("Missing official page");
     if (officialFirst.nextCursor === null)
       throw new Error("Missing official cursor");
-    const officialSecond = await officialPage(
-      client,
-      { cursor: officialFirst.nextCursor },
-      boundary.summary,
-      50,
-      "null",
-    );
-    const officialMaximum = await officialPage(
+    const officialMaximum = await drainOfficialPages(
       client,
       { limit: 100 },
       boundary.summary,
-      100,
-      "null",
+    );
+    if (label === "utf8-multibyte") {
+      expect(officialDefault.map((page) => page.taskIds.length)).toEqual([
+        50, 50,
+      ]);
+      expect(officialMaximum.map((page) => page.taskIds.length)).toEqual([100]);
+    }
+    assertSameTasks(
+      officialDefault.flatMap((page) => page.taskIds),
+      officialMaximum.flatMap((page) => page.taskIds),
     );
     assertSameTasks(
-      [...officialFirst.taskIds, ...officialSecond.taskIds],
-      officialMaximum.taskIds,
+      officialDefault.flatMap((page) => page.taskIds),
+      completed.map((task) => task.taskId),
     );
 
-    const rawFirst = await rawPage(
-      endpoint.url,
-      {},
-      boundary.summary,
-      50,
-      "non-null",
-    );
+    const rawDefault = await drainRawPages(endpoint.url, {}, boundary.summary);
+    const rawFirst = rawDefault[0];
+    if (rawFirst === undefined) throw new Error("Missing raw page");
     if (rawFirst.nextCursor === null) throw new Error("Missing raw cursor");
-    const rawSecond = await rawPage(
+    const rawMaximum = await drainRawPages(
       endpoint.url,
-      { cursor: rawFirst.nextCursor },
+      { limit: 100, state: "completed" },
       boundary.summary,
-      50,
-      "null",
-    );
-    const rawMaximum = await rawPage(
-      endpoint.url,
-      { limit: 100 },
-      boundary.summary,
-      100,
-      "null",
     );
     assertSameTasks(
-      [...rawFirst.taskIds, ...rawSecond.taskIds],
-      rawMaximum.taskIds,
+      rawDefault.flatMap((page) => page.taskIds),
+      rawMaximum.flatMap((page) => page.taskIds),
     );
-    assertSameTasks(officialFirst.taskIds, rawFirst.taskIds);
-    assertSameTasks(officialSecond.taskIds, rawSecond.taskIds);
-    assertSameTasks(officialMaximum.taskIds, rawMaximum.taskIds);
+    assertSameTasks(
+      rawDefault.flatMap((page) => page.taskIds),
+      completed.map((task) => task.taskId),
+    );
+    assertSameTasks(
+      officialDefault.flatMap((page) => page.taskIds),
+      rawDefault.flatMap((page) => page.taskIds),
+    );
+
+    const longIdPages = await drainRawPages(
+      endpoint.url,
+      { limit: 100, state: "completed" },
+      boundary.summary,
+      largestLegalRequestId,
+    );
+    assertSameTasks(
+      longIdPages.flatMap((page) => page.taskIds),
+      completed.map((task) => task.taskId),
+    );
 
     const foreignFresh = structured(
       await foreign.callTool({
@@ -863,9 +940,40 @@ async function characterizeFixture(
       }),
       "not_found",
     );
+    rejected(
+      await client.callTool({
+        name: "agentport_list_tasks",
+        arguments: { cursor: officialFirst.nextCursor, state: "queued" },
+      }),
+      "not_found",
+    );
+    rejected(
+      await client.callTool({
+        name: "agentport_list_tasks",
+        arguments: { cursor: "malformed" },
+      }),
+      "not_found",
+    );
 
     const events = await allEvents(client);
     assertSanitized(events.serialized, "event projection");
+
+    if (repeated === '"') {
+      const cursor = longIdPages[0]?.nextCursor;
+      if (cursor === null || cursor === undefined) {
+        throw new Error("Expected a capacity-selected terminal cursor");
+      }
+      await fixture.store.expireRetainedData({
+        asOf: "2027-01-15T00:00:00.000Z",
+      });
+      rejected(
+        await client.callTool({
+          name: "agentport_list_tasks",
+          arguments: { cursor, state: "completed" },
+        }),
+        "cursor_expired",
+      );
+    }
 
     const invalidBearer = await fetch(endpoint.url, {
       method: "POST",
@@ -931,23 +1039,25 @@ async function characterizeFixture(
         rejectionOwner: boundary.rejectionOwner,
       },
       expected: {
-        defaultFirst: { itemCount: 50, nextCursor: "non-null" },
-        defaultContinuation: { itemCount: 50, nextCursor: "null" },
-        maximum: { itemCount: 100, nextCursor: "null" },
+        requestedUpperBounds: { default: 50, maximum: 100 },
+        responseBodyMaximumBytes: TARGET_BYTES,
       },
       actual: {
         officialClient: {
           defaultFirst: {
             itemCount: officialFirst.taskIds.length,
+            pageCount: 1,
             nextCursor: cursorOutcome(officialFirst.nextCursor),
           },
-          defaultContinuation: {
-            itemCount: officialSecond.taskIds.length,
-            nextCursor: cursorOutcome(officialSecond.nextCursor),
+          defaultDrain: {
+            itemCount: officialDefault.flatMap((page) => page.taskIds).length,
+            pageCount: officialDefault.length,
+            nextCursor: "null",
           },
-          maximum: {
-            itemCount: officialMaximum.taskIds.length,
-            nextCursor: cursorOutcome(officialMaximum.nextCursor),
+          maximumDrain: {
+            itemCount: officialMaximum.flatMap((page) => page.taskIds).length,
+            pageCount: officialMaximum.length,
+            nextCursor: "null",
           },
         },
         rawLoopback: {
@@ -957,12 +1067,12 @@ async function characterizeFixture(
             frameBytesByTaskId,
           ),
           defaultContinuation: pageRecord(
-            rawSecond,
+            rawDefault.at(-1) ?? rawFirst,
             boundary.logicalSummaryBytes,
             frameBytesByTaskId,
           ),
           maximum: pageRecord(
-            rawMaximum,
+            rawMaximum[0] ?? rawFirst,
             boundary.logicalSummaryBytes,
             frameBytesByTaskId,
           ),
@@ -987,8 +1097,129 @@ async function characterizeFixture(
   }
 }
 
-describe("AP-017 terminal Task-summary wire capacity", () => {
-  it("characterizes complete 100-item UTF-8 and JSON-escape terminal pages without selecting response behavior", async () => {
+describe("AP-019 terminal Task-summary capacity-safe pagination", () => {
+  it("preserves every terminal Task-state projection", async () => {
+    const fixture = await createDurableAdmissionFixture();
+    let endpoint:
+      Awaited<ReturnType<typeof startDurableAdmissionMcpEndpoint>> | undefined;
+    let client: Client | undefined;
+    const actor = { principalId: "principal-a" };
+    try {
+      const canceled = await fixture.service.submitTask(actor, {
+        operationId: "ap019-terminal-canceled-submit",
+        agentId: "agent-a",
+        instruction: "AP019-TERMINAL-CANCELED-INSTRUCTION",
+      });
+      await fixture.service.cancelTask(actor, {
+        operationId: "ap019-terminal-canceled-cancel",
+        taskId: canceled.task.taskId,
+      });
+
+      const failed = await fixture.service.submitTask(actor, {
+        operationId: "ap019-terminal-failed-submit",
+        agentId: "agent-a",
+        instruction: "AP019-TERMINAL-FAILED-INSTRUCTION",
+      });
+      const failedPreparation = await fixture.service.prepareForDispatch(
+        failed.task.taskId,
+        "ap019-terminal-failed-epoch",
+      );
+      await fixture.service.markExecutionRunning(failedPreparation.reference);
+      await fixture.recordObservation(actor, {
+        taskId: failed.task.taskId,
+        observation: {
+          kind: "candidate",
+          reference: failedPreparation.reference,
+          ordinal: 1,
+          finalOrdinal: 1,
+          outcome: { kind: "failed", summary: "AP019 failed summary" },
+          sessionReference: null,
+        },
+      });
+      await fixture.store.commitTerminal({
+        evidence: {
+          platform: "linux-cgroup-v2",
+          reference: failedPreparation.reference,
+          executionUnitId: "ap019-terminal-failed-unit",
+          generationSealedAt: "2026-09-14T00:00:01.000Z",
+          unitEmptyObservedAt: "2026-09-14T00:00:02.000Z",
+        },
+      });
+
+      const interrupted = await fixture.service.submitTask(actor, {
+        operationId: "ap019-terminal-interrupted-submit",
+        agentId: "agent-a",
+        instruction: "AP019-TERMINAL-INTERRUPTED-INSTRUCTION",
+      });
+      const interruptedPreparation = await fixture.service.prepareForDispatch(
+        interrupted.task.taskId,
+        "ap019-terminal-interrupted-epoch",
+      );
+      await fixture.service.markExecutionRunning(
+        interruptedPreparation.reference,
+      );
+      await fixture.store.recoverExecutions();
+      const recovering = await fixture.service.getTask(actor, {
+        taskId: interrupted.task.taskId,
+      });
+      await fixture.store.confirmRecoveryStopped({
+        evidence: {
+          platform: "linux-cgroup-v2",
+          reference: interruptedPreparation.reference,
+          executionUnitId: "ap019-terminal-interrupted-unit",
+          generationSealedAt: "2026-09-14T00:00:03.000Z",
+          unitEmptyObservedAt: "2026-09-14T00:00:04.000Z",
+        },
+        now: "2026-09-14T00:00:05.000Z",
+      });
+      await fixture.service.acknowledgeInterruption(actor, {
+        operationId: "ap019-terminal-interrupted-acknowledge",
+        taskId: interrupted.task.taskId,
+        expectedRevision: recovering.revision,
+      });
+
+      endpoint = await startDurableAdmissionMcpEndpoint(fixture);
+      client = await connectDurableAdmissionClient(endpoint.url, SCOPE_A_TOKEN);
+      const page = listTasksSuccessSchema.parse(
+        structured(
+          await client.callTool({
+            name: "agentport_list_tasks",
+            arguments: { limit: 100 },
+          }),
+        ),
+      );
+      const terminalSnapshots = await Promise.all(
+        [canceled, failed, interrupted].map(async ({ task }) =>
+          fixture.service.getTask(actor, { taskId: task.taskId }),
+        ),
+      );
+      for (const expected of terminalSnapshots) {
+        const observed = page.tasks.find(
+          ({ taskId }) => taskId === expected.taskId,
+        );
+        expect(observed).toMatchObject({
+          taskId: expected.taskId,
+          state: expected.state,
+          reason: expected.reason,
+          result: expected.result,
+        });
+      }
+      const failedSummary = page.tasks.find(
+        ({ taskId }) => taskId === failed.task.taskId,
+      );
+      expect(failedSummary?.result).toEqual({
+        kind: "failed",
+        summary: "AP019 failed summary",
+      });
+      expect(JSON.stringify(page)).not.toContain("AP019-TERMINAL-");
+    } finally {
+      await client?.close().catch(() => undefined);
+      await endpoint?.close().catch(() => undefined);
+      await fixture.close();
+    }
+  });
+
+  it("bounds actual response bodies and drains UTF-8 and JSON-escape terminal pages exactly once", async () => {
     const sourceSha256Before = await sourceDigest();
     const fixtures = [
       await characterizeFixture("utf8-multibyte", "漢", "U+6F22"),

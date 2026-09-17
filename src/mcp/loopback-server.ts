@@ -18,7 +18,7 @@ import {
   MCP_PROTOCOL_VERSION,
 } from "./protocol.js";
 
-const MAX_BODY_BYTES = 128 * 1024;
+export const LOOPBACK_MAX_REQUEST_BODY_BYTES = 128 * 1024;
 
 interface AuthenticatedRequest extends IncomingMessage {
   auth?: AuthInfo;
@@ -241,7 +241,9 @@ async function readBody(request: IncomingMessage): Promise<unknown> {
       ? chunk
       : Buffer.from(chunk as Uint8Array);
     total += buffer.byteLength;
-    if (total > MAX_BODY_BYTES) throw new RangeError("request body too large");
+    if (total > LOOPBACK_MAX_REQUEST_BODY_BYTES) {
+      throw new RangeError("request body too large");
+    }
     chunks.push(buffer);
   }
   const text = Buffer.concat(chunks).toString("utf8");

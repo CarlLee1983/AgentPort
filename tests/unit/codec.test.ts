@@ -14,8 +14,10 @@ describe("durable-admission codecs", () => {
 
   it("binds opaque cursors to a protected signature", () => {
     const codec = new CursorCodec("ap002-cursor-secret");
-    const cursor = codec.encode({ scope: "scope-a", position: 3 });
+    const payload = { scope: "scope-a", position: 3 };
+    const cursor = codec.encode(payload);
     expect(codec.decode(cursor)).toEqual({ position: 3, scope: "scope-a" });
+    expect(codec.encodedLength(payload)).toBe(cursor.length);
     expect(() => codec.decode(`${cursor}tampered`)).toThrow(
       "Resource not found",
     );

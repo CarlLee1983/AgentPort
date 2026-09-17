@@ -31,6 +31,11 @@ import {
   resumeContextInputSchema,
   submitTaskInputSchema,
 } from "./schemas.js";
+import {
+  DURABLE_ADMISSION_SERVER_INFO,
+  terminalTaskPageFits,
+  terminalTaskPagePayload,
+} from "./terminal-task-page-response.js";
 
 type ExternalErrorCode =
   | "access_denied"
@@ -159,13 +164,10 @@ export function createDurableAdmissionMcpHandler(
 ): McpHttpHandler {
   return createMcpHandler(
     ({ authInfo }) => {
-      const server = new McpServer(
-        { name: "agentport-durable-admission", version: "0.0.0" },
-        {
-          capabilities: { tools: {} },
-          supportedProtocolVersions: [MCP_PROTOCOL_VERSION],
-        },
-      );
+      const server = new McpServer(DURABLE_ADMISSION_SERVER_INFO, {
+        capabilities: { tools: {} },
+        supportedProtocolVersions: [MCP_PROTOCOL_VERSION],
+      });
       const actor: CredentialSubject = {
         principalId: authInfo?.clientId ?? "",
       };
@@ -325,17 +327,24 @@ export function createDurableAdmissionMcpHandler(
           inputSchema: publishedInput(listTasksInputSchema),
           outputSchema: listTasksSuccessSchema,
         },
-        (input) =>
+        (input, context) =>
           invokeInput(listTasksInputSchema, input, async (input) => {
-            const page = await service.listTasks(actor, {
-              ...(input.agentId === undefined
-                ? {}
-                : { agentId: input.agentId }),
-              ...(input.state === undefined ? {} : { state: input.state }),
-              ...(input.cursor === undefined ? {} : { cursor: input.cursor }),
-              ...(input.limit === undefined ? {} : { limit: input.limit }),
-            });
-            return { tasks: page.tasks, nextCursor: page.nextCursor };
+            const page = await service.listTasks(
+              actor,
+              {
+                ...(input.agentId === undefined
+                  ? {}
+                  : { agentId: input.agentId }),
+                ...(input.state === undefined ? {} : { state: input.state }),
+                ...(input.cursor === undefined ? {} : { cursor: input.cursor }),
+                ...(input.limit === undefined ? {} : { limit: input.limit }),
+              },
+              {
+                fits: (candidate) =>
+                  terminalTaskPageFits(candidate, context.mcpReq.id),
+              },
+            );
+            return terminalTaskPagePayload(page);
           }),
       );
       server.registerTool(

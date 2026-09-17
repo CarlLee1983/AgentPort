@@ -40,6 +40,7 @@ import type {
   SubmitTaskInput,
   TaskEvent,
   TaskPage,
+  TaskPageSelection,
   TaskSnapshot,
   TaskSummary,
 } from "./types.js";
@@ -1053,6 +1054,7 @@ export class DurableAgentExecutionService implements AgentExecutionService {
   async listTasks(
     actor: CredentialSubject,
     input: ListTasksInput,
+    selection?: TaskPageSelection,
   ): Promise<TaskPage> {
     const authorization = this.#authorize(actor);
     if (
@@ -1096,24 +1098,36 @@ export class DurableAgentExecutionService implements AgentExecutionService {
         ...(retentionSequence === undefined ? {} : { retentionSequence }),
         limit: limit + 1,
       });
-      const hasMore = result.tasks.length > limit;
-      const rows = result.tasks.slice(0, limit);
-      const last = rows.at(-1)?.queueOrder;
-      return {
-        tasks: rows.map((task) => this.#summary(task)),
-        nextCursor:
-          hasMore && last !== undefined
-            ? this.#cursorCodec.encode({
-                version: 1,
-                kind: "tasks",
-                accessScopeId: authorization.accessScopeId,
-                agentId: input.agentId ?? null,
-                state: input.state ?? null,
-                afterQueueOrder: last,
-                retentionSequence: result.retentionSequence,
-              })
-            : null,
+      const summaries = result.tasks.map((task) => this.#summary(task));
+      const pageFor = (count: number, sealCursor: boolean): TaskPage => {
+        const tasks = summaries.slice(0, count);
+        const hasMore = summaries.length > count;
+        const last = tasks.at(-1)?.queueOrder;
+        if (!hasMore || last === undefined) return { tasks, nextCursor: null };
+        const cursor = {
+          version: 1,
+          kind: "tasks",
+          accessScopeId: authorization.accessScopeId,
+          agentId: input.agentId ?? null,
+          state: input.state ?? null,
+          afterQueueOrder: last,
+          retentionSequence: result.retentionSequence,
+        } as const;
+        return {
+          tasks,
+          nextCursor: sealCursor
+            ? this.#cursorCodec.encode(cursor)
+            : "x".repeat(this.#cursorCodec.encodedLength(cursor)),
+        };
       };
+      const requestedCount = Math.min(limit, summaries.length);
+      if (selection === undefined || requestedCount === 0) {
+        return pageFor(requestedCount, true);
+      }
+      for (let count = requestedCount; count > 0; count -= 1) {
+        if (selection.fits(pageFor(count, false))) return pageFor(count, true);
+      }
+      throw new Error("A legal terminal Task summary cannot fit its response");
     } catch (error) {
       throw storageError(error);
     }
