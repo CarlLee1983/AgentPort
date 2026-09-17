@@ -1,9 +1,9 @@
-import { mkdtemp, rm } from "node:fs/promises";
+import { mkdtemp, rm, stat } from "node:fs/promises";
 import { createConnection } from "node:net";
 import { join } from "node:path";
 import { tmpdir } from "node:os";
 
-import { describe, expect, it } from "vitest";
+import { describe, expect, it, vi } from "vitest";
 
 import type {
   ExecutionSupervisor,
@@ -167,6 +167,74 @@ describe("S3-B Reference-bound Runtime ingress", () => {
     }
   });
 
+  it("owns the ingress socket as the daemon uid and the Runtime group", async () => {
+    const directory = await mkdtemp(join(tmpdir(), "agentport-ingress-owner-"));
+    const runtimeGroupId = process.getgid?.();
+    if (runtimeGroupId === undefined) {
+      throw new Error("Test requires a POSIX process group id");
+    }
+    const ingress = await RuntimeWorkerIngress.open({
+      endpoint: join(directory, "worker.sock"),
+      reference,
+      lifecycle: {
+        persistQuestion: () => Promise.resolve(),
+        waitForAcceptedAnswer: () => Promise.resolve({}),
+        acknowledgeQuestionDelivery: () => Promise.resolve(),
+        markQuestionDeliveryUnknown: () => Promise.resolve(),
+        recordObservation: () => Promise.resolve(),
+        stopAfterCandidate: () => Promise.resolve(),
+        quarantine: () => Promise.resolve(),
+      },
+      groupId: runtimeGroupId,
+    });
+    try {
+      const metadata = await stat(ingress.session.endpoint);
+      expect(metadata.uid).toBe(process.getuid?.());
+      expect(metadata.gid).toBe(runtimeGroupId);
+      expect(metadata.mode & 0o777).toBe(0o660);
+    } finally {
+      await ingress.close();
+      await rm(directory, { force: true, recursive: true });
+    }
+  });
+
+  it("closes the server and removes the endpoint when it cannot secure the socket (M1)", async () => {
+    const directory = await mkdtemp(join(tmpdir(), "agentport-ingress-fail-"));
+    const endpoint = join(directory, "worker.sock");
+    const groups = process.getgroups?.() ?? [];
+    const primaryGroupId = process.getgid?.();
+    const unownedGroupId = [0, 1, 2, 3, 4, 5, 12, 20, 50, 65534].find(
+      (candidate) =>
+        candidate !== primaryGroupId && !groups.includes(candidate),
+    );
+    if (unownedGroupId === undefined) {
+      throw new Error(
+        "Test requires a group id the current process does not belong to",
+      );
+    }
+    try {
+      await expect(
+        RuntimeWorkerIngress.open({
+          endpoint,
+          reference,
+          lifecycle: {
+            persistQuestion: () => Promise.resolve(),
+            waitForAcceptedAnswer: () => Promise.resolve({}),
+            acknowledgeQuestionDelivery: () => Promise.resolve(),
+            markQuestionDeliveryUnknown: () => Promise.resolve(),
+            recordObservation: () => Promise.resolve(),
+            stopAfterCandidate: () => Promise.resolve(),
+            quarantine: () => Promise.resolve(),
+          },
+          groupId: unownedGroupId,
+        }),
+      ).rejects.toThrow();
+      await expect(stat(endpoint)).rejects.toThrow();
+    } finally {
+      await rm(directory, { force: true, recursive: true });
+    }
+  });
+
   it("persists a contiguous candidate before it asks for trusted stopping", async () => {
     const directory = await mkdtemp(join(tmpdir(), "agentport-ingress-"));
     const observations: unknown[] = [];
@@ -300,6 +368,75 @@ describe("S3-B Reference-bound Runtime ingress", () => {
       expect(closed).toBe(true);
       expect(observed).toBe(false);
     } finally {
+      await ingress.close();
+      await rm(directory, { force: true, recursive: true });
+    }
+  });
+
+  it("rejects a wrong 43-character token without projecting it (AP-021 AC-05)", async () => {
+    const sentinel = "ap021-ingress-token-sentinel";
+    const wrongToken = sentinel.padEnd(43, "A");
+    expect(wrongToken).toMatch(/^[A-Za-z0-9_-]{43}$/u);
+    const directory = await mkdtemp(join(tmpdir(), "agentport-ingress-"));
+    const lifecycleCalls: unknown[] = [];
+    const record =
+      (name: string) =>
+      (...args: unknown[]) => {
+        lifecycleCalls.push({ name, args });
+        return Promise.resolve();
+      };
+    const consoleOutput: unknown[] = [];
+    for (const method of ["log", "info", "warn", "error", "debug"] as const) {
+      vi.spyOn(console, method).mockImplementation((...args: unknown[]) => {
+        consoleOutput.push(args);
+      });
+    }
+    const ingress = await RuntimeWorkerIngress.open({
+      endpoint: join(directory, "worker.sock"),
+      reference,
+      lifecycle: {
+        persistQuestion: record("persistQuestion"),
+        waitForAcceptedAnswer: () => Promise.resolve({}),
+        acknowledgeQuestionDelivery: record("acknowledgeQuestionDelivery"),
+        markQuestionDeliveryUnknown: record("markQuestionDeliveryUnknown"),
+        recordObservation: record("recordObservation"),
+        stopAfterCandidate: record("stopAfterCandidate"),
+        quarantine: record("quarantine"),
+      },
+    });
+    try {
+      const replies = await new Promise<string>((resolve) => {
+        let received = "";
+        const socket = createConnection(ingress.session.endpoint);
+        socket.once("connect", () => {
+          socket.write(
+            `${JSON.stringify({ kind: "authenticate", token: wrongToken })}\n`,
+          );
+          socket.write(
+            `${JSON.stringify({ kind: "progress", ordinal: 1, summary: "forged" })}\n`,
+          );
+        });
+        socket.on("data", (chunk: Buffer) => {
+          received += chunk.toString("utf8");
+        });
+        socket.once("close", () => {
+          resolve(received);
+        });
+        socket.once("error", () => {
+          resolve(received);
+        });
+      });
+      expect(replies).not.toContain("authenticated");
+      expect(lifecycleCalls).toEqual([]);
+      const projected = JSON.stringify({
+        replies,
+        lifecycleCalls,
+        consoleOutput,
+      });
+      expect(projected).not.toContain(sentinel);
+      expect(ingress.session.token).not.toContain(sentinel);
+    } finally {
+      vi.restoreAllMocks();
       await ingress.close();
       await rm(directory, { force: true, recursive: true });
     }

@@ -49,13 +49,21 @@ const configurationSchema = z
     runtimeGroup: identifier,
     runtimeHome: absolutePath,
     nodeExecutable: absolutePath,
+    ingressDirectory: absolutePath,
+    ingressGroup: identifier,
     profiles: z
       .record(identifier, profileSchema)
       .refine((profiles) => Object.keys(profiles).length > 0),
     commandTimeoutMilliseconds: boundedPositiveInteger(60_000).optional(),
     stopTimeoutMilliseconds: boundedPositiveInteger(60_000).optional(),
   })
-  .strict();
+  .strict()
+  .refine(
+    (configuration) =>
+      configuration.ingressGroup !== configuration.socketGroup &&
+      configuration.ingressGroup !== configuration.runtimeGroup,
+    { message: "ingressGroup must differ from socketGroup and runtimeGroup" },
+  );
 
 function deepFreeze<T>(value: T): T {
   if (typeof value !== "object" || value === null || Object.isFrozen(value)) {
@@ -100,6 +108,8 @@ export function parseLinuxLauncherOptions(
     runtimeGroup: parsed.data.runtimeGroup,
     runtimeHome: parsed.data.runtimeHome,
     nodeExecutable: parsed.data.nodeExecutable,
+    ingressDirectory: parsed.data.ingressDirectory,
+    ingressGroup: parsed.data.ingressGroup,
     profiles,
     ...(parsed.data.commandTimeoutMilliseconds === undefined
       ? {}

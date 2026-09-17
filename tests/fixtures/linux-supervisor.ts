@@ -52,10 +52,13 @@ export async function linuxReference(
   };
 }
 
-export async function systemctl(args: readonly string[]): Promise<string> {
+export async function systemctl(
+  args: readonly string[],
+  timeoutMilliseconds = 10_000,
+): Promise<string> {
   const result = await executeFile("systemctl", args, {
     encoding: "utf8",
-    timeout: 10_000,
+    timeout: timeoutMilliseconds,
     maxBuffer: 64 * 1024,
   });
   return result.stdout.trim();
@@ -102,8 +105,15 @@ export function ledgerPath(executionId: string): string {
   );
 }
 
-export async function waitForPath(path: string): Promise<void> {
-  const deadline = Date.now() + 10_000;
+// A launcher restart seals prior-epoch ledger records before listening; on the
+// OrbStack G1 target a graceful restart took about 24.5 s with 271 records.
+export const LAUNCHER_RESTART_TIMEOUT_MS = 60_000;
+
+export async function waitForPath(
+  path: string,
+  timeoutMilliseconds = 10_000,
+): Promise<void> {
+  const deadline = Date.now() + timeoutMilliseconds;
   while (Date.now() <= deadline) {
     try {
       await access(path);
@@ -116,11 +126,14 @@ export async function waitForPath(path: string): Promise<void> {
 }
 
 export async function restartLauncher(): Promise<void> {
-  await systemctl([
-    "restart",
-    requiredEnvironment("AGENTPORT_G1_LAUNCHER_SERVICE"),
-  ]);
-  await waitForPath(requiredEnvironment("AGENTPORT_G1_LAUNCHER_SOCKET"));
+  await systemctl(
+    ["restart", requiredEnvironment("AGENTPORT_G1_LAUNCHER_SERVICE")],
+    LAUNCHER_RESTART_TIMEOUT_MS,
+  );
+  await waitForPath(
+    requiredEnvironment("AGENTPORT_G1_LAUNCHER_SOCKET"),
+    LAUNCHER_RESTART_TIMEOUT_MS,
+  );
 }
 
 export async function abruptlyRestartLauncher(): Promise<void> {
@@ -134,7 +147,7 @@ export async function abruptlyRestartLauncher(): Promise<void> {
     service,
   ]);
   await systemctl(["kill", "--kill-whom=main", "--signal=SIGKILL", service]);
-  const deadline = Date.now() + 15_000;
+  const deadline = Date.now() + LAUNCHER_RESTART_TIMEOUT_MS;
   while (Date.now() <= deadline) {
     try {
       const currentPid = await systemctl([

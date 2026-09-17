@@ -97,9 +97,11 @@ Facts established against the code at `13237ab`:
 * R2: The daemon runs as non-root `agentport-daemon`; the launcher is the only
   root process and creates ingress directories; the launcher socket group
   contains only the daemon account (ADR-0006).
-* R3: Claude Runtime authorization is `ANTHROPIC_API_KEY` only, delivered via
-  `LoadCredential`; Claude Code is installed from the official apt repository
-  at a pinned, held version recorded in the release manifest (ADR-0007).
+* R3: Claude Runtime authorization for v1 is the GATE-020 subscription OAuth
+  held only in the Runtime account's 0700 runtime-home; an API key path is a
+  later Story (ADR-0010, superseding the ADR-0007 authorization part). Claude
+  Code is installed from the official apt repository at a pinned, held version
+  recorded in the release manifest (ADR-0007).
 * R4: The installer generates `cursorSecret` and `continuationEncryptionKey`
   exactly once under `/etc/agentport/credentials/` (0700 root) and never
   rotates them in place; secrets never appear in argv, environment files,

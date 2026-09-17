@@ -1,6 +1,6 @@
 import { randomUUID } from "node:crypto";
-import { lstat, realpath } from "node:fs/promises";
-import { join } from "node:path";
+import { lstat, readFile } from "node:fs/promises";
+import { isAbsolute, join, normalize } from "node:path";
 
 import type { McpHttpHandler } from "@modelcontextprotocol/server";
 
@@ -9,16 +9,18 @@ import {
   type StopEvidenceVerifier,
 } from "../core/agent-execution-service.js";
 import type { AgentExecutionService } from "../core/types.js";
-import {
-  ControlledRuntimeDispatcher,
-  type RuntimeIngressFactory,
-} from "../dispatcher/controlled-runtime-dispatcher.js";
+import { ControlledRuntimeDispatcher } from "../dispatcher/controlled-runtime-dispatcher.js";
 import { createDurableAdmissionMcpHandler } from "../mcp/adapter.js";
 import { RuntimeWorkerIngress } from "../runtime/worker/ingress.js";
 import {
   isVerifiedLinuxStopEvidence,
   LinuxExecutionSupervisor,
 } from "../supervisor/linux/execution-supervisor.js";
+import {
+  assessProtectedIngressDirectory,
+  lstatIngressPath,
+  observeIngressDirectory,
+} from "../supervisor/linux/ingress-directory.js";
 import { LinuxLauncherClient } from "../supervisor/linux/launcher-client.js";
 import {
   SqliteDurableAdmissionStore,
@@ -26,6 +28,7 @@ import {
 } from "../storage/sqlite-durable-admission-store.js";
 import { AgentRegistry, type RegistryConfiguration } from "./registry.js";
 import { StorageIncidentCoordinator } from "./storage-incident-coordinator.js";
+import { verifyBeforeEachIngressOpen } from "./verified-ingress-factory.js";
 
 export interface ControlledRuntimeAdmissionConfiguration {
   registry: RegistryConfiguration;
@@ -35,6 +38,7 @@ export interface ControlledRuntimeAdmissionConfiguration {
     socketPath: string;
     workerIngressDirectory: string;
     runtimeGroupId: number;
+    ingressGroupId: number;
   };
 }
 
@@ -62,34 +66,77 @@ function linuxStopEvidenceVerifier(): StopEvidenceVerifier {
   };
 }
 
-async function verifyIngressDirectory(
-  directory: string,
-  runtimeGroupId: number,
-): Promise<string> {
-  if (
-    process.platform !== "linux" ||
-    process.getuid?.() !== 0 ||
-    !Number.isSafeInteger(runtimeGroupId) ||
-    runtimeGroupId < 1
-  ) {
+const UNPROTECTED_INGRESS =
+  "Worker ingress directory is not protected for the Runtime identity";
+
+function requireNonRootLinux(): void {
+  if (process.getuid?.() === 0) {
+    throw new Error("Controlled Runtime composition must not run as root");
+  }
+  if (process.platform !== "linux") {
     throw new Error(
       "Controlled Runtime composition requires protected Linux ingress",
     );
   }
-  const canonical = await realpath(directory);
-  const metadata = await lstat(canonical);
+}
+
+function validGroupId(value: number): boolean {
+  return Number.isSafeInteger(value) && value >= 1;
+}
+
+/**
+ * Verifies the configured path itself, without resolving symlinks, so a
+ * symlinked ingress directory or ancestor is refused (AP-021 R3). The daemon
+ * never creates, chmods or chowns this launcher-owned directory.
+ */
+async function verifyIngressDirectory(
+  directory: string,
+  ingressGroupId: number,
+): Promise<void> {
+  if (!isAbsolute(directory) || normalize(directory) !== directory) {
+    throw new Error(UNPROTECTED_INGRESS);
+  }
+  const assessment = assessProtectedIngressDirectory(
+    await observeIngressDirectory(
+      directory,
+      process.getuid?.() ?? -1,
+      lstatIngressPath,
+    ),
+    { ingressGroupId, allowRootProcess: false },
+  );
+  if (!assessment.ok) {
+    throw new Error(UNPROTECTED_INGRESS, { cause: assessment });
+  }
+}
+
+/** AP-021 R5: the launcher socket group is observed from the socket itself. */
+async function verifyDistinctGroups(
+  launcher: ControlledRuntimeAdmissionConfiguration["launcher"],
+): Promise<void> {
+  const socketGroupId = (await lstat(launcher.socketPath)).gid;
   if (
-    !metadata.isDirectory() ||
-    metadata.isSymbolicLink() ||
-    metadata.uid !== 0 ||
-    metadata.gid !== runtimeGroupId ||
-    (metadata.mode & 0o027) !== 0
+    launcher.ingressGroupId === socketGroupId ||
+    launcher.runtimeGroupId === socketGroupId
   ) {
     throw new Error(
-      "Worker ingress directory is not protected for the Runtime identity",
+      "Controlled Runtime composition requires distinct ingress, socket and Runtime groups",
     );
   }
-  return canonical;
+}
+
+/**
+ * The ingress socket exists between listen and chmod with umask-derived
+ * permissions; a umask that denies other-write keeps the Runtime identity from
+ * connecting inside that window.
+ */
+async function requireRestrictiveUmask(): Promise<void> {
+  const status = await readFile("/proc/self/status", "utf8");
+  const umask = /^Umask:\s+([0-7]+)$/m.exec(status)?.[1];
+  if (umask === undefined || (Number.parseInt(umask, 8) & 0o002) === 0) {
+    throw new Error(
+      "Controlled Runtime composition requires a umask that denies other write",
+    );
+  }
 }
 
 /**
@@ -99,15 +146,30 @@ async function verifyIngressDirectory(
 export async function createControlledRuntimeAdmission(
   configuration: ControlledRuntimeAdmissionConfiguration,
 ): Promise<ControlledRuntimeAdmissionComposition> {
+  requireNonRootLinux();
+  const { launcher: launcherConfiguration } = configuration;
+  if (
+    !validGroupId(launcherConfiguration.ingressGroupId) ||
+    !validGroupId(launcherConfiguration.runtimeGroupId) ||
+    launcherConfiguration.ingressGroupId ===
+      launcherConfiguration.runtimeGroupId
+  ) {
+    throw new Error(
+      "Controlled Runtime composition requires distinct ingress, socket and Runtime groups",
+    );
+  }
   if (configuration.storage.continuationEncryptionKey === undefined) {
     throw new Error(
       "Controlled Runtime composition requires continuationEncryptionKey",
     );
   }
-  const ingressDirectory = await verifyIngressDirectory(
-    configuration.launcher.workerIngressDirectory,
-    configuration.launcher.runtimeGroupId,
+  const ingressDirectory = launcherConfiguration.workerIngressDirectory;
+  await verifyIngressDirectory(
+    ingressDirectory,
+    launcherConfiguration.ingressGroupId,
   );
+  await verifyDistinctGroups(launcherConfiguration);
+  await requireRestrictiveUmask();
   const launcher = new LinuxLauncherClient({
     socketPath: configuration.launcher.socketPath,
   });
@@ -135,19 +197,26 @@ export async function createControlledRuntimeAdmission(
       stopEvidenceVerifier: linuxStopEvidenceVerifier(),
       storageIncidentSafety: storageIncidents,
     });
-    const ingressFactory: RuntimeIngressFactory = {
-      async open({ reference, lifecycle }) {
-        // Linux pathname sockets are bounded; execution IDs are generated opaque identifiers.
-        const endpoint = join(ingressDirectory, `${randomUUID()}.sock`);
-        const ingress = await RuntimeWorkerIngress.open({
-          endpoint,
-          reference,
-          lifecycle,
-          groupId: configuration.launcher.runtimeGroupId,
-        });
-        return { session: ingress.session, close: () => ingress.close() };
+    const ingressFactory = verifyBeforeEachIngressOpen(
+      {
+        async open({ reference, lifecycle }) {
+          // Linux pathname sockets are bounded; execution IDs are generated opaque identifiers.
+          const endpoint = join(ingressDirectory, `${randomUUID()}.sock`);
+          const ingress = await RuntimeWorkerIngress.open({
+            endpoint,
+            reference,
+            lifecycle,
+            groupId: launcherConfiguration.runtimeGroupId,
+          });
+          return { session: ingress.session, close: () => ingress.close() };
+        },
       },
-    };
+      () =>
+        verifyIngressDirectory(
+          ingressDirectory,
+          launcherConfiguration.ingressGroupId,
+        ),
+    );
     const dispatcher = new ControlledRuntimeDispatcher(
       service,
       launcher,

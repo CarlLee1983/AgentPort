@@ -7,7 +7,6 @@ const configuration = {
   launcherConfigurationPath: "/etc/agentport/launcher.json",
   daemonUser: "agentport-daemon",
   databasePath: "/var/lib/agentport/store.db",
-  workerIngressDirectory: "/run/agentport/ingress",
 };
 
 const launcher = parseLinuxLauncherOptions({
@@ -19,6 +18,8 @@ const launcher = parseLinuxLauncherOptions({
   runtimeGroup: "agentport-runtime",
   runtimeHome: "/var/lib/agentport-runtime",
   nodeExecutable: "/usr/bin/node",
+  ingressDirectory: "/run/agentport-ingress",
+  ingressGroup: "agentport-ingress",
   profiles: {
     idle: {
       workspaceIdentity: "idle",
@@ -52,8 +53,8 @@ function validDependencies() {
     ["/run", { kind: "directory", uid: 0, gid: 0, mode: 0o755 }],
     ["/run/agentport", { kind: "directory", uid: 0, gid: 990, mode: 0o750 }],
     [
-      "/run/agentport/ingress",
-      { kind: "directory", uid: 0, gid: 989, mode: 0o750 },
+      "/run/agentport-ingress",
+      { kind: "directory", uid: 0, gid: 989, mode: 0o771 },
     ],
   ]);
   const effectiveAccess = new Set<string>();
@@ -69,12 +70,18 @@ function validDependencies() {
       account: vi.fn((name: string) =>
         Promise.resolve(
           name === "agentport-daemon"
-            ? { uid: 995, gid: 990, groups: [990] }
-            : { uid: 997, gid: 989, groups: [989] },
+            ? { uid: 995, gid: 990, groups: [990, 989, 988] }
+            : { uid: 997, gid: 988, groups: [988] },
         ),
       ),
       group: vi.fn((name: string) =>
-        Promise.resolve(name === "agentport-launcher" ? 990 : 989),
+        Promise.resolve(
+          name === "agentport-launcher"
+            ? 990
+            : name === "agentport-runtime"
+              ? 988
+              : 989,
+        ),
       ),
       metadata: vi.fn((path: string) => Promise.resolve(paths.get(path))),
       canonical: vi.fn((path: string) =>
@@ -119,21 +126,47 @@ describe("Linux administrator configuration preflight", () => {
         fixture.dependencies.account = vi.fn((name: string) =>
           Promise.resolve(
             name === "agentport-daemon"
-              ? { uid: 995, gid: 990, groups: [990] }
-              : { uid: 997, gid: 989, groups: [989, 990] },
+              ? { uid: 995, gid: 990, groups: [990, 989, 988] }
+              : { uid: 997, gid: 988, groups: [988, 990] },
           ),
         );
       },
     ],
     [
-      "daemon joins Runtime group",
+      "daemon is not a member of the Runtime group",
       "identity_separation",
       (fixture: ReturnType<typeof validDependencies>) => {
         fixture.dependencies.account = vi.fn((name: string) =>
           Promise.resolve(
             name === "agentport-daemon"
               ? { uid: 995, gid: 990, groups: [990, 989] }
-              : { uid: 997, gid: 989, groups: [989] },
+              : { uid: 997, gid: 988, groups: [988] },
+          ),
+        );
+      },
+    ],
+    [
+      "Runtime user is a member of the ingress group",
+      "identity_separation",
+      (fixture: ReturnType<typeof validDependencies>) => {
+        fixture.dependencies.account = vi.fn((name: string) =>
+          Promise.resolve(
+            name === "agentport-daemon"
+              ? { uid: 995, gid: 990, groups: [990, 989, 988] }
+              : { uid: 997, gid: 988, groups: [988, 989] },
+          ),
+        );
+      },
+    ],
+    [
+      "daemon is not a member of the ingress group",
+      "identity_separation",
+      (fixture: ReturnType<typeof validDependencies>) => {
+        fixture.dependencies.account = vi.fn((name: string) =>
+          Promise.resolve(
+            name === "agentport-daemon"
+              ? { uid: 995, gid: 990, groups: [990, 988] }
+              : { uid: 997, gid: 988, groups: [988] },
           ),
         );
       },
@@ -157,7 +190,7 @@ describe("Linux administrator configuration preflight", () => {
         fixture.paths.set("/var/lib/agentport", {
           kind: "directory",
           uid: 995,
-          gid: 989,
+          gid: 988,
           mode: 0o770,
         });
       },
@@ -212,11 +245,23 @@ describe("Linux administrator configuration preflight", () => {
       "worker ingress is group writable",
       "worker_ingress_path",
       (fixture: ReturnType<typeof validDependencies>) => {
-        fixture.paths.set("/run/agentport/ingress", {
+        fixture.paths.set("/run/agentport-ingress", {
           kind: "directory",
           uid: 0,
           gid: 989,
           mode: 0o770,
+        });
+      },
+    ],
+    [
+      "worker ingress is the superseded root:runtimeGroup 0750 layout",
+      "worker_ingress_path",
+      (fixture: ReturnType<typeof validDependencies>) => {
+        fixture.paths.set("/run/agentport-ingress", {
+          kind: "directory",
+          uid: 0,
+          gid: 988,
+          mode: 0o750,
         });
       },
     ],

@@ -5,7 +5,7 @@ function isMissing(error: unknown): boolean {
   return (error as NodeJS.ErrnoException).code === "ENOENT";
 }
 
-async function requireProtectedDirectory(path: string): Promise<void> {
+async function requireProtectedAncestor(path: string): Promise<void> {
   const metadata = await lstat(path);
   if (
     !metadata.isDirectory() ||
@@ -17,13 +17,55 @@ async function requireProtectedDirectory(path: string): Promise<void> {
   }
 }
 
-async function validateExistingChain(path: string): Promise<void> {
+/** Validates every already-existing directory strictly above `path`. */
+async function validateAncestorChain(path: string): Promise<void> {
   const root = parse(path).root;
-  let current = path;
+  let current = dirname(path);
   for (;;) {
-    await requireProtectedDirectory(current);
+    await requireProtectedAncestor(current);
     if (current === root) return;
     current = dirname(current);
+  }
+}
+
+/**
+ * Refuses a target the launcher must not repair: a symlink, a non-directory,
+ * a non-root owner, or write access beyond what the requested mode grants to
+ * the requested group. Only then may ownership and mode be normalized.
+ */
+async function requireSafeTarget(
+  path: string,
+  mode: number,
+  groupId: number,
+): Promise<void> {
+  const metadata = await lstat(path);
+  const foreignWrite =
+    (metadata.mode & 0o022 & ~mode) !== 0 ||
+    ((metadata.mode & 0o020) !== 0 && metadata.gid !== groupId);
+  if (
+    !metadata.isDirectory() ||
+    metadata.isSymbolicLink() ||
+    metadata.uid !== 0 ||
+    foreignWrite
+  ) {
+    throw new Error("Protected launcher path target is unsafe");
+  }
+}
+
+async function requireProtectedTarget(
+  path: string,
+  mode: number,
+  groupId: number,
+): Promise<void> {
+  const metadata = await lstat(path);
+  if (
+    !metadata.isDirectory() ||
+    metadata.isSymbolicLink() ||
+    metadata.uid !== 0 ||
+    metadata.gid !== groupId ||
+    (metadata.mode & 0o777) !== mode
+  ) {
+    throw new Error("Protected launcher directory ownership is invalid");
   }
 }
 
@@ -31,6 +73,11 @@ async function validateExistingChain(path: string): Promise<void> {
  * Creates only beneath an already protected root-owned ancestor. This keeps a
  * privileged launcher from following or repairing a path controlled by the
  * Runtime identity while preparing ledgers, sockets, or credentials.
+ *
+ * The `(mode & 0o022)` ancestor rule applies only to directories above the
+ * target: the target itself may legitimately be group- or other-writable
+ * (for example the 0771 ingress directory), so it is verified against the
+ * exact requested mode, owner, and group instead.
  */
 export async function prepareProtectedLauncherDirectory(
   path: string,
@@ -51,25 +98,18 @@ export async function prepareProtectedLauncherDirectory(
       existing = parent;
     }
   }
-  await validateExistingChain(existing);
+  if (existing !== path) await requireProtectedAncestor(existing);
+  await validateAncestorChain(existing);
 
   for (const candidate of missing.reverse()) {
-    await mkdir(candidate, { mode: candidate === path ? mode : 0o700 });
-    await requireProtectedDirectory(candidate);
+    const isTarget = candidate === path;
+    await mkdir(candidate, { mode: isTarget ? mode : 0o700 });
+    if (!isTarget) await requireProtectedAncestor(candidate);
   }
 
-  await requireProtectedDirectory(path);
+  await requireSafeTarget(path, mode, groupId);
   await chown(path, 0, groupId);
   await chmod(path, mode);
-  const after = await lstat(path);
-  if (
-    !after.isDirectory() ||
-    after.isSymbolicLink() ||
-    after.uid !== 0 ||
-    after.gid !== groupId ||
-    (after.mode & 0o777) !== mode
-  ) {
-    throw new Error("Protected launcher directory ownership is invalid");
-  }
-  await validateExistingChain(path);
+  await requireProtectedTarget(path, mode, groupId);
+  await validateAncestorChain(path);
 }

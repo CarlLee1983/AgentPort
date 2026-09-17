@@ -7,6 +7,8 @@
   "runtimeGroup": "agentport-runtime",
   "runtimeHome": "/var/lib/agentport-runtime",
   "nodeExecutable": "/usr/local/bin/node",
+  "ingressDirectory": "/run/agentport-g1-ingress",
+  "ingressGroup": "agentport-ingress",
   "profiles": {
     "g1-idle": {
       "workspaceIdentity": "g1-workspace",

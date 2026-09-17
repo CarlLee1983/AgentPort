@@ -1,5 +1,6 @@
-import { describe, expect, it } from "vitest";
+import { describe, expect, it, vi } from "vitest";
 
+import { ensureLauncherIngressDirectory } from "../../src/supervisor/linux/ingress-directory.js";
 import { parseLinuxLauncherOptions } from "../../src/supervisor/linux/launcher-configuration.js";
 import { isPrivilegeSeparatedRuntimeIdentity } from "../../src/supervisor/linux/launcher-server.js";
 
@@ -12,6 +13,8 @@ const validConfiguration = {
   runtimeGroup: "agentport-runtime",
   runtimeHome: "/var/lib/agentport-runtime",
   nodeExecutable: "/usr/local/bin/node",
+  ingressDirectory: "/run/agentport-g1-ingress",
+  ingressGroup: "agentport-ingress",
   profiles: {
     "g1-idle": {
       workspaceIdentity: "g1-workspace",
@@ -83,6 +86,74 @@ describe("protected Linux launcher configuration", () => {
     expect(() => parseLinuxLauncherOptions(configuration)).toThrow(
       "Invalid protected launcher configuration",
     );
+  });
+
+  it.each([
+    [
+      "ingressGroup equals socketGroup",
+      { ...validConfiguration, ingressGroup: validConfiguration.socketGroup },
+    ],
+    [
+      "ingressGroup equals runtimeGroup",
+      { ...validConfiguration, ingressGroup: validConfiguration.runtimeGroup },
+    ],
+  ])("rejects %s", (_label, configuration) => {
+    expect(() => parseLinuxLauncherOptions(configuration)).toThrow(
+      "Invalid protected launcher configuration",
+    );
+  });
+});
+
+describe("launcher ingress directory security fixture (AP-021)", () => {
+  it("rejects /run/agentport/ingress symlinked to /tmp before creating anything", async () => {
+    const configuration = parseLinuxLauncherOptions({
+      ...validConfiguration,
+      ingressDirectory: "/run/agentport/ingress",
+    });
+    expect(configuration.ingressDirectory).toBe("/run/agentport/ingress");
+    const create = vi.fn(() => Promise.resolve());
+    await expect(
+      ensureLauncherIngressDirectory(
+        989,
+        () =>
+          Promise.resolve({
+            processUid: 0,
+            // lstat of the configured path reports the symlink itself.
+            target: {
+              isDirectory: false,
+              isSymbolicLink: true,
+              uid: 0,
+              gid: 0,
+              mode: 0o777,
+            },
+            ancestors: [
+              {
+                path: "/run/agentport",
+                isDirectory: true,
+                isSymbolicLink: false,
+                uid: 0,
+                mode: 0o750,
+              },
+              {
+                path: "/run",
+                isDirectory: true,
+                isSymbolicLink: false,
+                uid: 0,
+                mode: 0o755,
+              },
+              {
+                path: "/",
+                isDirectory: true,
+                isSymbolicLink: false,
+                uid: 0,
+                mode: 0o755,
+              },
+            ],
+          }),
+        create,
+      ),
+    ).rejects.toThrow("Launcher ingress directory is not protected");
+    expect(create).not.toHaveBeenCalled();
   });
 });
 

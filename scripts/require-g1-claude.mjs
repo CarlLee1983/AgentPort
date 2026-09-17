@@ -23,6 +23,8 @@ async function main() {
     "AGENTPORT_G1_RUNTIME_GID",
     "AGENTPORT_G1_RUNTIME_UID",
     "AGENTPORT_G1_RUNTIME_USER",
+    "AGENTPORT_G1_DAEMON_USER",
+    "AGENTPORT_G1_INGRESS_GID",
   ]) {
     if (!process.env[name]) throw new Error("missing-configuration");
   }

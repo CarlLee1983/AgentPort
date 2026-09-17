@@ -34,6 +34,12 @@ import {
   type LinuxLauncherResponse,
   type LinuxLauncherResult,
 } from "./launcher-protocol.js";
+import {
+  ensureLauncherIngressDirectory,
+  INGRESS_DIRECTORY_MODE,
+  lstatIngressPath,
+  observeIngressDirectory,
+} from "./ingress-directory.js";
 import { prepareProtectedLauncherDirectory } from "./protected-path.js";
 
 const executeFile = promisify(execFile);
@@ -60,6 +66,8 @@ export interface LinuxLauncherServerOptions {
   runtimeGroup: string;
   runtimeHome: string;
   nodeExecutable: string;
+  ingressDirectory: string;
+  ingressGroup: string;
   profiles: Readonly<Record<string, LinuxLaunchProfile>>;
   commandTimeoutMilliseconds?: number;
   stopTimeoutMilliseconds?: number;
@@ -217,6 +225,7 @@ export class LinuxLauncherServer {
       0o750,
       socketGroupId,
     );
+    await this.#prepareIngressDirectory(socketGroupId);
     this.#dispatchAuthorityEpoch = `epoch-${randomUUID()}`;
     const recordedUnits = await this.#sealPriorLauncherEpoch();
     await this.#sealUnitOnlyOrphans(recordedUnits);
@@ -1006,6 +1015,34 @@ export class LinuxLauncherServer {
       await this.#proveEmpty(slice);
       await this.#systemctl(["stop", slice], true);
     }
+  }
+
+  async #prepareIngressDirectory(socketGroupId: number): Promise<void> {
+    const ingressGroupId = await this.#groupId(this.options.ingressGroup);
+    if (
+      ingressGroupId === socketGroupId ||
+      ingressGroupId === this.#runtimeGroupId
+    ) {
+      throw new Error(
+        "Ingress group must differ from the socket and Runtime groups",
+      );
+    }
+    const ingressDirectory = this.options.ingressDirectory;
+    await ensureLauncherIngressDirectory(
+      ingressGroupId,
+      () =>
+        observeIngressDirectory(
+          ingressDirectory,
+          process.getuid?.() ?? -1,
+          lstatIngressPath,
+        ),
+      () =>
+        prepareProtectedLauncherDirectory(
+          ingressDirectory,
+          INGRESS_DIRECTORY_MODE,
+          ingressGroupId,
+        ),
+    );
   }
 
   async #groupId(name: string): Promise<number> {

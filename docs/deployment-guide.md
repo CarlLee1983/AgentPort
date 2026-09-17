@@ -74,14 +74,18 @@ AgentPort 採用 **三權分立（Separation of Privilege）** 架構，確保�
 ### 3.1 建立系統專用帳號與群組
 
 ```bash
-# 1. 建立 Launcher 通訊群組
+# 1. 建立 Launcher 通訊群組與 ingress 群組（兩者必須不同於 Runtime 群組）
 sudo groupadd -r agentport-launcher
+sudo groupadd -r agentport-ingress
 
-# 2. 建立 Daemon 服務帳號（加入 launcher 群組）
-sudo useradd -r -s /usr/sbin/nologin -g agentport-launcher -M agentport-daemon
-
-# 3. 建立 Runtime 沙盒帳號（完全隔離，不給予 launcher 群組權限）
+# 2. 建立 Runtime 沙盒帳號（完全隔離，不給予 launcher 或 ingress 群組權限）
 sudo useradd -r -s /bin/bash -m -d /home/agentport-runtime agentport-runtime
+
+# 3. 建立非 root Daemon 服務帳號：加入 launcher 群組以連線 launcher、
+#    加入 ingress 群組以在 ingress 目錄建立 socket、加入 Runtime 群組以把
+#    socket 交給 Runtime 群組（ADR-0006、GATE-040）
+sudo useradd -r -s /usr/sbin/nologin -g agentport-launcher -M agentport-daemon
+sudo usermod -a -G agentport-ingress,agentport-runtime agentport-daemon
 ```
 
 ### 3.2 建立必要目錄與設定檔案權限
@@ -101,10 +105,9 @@ sudo mkdir -p /var/lib/agentport/ledger
 sudo chown -R root:root /var/lib/agentport/ledger
 sudo chmod 700 /var/lib/agentport/ledger
 
-# Worker Ingress 通訊目錄 (root 擁有，runtime 可進但不可改)
-sudo mkdir -p /run/agentport/ingress
-sudo chown root:agentport-runtime /run/agentport/ingress
-sudo chmod 750 /run/agentport/ingress
+# Worker Ingress 通訊目錄不手動建立：launcher 啟動時建立並驗證為
+# root:agentport-ingress 0771；既有目錄若 owner、group、mode 不符或為 symlink，
+# launcher 拒絕啟動，daemon 也拒絕派送。
 
 # 多專案工作區目錄根路徑
 sudo mkdir -p /var/agentport/workspaces
@@ -130,6 +133,8 @@ sudo chmod 750 /var/agentport/workspaces
   "runtimeGroup": "agentport-runtime",
   "runtimeHome": "/home/agentport-runtime",
   "nodeExecutable": "/usr/bin/node",
+  "ingressDirectory": "/run/agentport/ingress",
+  "ingressGroup": "agentport-ingress",
   "profiles": {
     "profile-project-a": {
       "workspaceIdentity": "ws-project-a",
@@ -216,9 +221,10 @@ pnpm run build
 sudo node dist/src/operations/linux-preflight-main.js \
   /etc/agentport/launcher.json \
   agentport-daemon \
-  /var/lib/agentport/store.db \
-  /run/agentport/ingress
+  /var/lib/agentport/store.db
 ```
+
+ingress 目錄與群組由 `launcher.json` 的 `ingressDirectory`、`ingressGroup` 決定，不再由指令參數傳入。
 
 ### 預期結果
 - 指令必須輸出 JSON 且結束碼（Exit Code）為 `0`：
@@ -231,7 +237,7 @@ sudo node dist/src/operations/linux-preflight-main.js \
     { "code": "platform_supported", "outcome": "pass" },
     { "code": "daemon_account_isolated", "outcome": "pass" },
     { "code": "database_path_isolated", "outcome": "pass" },
-    { "code": "ingress_permissions_valid", "outcome": "pass" }
+    { "code": "worker_ingress_path", "outcome": "pass" }
   ]
 }
 ```

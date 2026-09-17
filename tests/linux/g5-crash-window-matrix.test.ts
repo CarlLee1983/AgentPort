@@ -8,6 +8,7 @@ import { describe, expect, it } from "vitest";
 import { isVerifiedLinuxStopEvidence } from "../../src/supervisor/linux/execution-supervisor.js";
 import { executionUnitNames } from "../../src/supervisor/linux/launcher-protocol.js";
 import {
+  LAUNCHER_RESTART_TIMEOUT_MS,
   LINUX_G1_ENABLED,
   descendantPids,
   executionCgroupPath,
@@ -152,74 +153,83 @@ describe.skipIf(!LINUX_G1_ENABLED)("G5 Linux crash-window matrix", () => {
     }
   }, 45_000);
 
-  it("seals a running generation across two launcher restarts without a second start", async () => {
-    const reference = await linuxReference("g1-idle");
-    const units = executionUnitNames(reference.executionId);
-    let primaryError: Error | undefined;
+  it(
+    "seals a running generation across two launcher restarts without a second start",
+    async () => {
+      const reference = await linuxReference("g1-idle");
+      const units = executionUnitNames(reference.executionId);
+      let primaryError: Error | undefined;
 
-    try {
-      await expect(linuxSupervisor().start(reference)).resolves.toMatchObject({
-        kind: "started",
-      });
+      try {
+        await expect(linuxSupervisor().start(reference)).resolves.toMatchObject(
+          {
+            kind: "started",
+          },
+        );
 
-      await restartLauncher();
-      const first = await linuxSupervisor().reconcile(reference);
-      expect(first.kind).toBe("stopped");
-      if (first.kind !== "stopped") throw new Error("Expected Stop Evidence");
-      expect(isVerifiedLinuxStopEvidence(first.evidence)).toBe(true);
+        await restartLauncher();
+        const first = await linuxSupervisor().reconcile(reference);
+        expect(first.kind).toBe("stopped");
+        if (first.kind !== "stopped") throw new Error("Expected Stop Evidence");
+        expect(isVerifiedLinuxStopEvidence(first.evidence)).toBe(true);
 
-      await restartLauncher();
-      const second = await linuxSupervisor().reconcile(reference);
-      expect(second.kind).toBe("stopped");
-      if (second.kind !== "stopped") throw new Error("Expected Stop Evidence");
-      expect(isVerifiedLinuxStopEvidence(second.evidence)).toBe(true);
-      expect(second.evidence.reference).toEqual(reference);
-      expect(second.evidence.executionUnitId).toBe(units.executionUnitId);
-      expect(second.evidence.generationSealedAt).toBe(
-        first.evidence.generationSealedAt,
-      );
-      expect(
-        Date.parse(second.evidence.unitEmptyObservedAt),
-      ).toBeGreaterThanOrEqual(Date.parse(first.evidence.unitEmptyObservedAt));
+        await restartLauncher();
+        const second = await linuxSupervisor().reconcile(reference);
+        expect(second.kind).toBe("stopped");
+        if (second.kind !== "stopped")
+          throw new Error("Expected Stop Evidence");
+        expect(isVerifiedLinuxStopEvidence(second.evidence)).toBe(true);
+        expect(second.evidence.reference).toEqual(reference);
+        expect(second.evidence.executionUnitId).toBe(units.executionUnitId);
+        expect(second.evidence.generationSealedAt).toBe(
+          first.evidence.generationSealedAt,
+        );
+        expect(
+          Date.parse(second.evidence.unitEmptyObservedAt),
+        ).toBeGreaterThanOrEqual(
+          Date.parse(first.evidence.unitEmptyObservedAt),
+        );
 
-      const lateStart = await linuxSupervisor().start(reference);
-      expect(lateStart.kind).not.toBe("started");
-      await expect(
-        systemctl(["is-active", units.serviceUnit]),
-      ).rejects.toBeInstanceOf(Error);
-      const recorded: unknown = JSON.parse(
-        await readFile(ledgerPath(reference.executionId), "utf8"),
-      );
-      expect(recorded).toMatchObject({
-        reference,
-        state: "sealed",
-        generationSealedAt: second.evidence.generationSealedAt,
-        unitEmptyObservedAt: second.evidence.unitEmptyObservedAt,
-      });
-    } catch (error) {
-      primaryError =
-        error instanceof Error
-          ? error
-          : new Error("G5 restart assertion failed");
-    }
-
-    let cleanupError: Error | undefined;
-    try {
-      const cleanup = await linuxSupervisor().revokeAndStop(reference);
-      if (cleanup.kind !== "stopped") {
-        cleanupError = new Error("Exact Execution Unit cleanup is unknown");
+        const lateStart = await linuxSupervisor().start(reference);
+        expect(lateStart.kind).not.toBe("started");
+        await expect(
+          systemctl(["is-active", units.serviceUnit]),
+        ).rejects.toBeInstanceOf(Error);
+        const recorded: unknown = JSON.parse(
+          await readFile(ledgerPath(reference.executionId), "utf8"),
+        );
+        expect(recorded).toMatchObject({
+          reference,
+          state: "sealed",
+          generationSealedAt: second.evidence.generationSealedAt,
+          unitEmptyObservedAt: second.evidence.unitEmptyObservedAt,
+        });
+      } catch (error) {
+        primaryError =
+          error instanceof Error
+            ? error
+            : new Error("G5 restart assertion failed");
       }
-    } catch (error) {
-      cleanupError =
-        error instanceof Error ? error : new Error("G5 cleanup failed");
-    }
-    if (primaryError !== undefined && cleanupError !== undefined) {
-      throw new AggregateError(
-        [primaryError, cleanupError],
-        "G5 launcher restart and cleanup failed",
-      );
-    }
-    if (primaryError !== undefined) throw primaryError;
-    if (cleanupError !== undefined) throw cleanupError;
-  }, 45_000);
+
+      let cleanupError: Error | undefined;
+      try {
+        const cleanup = await linuxSupervisor().revokeAndStop(reference);
+        if (cleanup.kind !== "stopped") {
+          cleanupError = new Error("Exact Execution Unit cleanup is unknown");
+        }
+      } catch (error) {
+        cleanupError =
+          error instanceof Error ? error : new Error("G5 cleanup failed");
+      }
+      if (primaryError !== undefined && cleanupError !== undefined) {
+        throw new AggregateError(
+          [primaryError, cleanupError],
+          "G5 launcher restart and cleanup failed",
+        );
+      }
+      if (primaryError !== undefined) throw primaryError;
+      if (cleanupError !== undefined) throw cleanupError;
+    },
+    LAUNCHER_RESTART_TIMEOUT_MS * 3,
+  );
 });

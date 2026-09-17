@@ -11,6 +11,10 @@ import {
 } from "node:path";
 import { promisify } from "node:util";
 
+import {
+  assessProtectedIngressDirectory,
+  observeIngressDirectory,
+} from "../supervisor/linux/ingress-directory.js";
 import { readProtectedLinuxLauncherOptions } from "../supervisor/linux/launcher-configuration.js";
 import type { LinuxLauncherServerOptions } from "../supervisor/linux/launcher-server.js";
 
@@ -21,7 +25,6 @@ export interface LinuxPreflightConfiguration {
   launcherConfigurationPath: string;
   daemonUser: string;
   databasePath: string;
-  workerIngressDirectory: string;
 }
 
 export interface LinuxPreflightCheck {
@@ -296,7 +299,6 @@ export async function preflightLinuxOperations(
   if (
     !protectedAbsolutePath(configuration.launcherConfigurationPath) ||
     !protectedAbsolutePath(configuration.databasePath) ||
-    !protectedAbsolutePath(configuration.workerIngressDirectory) ||
     !accountName.test(configuration.daemonUser)
   ) {
     check("configuration_fields", "fail");
@@ -320,6 +322,7 @@ export async function preflightLinuxOperations(
     launcher.workspaceRoot,
     launcher.runtimeHome,
     launcher.nodeExecutable,
+    launcher.ingressDirectory,
     ...Object.values(launcher.profiles).flatMap((profile) => [
       profile.workspacePath,
       profile.workerEntrypoint,
@@ -335,12 +338,14 @@ export async function preflightLinuxOperations(
   let runtime: AccountIdentity;
   let socketGid: number;
   let runtimeGid: number;
+  let ingressGid: number;
   try {
-    [daemon, runtime, socketGid, runtimeGid] = await Promise.all([
+    [daemon, runtime, socketGid, runtimeGid, ingressGid] = await Promise.all([
       dependencies.account(configuration.daemonUser),
       dependencies.account(launcher.runtimeUser),
       dependencies.group(launcher.socketGroup),
       dependencies.group(launcher.runtimeGroup),
+      dependencies.group(launcher.ingressGroup),
     ]);
   } catch {
     check("account_lookup", "fail");
@@ -353,10 +358,14 @@ export async function preflightLinuxOperations(
       daemon.uid !== runtime.uid &&
       runtime.gid === runtimeGid &&
       socketGid !== runtimeGid &&
+      ingressGid !== socketGid &&
+      ingressGid !== runtimeGid &&
       daemon.groups.includes(socketGid) &&
-      !daemon.groups.includes(runtimeGid) &&
+      daemon.groups.includes(ingressGid) &&
+      daemon.groups.includes(runtimeGid) &&
       runtime.groups.length > 0 &&
-      runtime.groups.every((gid) => gid === runtimeGid)
+      runtime.groups.every((gid) => gid === runtimeGid) &&
+      !runtime.groups.includes(ingressGid)
       ? "pass"
       : "fail",
   );
@@ -373,7 +382,7 @@ export async function preflightLinuxOperations(
       dependencies.canonical(launcher.runtimeHome),
       dependencies.canonical(launcher.workspaceRoot),
       dependencies.canonical(launcher.ledgerDirectory),
-      dependencies.canonical(configuration.workerIngressDirectory),
+      dependencies.canonical(launcher.ingressDirectory),
     ]);
     const databasePath = join(
       databaseParent,
@@ -450,22 +459,26 @@ export async function preflightLinuxOperations(
         ? "pass"
         : "fail",
     );
-    const ingress = await inspectDirectoryChain(
-      configuration.workerIngressDirectory,
-      runtime,
-      launcher.runtimeUser,
-      dependencies,
+    const ingressAssessment = assessProtectedIngressDirectory(
+      await observeIngressDirectory(
+        launcher.ingressDirectory,
+        dependencies.uid,
+        async (path) => {
+          const metadata = await dependencies.metadata(path);
+          return metadata === undefined
+            ? undefined
+            : {
+                isDirectory: metadata.kind === "directory",
+                isSymbolicLink: metadata.kind === "symlink",
+                uid: metadata.uid,
+                gid: metadata.gid,
+                mode: metadata.mode,
+              };
+        },
+      ),
+      { ingressGroupId: ingressGid, allowRootProcess: true },
     );
-    check(
-      "worker_ingress_path",
-      ingress?.kind === "directory" &&
-        ingress.uid === 0 &&
-        ingress.gid === runtimeGid &&
-        (ingress.mode & 0o027) === 0 &&
-        (ingress.mode & 0o010) !== 0
-        ? "pass"
-        : "fail",
-    );
+    check("worker_ingress_path", ingressAssessment.ok ? "pass" : "fail");
   } catch {
     check("path_inspection", "fail");
   }

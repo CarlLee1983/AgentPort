@@ -1,18 +1,13 @@
 import { preflightLinuxOperations } from "./linux-preflight.js";
 
-const [
-  launcherConfigurationPath,
-  daemonUser,
-  databasePath,
-  workerIngressDirectory,
-] = process.argv.slice(2);
+const [launcherConfigurationPath, daemonUser, databasePath] =
+  process.argv.slice(2);
 
 if (
-  process.argv.length !== 6 ||
+  process.argv.length !== 5 ||
   launcherConfigurationPath === undefined ||
   daemonUser === undefined ||
-  databasePath === undefined ||
-  workerIngressDirectory === undefined
+  databasePath === undefined
 ) {
   console.log(
     JSON.stringify({
@@ -27,7 +22,6 @@ if (
     launcherConfigurationPath,
     daemonUser,
     databasePath,
-    workerIngressDirectory,
   });
   console.log(JSON.stringify(result));
   process.exitCode = result.status === "preparation_valid" ? 0 : 2;

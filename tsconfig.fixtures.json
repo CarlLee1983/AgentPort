@@ -1,0 +1,14 @@
+{
+  "extends": "./tsconfig.json",
+  "compilerOptions": {
+    "noEmit": false,
+    "outDir": "dist-fixtures",
+    "rootDir": ".",
+    "sourceMap": true
+  },
+  "include": [],
+  "files": [
+    "tests/fixtures/g4-daemon-child.ts",
+    "tests/fixtures/ingress-socket-child.ts"
+  ]
+}

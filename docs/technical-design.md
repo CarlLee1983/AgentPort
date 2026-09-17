@@ -235,7 +235,49 @@ Runtime env 只提供該 execution 所需 vendor 憑證；核心 DB／credential
 
 正常 shutdown 先停 admission／dispatch、暫停 queue；對活動 Task 停止，保存結果及未知狀態，再關 listener／storage。deadline 及 cgroup 清理由可信 supervisor 兜底，不只依賴 Node finally；非正常結束按第 9 節核對。
 
-部署驗證包含專用帳號、DB／credential 權限、TLS、固定 executable、cgroup v2／Linux Supervisor Adapter 與 crash cleanup；本輪未建立配置。readiness 區分能查詢與能派送；Agent unavailable 可列出，不接受違反其能力契約的工作。macOS development composition 不含 Runtime Adapter，不能對外宣稱可派送或 production-ready。
+部署驗證包含專用帳號、DB／credential 權限、TLS、固定 executable、cgroup v2／Linux Supervisor Adapter 與 crash cleanup；正式部署契約見下方「Linux 部署契約」。readiness 區分能查詢與能派送；Agent unavailable 可列出，不接受違反其能力契約的工作。macOS development composition 不含 Runtime Adapter，不能對外宣稱可派送或 production-ready。
+
+### Linux 部署契約
+
+依 [ADR-0006](adr/0006-non-root-daemon-launcher-privilege-boundary.md)、[ADR-0007](adr/0007-runtime-api-key-official-claude-install.md)（安裝部分）、[ADR-0010](adr/0010-runtime-authorization-subscription-first.md)、[ADR-0008](adr/0008-bootstrap-digest-pinned-installer.md)、[ADR-0009](adr/0009-single-operator-dedicated-host-no-agent-isolation.md) 與 AP-020。本節是一鍵安裝、正式 daemon 入口與 `agentport` CLI 的共同契約；AP-021 已讓受控 Runtime composition 以非 root 執行並拒絕 uid 0；正式 daemon 入口、admin socket 與 Caller 管理仍由後續 Story 承接。
+
+支援範圍只有單一管理者、只運行 AgentPort 的專用主機，平台為 Ubuntu 24.04 LTS／amd64／systemd／cgroup v2，其他組合由安裝器拒絕。同主機所有 Agent 共用一個 Runtime 帳號與 runtime-home，彼此沒有機密隔離；需要隔離時分主機部署。
+
+程序身分：control daemon 以非 root `agentport-daemon` 執行；launcher 是唯一 root 程序，建立 per-execution ingress、保存 ledger，並以 `systemd-run --uid/--gid` 啟動 `agentport-runtime` 身分的 worker。daemon 與 launcher 之間以 launcher socket 群組權限認證，該群組只能包含 `agentport-daemon`；偏離時不得報告 execution-ready。
+
+| 資源 | 位置 | 擁有者／mode | root launcher | agentport-daemon | agentport-runtime |
+| --- | --- | --- | --- | --- | --- |
+| 發行程式 | `/opt/agentport/releases/<version>`、`current` | root，不可被服務寫入 | 讀 | 讀 | 讀（worker entrypoint） |
+| 設定 | `/etc/agentport/launcher.json` | root，無 group／other 寫 | 讀 | 無 | 無 |
+| 設定 | `/etc/agentport/agentport.json` | root:agentport-daemon 0640 | 無 | 讀 | 無 |
+| 受保護秘密 | `/etc/agentport/credentials/` | root 0700 | 讀；經 `LoadCredential` 傳遞 | 只經 systemd credential 取得 `cursorSecret`、`continuationEncryptionKey` | 只在 Execution 期間經 credential 取得 ingress token 與單次 resume 資料 |
+| SQLite 與 control-reserve | `/var/lib/agentport/daemon/` | agentport-daemon 0700 | 無 | 讀寫 | 無 |
+| launcher ledger | `/var/lib/agentport/launcher/` | root 0700 | 讀寫 | 無 | 無 |
+| launcher socket | `/run/agentport/launcher.sock` | root:launcher 群組 0660 | 擁有 | 連線 | 無 |
+| admin socket | `/run/agentport/admin.sock` | agentport-daemon:agentport-admin 0660，唯讀查詢 | 無 | 擁有 | 無 |
+| ingress 目錄 | `/run/agentport/ingress` | root:agentport-ingress 0771 | 建立、驗證 | 驗證，建立 socket | 僅 traverse |
+| per-execution ingress socket | ingress 目錄內 | agentport-daemon:runtime 群組 0660 | 無 | 建立、listen | 連線並以 token 認證 |
+| runtime-home | `/var/lib/agentport/runtime-home` | agentport-runtime 0700 | 驗證 | 無 | 讀寫 |
+| Workspace | `/var/agentport/workspaces/<agent>` 或管理者指定路徑 | Runtime 可存取 | 驗證 | 無 | 讀寫 |
+
+Runtime 身分不能讀取 Caller token 雜湊、`cursorSecret`、`continuationEncryptionKey`、SQLite 或 ledger，也不能連線 launcher socket。
+
+秘密與授權：安裝器只在首次安裝時產生 `cursorSecret` 與 `continuationEncryptionKey`，之後不原地輪替；秘密不出現在 argv、環境檔、SQLite 或一般輸出。Caller 以 `agentport caller add|list|revoke` 管理，主機只保存 token 雜湊，token 只在建立時顯示一次。Claude Runtime 首版沿用 GATE-020 的訂閱 OAuth：credential 只存在 Runtime 帳號 0700 的 runtime-home，driver 拒絕環境注入的 API key 或 OAuth token；只能使用管理者本人的訂閱，條款風險由管理者承擔，API key 路徑由後續 Story 補上（ADR-0010）。Claude Code 由官方 apt 套件庫安裝指定版本並 hold，發行 manifest 記錄已驗證版本範圍，不內附於發行包。
+
+設定與生效：`launcher.json` 與 `agentport.json` 各帶 `schemaVersion`。Agent／Caller 類變更以驗證後的候選設定加 `SIGHUP` 觸發 Registry revision-fenced 替換，驗證失敗保留舊 revision；launcher 類變更只在沒有 active Execution 時允許重啟。MCP 預設監聽 loopback 3333，可設定；port 被占用即啟動失敗並回報原因，不自動換 port。`agent add` 建立 Runtime 擁有的新 Workspace，或只驗證既有路徑並提示修正指令，不做遞迴 chown／chmod。
+
+Deployment Readiness 是主機層的運維判定，與上文 Task 快照中的 health／readiness 分開，也不是 Task 狀態：
+
+| 等級 | 意義 | 接受新 Task |
+| --- | --- | --- |
+| installed | 程式已安裝，服務未運行或無法觀測 | 否 |
+| service-ready | 可接受 MCP 連線與查詢，但缺 Agent、Runtime 授權、Claude 版本相容或 launcher 連線任一條件 | 否 |
+| execution-ready | 上述條件皆成立、無待處理復原，且觀測未過期 | 是 |
+| recovery-blocked | 有未完成 recovery、storage incident 或 quarantine 需管理者處理 | 否 |
+
+每次判定附 reason code 與觀測時間；未觀測或過期一律不是 execution-ready。非 execution-ready 時提交 Task 以穩定錯誤碼拒絕且不建立 Task。零個 Agent 時 daemon 仍為 service-ready 並列出空集合。daemon 以唯讀 admin socket 回報就緒度；daemon 未運行時 `agentport doctor` 做離線檢查。預設檢查不發出付費 Runtime 呼叫，Runtime 授權只顯示「已設定、未驗證」；`agentport doctor --live` 是明確的付費驗證。
+
+安裝信任鏈：每個 release 發布內嵌 archive SHA-256 的版本固定 `install.sh` 與 GitHub artifact attestation。digest 只證明下載內容與該版本腳本一致，來源證明由 attestation 提供。runtime-home 內含 Runtime Session 延續所需的 Claude session 檔，屬於需備份、反安裝預設保留的資料。
 
 schema 有版本，未知新版本拒絕 dispatch、保留原檔，不重建空 DB。升級先暫停、停止並確認 execution、做一致備份再 migration。回滾需相容 reader／schema 或離線恢復，不能切回舊 in-memory。備份不可只複製未 checkpoint 的 DB 主檔而漏 WAL；恢復舊備份可能遺失較新副作用紀錄，須核對且不自動派送。
 
