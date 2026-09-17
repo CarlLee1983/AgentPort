@@ -13,7 +13,7 @@
 治理導入只建立 Story 與 READY Work Item；本 Story 的實作由下一次明確交辦開始。
 
 產品語意遵循 [CONTEXT](../../../CONTEXT.md)、[Technical Design](../../../docs/technical-design.md)
-與 [ADR](../../../docs/agents/domain.md)。ForgeFlow／ForgePilot 不加入產品 domain 或 runtime dependency。
+與 [ADR](../../../docs/agents/domain.md)。PraxisBound／ForgePilot 不加入產品 domain 或 runtime dependency。
 現有版本數字是待查證候選，不是已證實的 exact version 或 capability。
 
 ## Classification

@@ -2,7 +2,7 @@
 
 Decisions record intentionally reviewed repository or team knowledge. They are
 not universal mandates or automatically executable requirements. Split this file
-into smaller records later if the collection grows; ForgeFlow provides no
+into smaller records later if the collection grows; PraxisBound provides no
 decision engine.
 
 ## D-001 Example Decision

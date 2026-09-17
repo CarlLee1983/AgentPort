@@ -229,6 +229,9 @@ importers:
       "@eslint/js":
         specifier: 10.0.1
         version: 10.0.1(eslint@10.10.0)
+      "@praxisbound/cli":
+        specifier: 0.2.0
+        version: 0.2.0
       "@types/better-sqlite3":
         specifier: 9.6.0
         version: 9.6.0
@@ -499,6 +502,21 @@ packages:
       {
         integrity: sha512-Efcc+iF0j3Bf67YjEqIqWXbX5XddXoK/Mw4K1/JuXwRCZ8N16VR7iT23nlCc9XrveFVh/E5Rqs2StT0V8v9LdA==,
       }
+
+  "@praxisbound/cli@0.2.0":
+    resolution:
+      {
+        integrity: sha512-SVhJHGapMPnkrjb5ug6q6eFalyqba/iQ0mtGNKrXfmU8k3cznPmy93IyST6OiKoxnCKYpzzBJ3l5YP1MT3jBdw==,
+      }
+    engines: { node: ^22.13.0 || ^24.0.0 || ^26.0.0 }
+    hasBin: true
+
+  "@praxisbound/core@0.2.0":
+    resolution:
+      {
+        integrity: sha512-8WsiQblNxeHAwZW2bP50sCigJvZv8nFJYiAz2o/4IbwtxWV9MVZcfijq0an1o+rfuWkMOgs6jajSKaPZnRv/OA==,
+      }
+    engines: { node: ^22.13.0 || ^24.0.0 || ^26.0.0 }
 
   "@rolldown/binding-android-arm-eabi@1.2.8":
     resolution:
@@ -2384,6 +2402,12 @@ snapshots:
       zod: 4.6.2
 
   "@oxc-project/types@0.149.0": {}
+
+  "@praxisbound/cli@0.2.0":
+    dependencies:
+      "@praxisbound/core": 0.2.0
+
+  "@praxisbound/core@0.2.0": {}
 
   "@rolldown/binding-android-arm-eabi@1.2.8":
     optional: true

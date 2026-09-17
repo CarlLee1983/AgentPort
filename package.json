@@ -38,6 +38,7 @@
   },
   "devDependencies": {
     "@eslint/js": "10.0.1",
+    "@praxisbound/cli": "0.2.0",
     "@types/better-sqlite3": "9.6.0",
     "@types/node": "24.13.4",
     "eslint": "10.10.0",

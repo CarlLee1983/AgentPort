@@ -3,7 +3,7 @@
 本專案保留本機 Markdown tracker：`.scratch/` 用於 research、temporary planning、historical design material 與 migration source。
 
 `.scratch` 不是 implementation lifecycle authority。正式 implementation 工作需提升為
-ForgeFlow Story（`specs/stories/<ID>-<slug>/`），其執行狀態由 ForgePilot Work Item 管理。
+PraxisBound Story（`specs/stories/<ID>-<slug>/`），其執行狀態由 ForgePilot Work Item 管理。
 舊票據的 `Status` 僅保留歷史／triage 意義，不與 ForgePilot 雙向同步，也不據此領取正式實作。
 提升與執行流程見 [development workflow](../development-workflow.md)。
 
@@ -20,7 +20,7 @@ ForgeFlow Story（`specs/stories/<ID>-<slug>/`），其執行狀態由 ForgePilo
 
 技能要求「發布至 issue tracker」時，建立對應 Markdown 檔案；
 目錄不存在時才建立。更新既有票據時保留原有討論。
-若內容已是正式 implementation requirement，建立或更新 ForgeFlow Story，並以 ForgePilot Work Item 管理執行；不要另建 `.scratch` implementation 狀態。
+若內容已是正式 implementation requirement，建立或更新 PraxisBound Story，並以 ForgePilot Work Item 管理執行；不要另建 `.scratch` implementation 狀態。
 
 技能要求「取得票據」時，讀取使用者指定的路徑或功能目錄內的票號。
 票號不唯一時，先辨識所屬功能。

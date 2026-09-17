@@ -41,7 +41,7 @@ operation is never authorization to perform it.
 Optional. `Impact` defaults to `low`; delete this section for a Story that
 carries no architecture weight. `Impact: medium` or `high` must name at least
 one decision or contract. Each `Decision` resolves to a record under
-`specs/decisions/` unless the invocation sets `FORGEFLOW_DECISIONS_ROOT` to an
+`specs/decisions/` unless the invocation sets `PRAXISBOUND_DECISIONS_ROOT` to an
 existing ADR directory.
 
 * Impact: low

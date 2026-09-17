@@ -2,7 +2,7 @@
 
 ## Development workflow
 
-AgentPort uses ForgeFlowV2 0.9.0 as its engineering protocol and ForgePilot
+AgentPort uses PraxisBound 0.10.0 as its engineering protocol and ForgePilot
 v0.2.1 as its mutable engineering control plane. Neither is an AgentPort runtime
 dependency or product-domain authority.
 
