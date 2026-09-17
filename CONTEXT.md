@@ -26,6 +26,7 @@ AgentPort 與特定 Runtime 之間的整合邊界，將 Runtime 特有的操作�
 
 **Workspace**：
 由主機管理者指派給 Agent 的工作目錄範圍。Workspace 綁定表達工作應在哪裡進行，本身不代表 Runtime 無法存取其他主機資源。
+同一主機上的 Agent 共用 Runtime 身分，彼此之間沒有機密隔離；需要隔離時應分主機部署。
 _Avoid_: 將工作目錄稱為 Sandbox。
 
 **Agent Registry**：
@@ -63,3 +64,7 @@ Runtime 在特定整合方式下可可靠提供的操作能力。宣告支援代
 
 **Protocol Adapter**：
 外部協定與 AgentPort 工作語意之間的轉譯邊界。
+
+**Deployment Readiness（部署就緒度）**：
+主機管理者觀測一個 AgentPort 安裝能否接受並執行工作的運維判定，附帶原因與觀測時間。它不是 Task 或 Execution 的生命週期狀態；未觀測或已過期時視為未就緒，不得推定可執行。判定分為 installed（已安裝未啟動服務）、service-ready（可接受連線但不可執行）、execution-ready（可接受並執行新工作）與 recovery-blocked（需管理者處理復原後才能執行）。
+_Avoid_: 以服務程序存活代稱可執行，或把就緒度寫進 Task 狀態。

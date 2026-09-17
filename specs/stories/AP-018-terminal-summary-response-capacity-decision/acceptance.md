@@ -46,7 +46,7 @@
 | `AC-02` | human | `ForgePilot Gate resolution record for the AP-018 Work Item` | `three mutually exclusive options with compatibility, security, recovery and rollback impact` | `one human-selected contract is recorded and no agent self-resolves or cancels the Gate` |
 | `AC-03` | human | `docs/adr/0005-terminal-summary-response-capacity.md and docs/technical-design.md` | `resolved Gate and AP-017 evidence` | `the documents agree on layer, inclusive limit, exclusions, saturation, recovery, compatibility, privacy, rollback and later behavior scope` |
 | `AC-04` | human | `AP-018 final diff and ForgePilot Gate rationale` | `private AP-017 fixtures, authorized cursor semantics and all three considered options` | `no private content, concealment weakening, truncation, skipped cursor item or ambiguous verdict is introduced` |
-| `AC-05` | command | `/bin/sh scripts/forgeflow/story-check --ready specs/stories/AP-018-terminal-summary-response-capacity-decision && make verify` | `same exact documentation candidate after Gate resolution; unchanged product sources` | `commands exit zero and product behavior remains unchanged` |
+| `AC-05` | command | `pnpm exec praxisbound story check --ready specs/stories/AP-018-terminal-summary-response-capacity-decision && make verify` | `same exact documentation candidate after Gate resolution; unchanged product sources` | `commands exit zero and product behavior remains unchanged` |
 | `AC-06` | human | `ForgePilot Human Review record` | `current candidate, resolved Gate, accepted ADR, technical-design diff and explicit residual Issue 21 gaps` | `reviewer accepts or rejects the architecture evidence without inferring behavior implementation, G5, S6 or release readiness` |
 
 ## Security Fixture Matrix

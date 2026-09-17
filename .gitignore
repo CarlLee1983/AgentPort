@@ -3,4 +3,5 @@ graft/
 .forgepilot/
 node_modules/
 dist/
+dist-fixtures/
 coverage/

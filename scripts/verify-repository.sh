@@ -17,7 +17,7 @@ for file in \
   scripts/verify-toolchain.sh docs/toolchain-compatibility.md \
   specs/stories/AP-001-toolchain-mcp-compatibility/verification.md \
   guidance/ENTRY.md guidance/PRINCIPLES.md guidance/DECISIONS.md guidance/PRACTICES.md \
-  specs/.forgeflow-adoption \
+  specs/.praxisbound-adoption \
   specs/stories/_template/story.md specs/stories/_template/acceptance.md specs/stories/_template/task.md \
   specs/stories/AP-001-toolchain-mcp-compatibility/story.md \
   specs/stories/AP-001-toolchain-mcp-compatibility/acceptance.md \
@@ -47,8 +47,7 @@ for file in \
   docs/adr/0003-local-transactional-task-store.md \
   docs/adr/0004-linux-execution-macos-development.md \
   .scratch/README.md .scratch/agentport-v0-1/spec.md \
-  .scratch/agentport-v0-1/issues/01-mcp-version-compatibility.md \
-  scripts/forgeflow/story-check scripts/forgeflow/LICENSE scripts/forgeflow/README.md
+  .scratch/agentport-v0-1/issues/01-mcp-version-compatibility.md
 do
   [ -f "$file" ] && [ ! -L "$file" ] && [ -s "$file" ] || fail "missing, empty or symlinked file: $file"
   # Refuse unresolved merge markers in the adopted contract and input docs.
@@ -63,10 +62,10 @@ for entry in ./*; do
   esac
 done
 
-grep -Eq '^version=[0-9]+\.[0-9]+\.[0-9]+$' specs/.forgeflow-adoption || fail 'invalid adoption version'
-grep -Eq '^revision=([0-9a-f]{40}(-dirty)?|unknown)$' specs/.forgeflow-adoption || fail 'invalid adoption revision'
+grep -Eq '^version=[0-9]+\.[0-9]+\.[0-9]+$' specs/.praxisbound-adoption || fail 'invalid adoption version'
+grep -Eq '^revision=([0-9a-f]{40}(-dirty)?|unknown)$' specs/.praxisbound-adoption || fail 'invalid adoption revision'
 
-for script in scripts/verify-repository.sh scripts/forgeflow/story-check; do
+for script in scripts/verify-repository.sh; do
   /bin/sh -n "$script" || fail "invalid shell syntax: $script"
 done
 

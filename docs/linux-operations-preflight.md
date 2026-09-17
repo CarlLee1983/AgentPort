@@ -13,16 +13,16 @@ pnpm run build
 node dist/src/operations/linux-preflight-main.js \
   /etc/agentport/launcher.json \
   agentport-daemon \
-  /var/lib/agentport/store.db \
-  /run/agentport/ingress
+  /var/lib/agentport/store.db
 ```
 
-The four arguments are the protected launcher configuration path, proposed
-non-root daemon account, SQLite path, and worker ingress directory. The launcher
-configuration remains the source of truth for the root launcher socket group,
-ledger, Runtime identity, Runtime home, Workspace root and worker profiles.
-Use only administrator-controlled absolute paths. The example contains no
-credential or real host identity.
+The three arguments are the protected launcher configuration path, proposed
+non-root daemon account, and SQLite path. The launcher configuration remains
+the source of truth for the root launcher socket group, ledger, Runtime
+identity, Runtime home, Workspace root, worker profiles, and the
+launcher-owned ingress directory and ingress group (GATE-042); there is no
+separate ingress path argument. Use only administrator-controlled absolute
+paths. The example contains no credential or real host identity.
 
 The command prints one JSON result containing stable check codes and exits zero
 only when its **preparation** checks pass. It never prints input paths, account
@@ -32,18 +32,22 @@ the checked identities and paths are compatible with the proposed separation;
 it does not mean AgentPort is installed, queryable or dispatch-ready.
 
 The checks confirm that the daemon is non-root and distinct from Runtime, is a
-member of the launcher socket group while Runtime is excluded, and that the
-database path is outside Runtime home, Workspace, ledger and ingress. Existing
-paths are compared after resolving their directory aliases, so a symlinked
-Workspace root cannot hide database overlap. Existing
-database, WAL, SHM and control-reserve files plus their parent must be writable
-by the daemon and not readable or writable by Runtime. The root-owned ledger,
-launcher socket parent and any existing launcher socket must not grant Runtime
-control access. The ingress directory must be root-owned, Runtime-group
-traversable, and not group writable. Alongside mode bits, the command runs
-read-only access probes as Runtime to catch effective ACL grants; if those
-probes cannot run, preflight fails closed. The existing launcher configuration
-reader rejects unprotected or malformed files before these checks run.
+member of the launcher socket group, the ingress group and the Runtime group
+(so it can hand each ingress socket to the Runtime group, GATE-040) while
+Runtime is excluded from the socket and ingress groups, and that the database path is outside Runtime home,
+Workspace, ledger and the launcher-owned ingress directory. Existing paths are
+compared after resolving their directory aliases, so a symlinked Workspace
+root cannot hide database overlap. Existing database, WAL, SHM and
+control-reserve files plus their parent must be writable by the daemon and not
+readable or writable by Runtime. The root-owned ledger, launcher socket parent
+and any existing launcher socket must not grant Runtime control access. The
+ingress directory must be a launcher-owned, non-symlinked directory with every
+ancestor root-owned and not group- or other-writable, owner uid 0, group the
+ingress group, mode exactly 0771 (GATE-042). Alongside mode bits, the
+command runs read-only access probes as Runtime to catch effective ACL grants;
+if those probes cannot run, preflight fails closed. The existing launcher
+configuration reader rejects unprotected or malformed files before these
+checks run.
 
 Codes marked `not_assessed` cover executable validity, Caller group isolation,
 worker credentials, schema/recovery state, trusted Stop Evidence, broker

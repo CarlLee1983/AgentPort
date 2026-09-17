@@ -1,12 +1,12 @@
 # AgentPort development workflow
 
-ForgeFlowV2 is the engineering protocol; ForgePilot is the engineering control
-plane; AgentPort is the product. ForgeFlowV2 and ForgePilot do not enter the
+PraxisBound is the engineering protocol; ForgePilot is the engineering control
+plane; AgentPort is the product. PraxisBound and ForgePilot do not enter the
 AgentPort runtime dependency graph and do not redefine the product domain.
 
     Human requirement
         ↓
-    ForgeFlow Story
+    PraxisBound Story
         ↓
     ForgePilot Work Item
         ↓
@@ -24,13 +24,13 @@ current execution of that intent.
 
 ## Authority and repository contract
 
-ForgeFlowV2 0.9.0 holds Story intent, Acceptance Criteria, architecture and
+PraxisBound 0.10.0 holds Story intent, Acceptance Criteria, architecture and
 risk contracts, verification semantics, Story readiness, and historical
 evidence. ForgePilot v0.2.1 is the sole mutable authority for Work Item,
 lifecycle, Gate, blocker, next action, verification-current, Human Review, and
 completion. AgentPort holds implementation, tests, and make verify.
 
-The only ForgeFlow repository entrypoints required for conformance are:
+The only PraxisBound repository entrypoints required for conformance are:
 
 * AGENTS.md
 * Makefile, exposing make verify
@@ -41,15 +41,15 @@ are optional capabilities. Bootstrap layout is an installer concern, not a
 repository conformance rule. AgentPort deliberately retains its repository-owned
 AGENTS.md, CONTEXT.md, Makefile, guidance, documentation, ADRs, and scripts.
 
-This adoption uses ForgeFlowV2 0.9.0 at clean source commit
-2e012222b6bb24eca1059285b91ffcfc074a3440. The repository-owned Story checker,
-LICENSE, and templates were reconciled from that source after an official
-bootstrap --upgrade --dry-run review. The marker in specs/.forgeflow-adoption
-records that source revision only; it is not verification evidence.
+This adoption migrated from ForgeFlowV2 0.9.0 to PraxisBound Protocol 0.10.0
+with `praxisbound init --upgrade` from the pinned `@praxisbound/cli` 0.2.0
+devDependency, which replaced the Story templates and the adoption marker. The
+marker in specs/.praxisbound-adoption records the protocol version and source
+revision only; it is not verification evidence.
 
-The repository-owned checker is a static read-only check called by make verify.
-It checks structural readiness, not human authorization, product behavior, or
-Work Item state. Do not install a second ForgeFlow lifecycle projection or make
+make verify runs `pnpm exec praxisbound story check --ready`, a static read-only
+check. It checks structural readiness, not human authorization, product
+behavior, or Work Item state. Do not install a second lifecycle projection or make
 the optional upstream skills a repository requirement.
 
 ## Story creation, readiness, and Work Items
@@ -147,7 +147,7 @@ command. A Story's text is not silently rewritten to evade the decision.
 
 ## Risk-driven readiness
 
-ForgeFlowV2 risk signals are opt-in. Declare a Signal under the Story Risk
+PraxisBound risk signals are opt-in. Declare a Signal under the Story Risk
 section only when the risk is in scope. Each declared signal requires exactly
 one matching section and one Evidence AC. That AC must be an existing checkbox
 AC and must map to the ordinary Acceptance Evidence table; there is no second
@@ -167,7 +167,7 @@ the signal is explicitly declared.
 
 ## Historical evidence and migration material
 
-verification.md and any retained ForgeFlow handoff are immutable historical
+verification.md and any retained ForgeFlow or PraxisBound handoff are immutable historical
 evidence, not mutable control state. They may record Story, recorded_at,
 repository, candidate revision or snapshot identity, verification command, and
 observed result. New evidence must not declare current, next, status, Gate, review, or

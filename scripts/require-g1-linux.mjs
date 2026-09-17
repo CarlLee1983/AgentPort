@@ -20,6 +20,7 @@ for (const name of [
   "AGENTPORT_G1_LAUNCHER_CONFIG",
   "AGENTPORT_G1_RUNTIME_HOME",
   "AGENTPORT_G1_WORKSPACE_PATH",
+  "AGENTPORT_G1_DAEMON_USER",
 ]) {
   if (!process.env[name]) throw new Error(`${name} is required`);
 }

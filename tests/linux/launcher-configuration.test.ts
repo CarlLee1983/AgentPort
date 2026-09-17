@@ -1,11 +1,14 @@
+import { randomUUID } from "node:crypto";
 import {
   chmod,
   chown,
+  lstat,
   mkdtemp,
   readFile,
   rm,
   mkdir,
   symlink,
+  unlink,
   writeFile,
 } from "node:fs/promises";
 import { dirname, join } from "node:path";
@@ -76,6 +79,59 @@ describe.skipIf(!LINUX_G1_ENABLED)(
       }
     });
 
+    it("prepares and re-prepares a 0771 ingress-style directory (C1)", async () => {
+      const parent = dirname(
+        requiredEnvironment("AGENTPORT_G1_LEDGER_DIRECTORY"),
+      );
+      const target = join(parent, "ingress-style-0771");
+      try {
+        await prepareProtectedLauncherDirectory(target, 0o771, 0);
+        await prepareProtectedLauncherDirectory(target, 0o771, 0);
+      } finally {
+        await rm(target, { recursive: true, force: true });
+      }
+    });
+
+    it("refuses an ingress directory symlinked to /tmp without following it (AP-021 security matrix)", async () => {
+      const parent = dirname(
+        requiredEnvironment("AGENTPORT_G1_LEDGER_DIRECTORY"),
+      );
+      const link = join(parent, `ingress-symlink-${randomUUID()}`);
+      await symlink("/tmp", link);
+      try {
+        const before = await lstat("/tmp");
+        await expect(
+          prepareProtectedLauncherDirectory(link, 0o771, 0),
+        ).rejects.toThrow("target is unsafe");
+        const after = await lstat("/tmp");
+        expect(after.uid).toBe(before.uid);
+        expect(after.gid).toBe(before.gid);
+        expect(after.mode).toBe(before.mode);
+      } finally {
+        await unlink(link);
+      }
+    });
+
+    it("refuses, rather than repairs, an existing target owned by the Runtime identity (AP-021 R2)", async () => {
+      const parent = dirname(
+        requiredEnvironment("AGENTPORT_G1_LEDGER_DIRECTORY"),
+      );
+      const target = join(parent, `runtime-owned-${randomUUID()}`);
+      const runtimeUid = Number(
+        requiredEnvironment("AGENTPORT_G1_RUNTIME_UID"),
+      );
+      await mkdir(target, { mode: 0o700 });
+      await chown(target, runtimeUid, 0);
+      try {
+        await expect(
+          prepareProtectedLauncherDirectory(target, 0o771, 0),
+        ).rejects.toThrow("target is unsafe");
+        expect((await lstat(target)).uid).toBe(runtimeUid);
+      } finally {
+        await rm(target, { recursive: true, force: true });
+      }
+    });
+
     it("refuses to create a privileged path below a writable ancestor", async () => {
       const parent = dirname(
         requiredEnvironment("AGENTPORT_G1_LEDGER_DIRECTORY"),
@@ -94,7 +150,7 @@ describe.skipIf(!LINUX_G1_ENABLED)(
         await symlink(target, link);
         await expect(
           prepareProtectedLauncherDirectory(link, 0o700, 0),
-        ).rejects.toThrow("unsafe ancestor");
+        ).rejects.toThrow("target is unsafe");
       } finally {
         await chmod(unsafe, 0o700).catch(() => undefined);
         await rm(unsafe, { recursive: true, force: true });

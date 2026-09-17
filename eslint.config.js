@@ -6,8 +6,8 @@ export default tseslint.config(
   {
     ignores: [
       "dist/**",
+      "dist-fixtures/**",
       "node_modules/**",
-      "scripts/forgeflow/**",
       "eslint.config.js",
     ],
   },

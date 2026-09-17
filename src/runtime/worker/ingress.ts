@@ -107,9 +107,31 @@ export class RuntimeWorkerIngress {
         resolve();
       });
     });
-    await chmod(options.endpoint, 0o660);
-    if (options.groupId !== undefined) {
-      await chown(options.endpoint, 0, options.groupId);
+    try {
+      if (options.groupId !== undefined) {
+        // The daemon already owns the socket it created; uid -1 leaves the
+        // owner unchanged and only hands the group to the Runtime identity so
+        // the worker can connect (ADR-0006, GATE-040). Chown before chmod so
+        // the socket never becomes group-accessible under the wrong group.
+        await chown(options.endpoint, -1, options.groupId);
+      }
+      await chmod(options.endpoint, 0o660);
+    } catch (error) {
+      await new Promise<void>((resolve) => {
+        server.close(() => {
+          resolve();
+        });
+      });
+      try {
+        await rm(options.endpoint, { force: true });
+      } catch (cleanupError) {
+        throw new AggregateError(
+          [error, cleanupError],
+          "Ingress socket protection and cleanup failed",
+          { cause: cleanupError },
+        );
+      }
+      throw error;
     }
     ingress.#server = server;
     return ingress;

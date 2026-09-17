@@ -5,7 +5,7 @@
 依據：[已確認需求](delegation-requirements.md)、[Technical Design](technical-design.md)、[術語表](../CONTEXT.md)。技術設計定義行為，本文件定義執行順序與驗收；兩者衝突時先修正計畫，不以方便實作為由降低已確認需求。
 
 治理導入註記：本計畫保留 S0–S6／G0–G6 的依賴與驗收設計；正式工作狀態由 ForgePilot 管理，不在本計畫維護第二套 lifecycle。
-`.scratch` 不是 implementation lifecycle authority；正式 implementation 工作需提升為 ForgeFlow Story，其執行狀態由 ForgePilot Work Item 管理。
+`.scratch` 不是 implementation lifecycle authority；正式 implementation 工作需提升為 PraxisBound Story，其執行狀態由 ForgePilot Work Item 管理。
 [AP-001 / S0–G0](../specs/stories/AP-001-toolchain-mcp-compatibility/story.md) 與 [AP-002 / S2–G2](../specs/stories/AP-002-platform-neutral-durable-admission/story.md) 提供這份計畫所引用的需求與歷史證據；完整 current-state 流程見 [development workflow](development-workflow.md)。
 
 ## 1. 首版成果與範圍

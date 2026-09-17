@@ -1,14 +1,15 @@
-import { execFile } from "node:child_process";
+import { execFile, spawn } from "node:child_process";
 import { randomUUID } from "node:crypto";
 import {
   chmod,
   chown,
+  lstat,
   readFile,
   stat,
   unlink,
   writeFile,
 } from "node:fs/promises";
-import { dirname } from "node:path";
+import { dirname, join } from "node:path";
 import { promisify } from "node:util";
 
 import { describe, expect, it } from "vitest";
@@ -50,6 +51,90 @@ async function runtimeCanAccess(
       "test",
       flag,
       path,
+    ]);
+    return true;
+  } catch {
+    return false;
+  }
+}
+
+async function runtimeCanConnect(path: string): Promise<boolean> {
+  try {
+    await executeFile("runuser", [
+      "-u",
+      requiredEnvironment("AGENTPORT_G1_RUNTIME_USER"),
+      "--",
+      process.execPath,
+      "-e",
+      "require('node:net').connect(process.argv[1]).on('connect',()=>process.exit(0)).on('error',()=>process.exit(1))",
+      path,
+    ]);
+    return true;
+  } catch {
+    return false;
+  }
+}
+
+async function runtimeCanList(path: string): Promise<boolean> {
+  try {
+    await executeFile("runuser", [
+      "-u",
+      requiredEnvironment("AGENTPORT_G1_RUNTIME_USER"),
+      "--",
+      "ls",
+      path,
+    ]);
+    return true;
+  } catch {
+    return false;
+  }
+}
+
+async function launcherIngress(): Promise<{
+  ingressDirectory: string;
+  ingressGid: number;
+}> {
+  const configuration = JSON.parse(
+    await readFile(requiredEnvironment("AGENTPORT_G1_LAUNCHER_CONFIG"), "utf8"),
+  ) as { ingressDirectory: string; ingressGroup: string };
+  const group = await executeFile("getent", [
+    "group",
+    configuration.ingressGroup,
+  ]);
+  return {
+    ingressDirectory: configuration.ingressDirectory,
+    ingressGid: Number(group.stdout.trim().split(":")[2]),
+  };
+}
+
+async function runtimeCanUnlink(path: string): Promise<boolean> {
+  try {
+    await executeFile("runuser", [
+      "-u",
+      requiredEnvironment("AGENTPORT_G1_RUNTIME_USER"),
+      "--",
+      "rm",
+      "-f",
+      path,
+    ]);
+    return true;
+  } catch {
+    return false;
+  }
+}
+
+async function runtimeCanRename(
+  source: string,
+  destination: string,
+): Promise<boolean> {
+  try {
+    await executeFile("runuser", [
+      "-u",
+      requiredEnvironment("AGENTPORT_G1_RUNTIME_USER"),
+      "--",
+      "mv",
+      source,
+      destination,
     ]);
     return true;
   } catch {
@@ -233,5 +318,81 @@ describe.skipIf(!LINUX_G1_ENABLED)("Linux Runtime isolation", () => {
       supervisor.start({ ...reference, launchProfileId: "g1-descendants" }),
     ).resolves.toEqual({ kind: "conflict" });
     await supervisor.revokeAndStop(reference);
+  }, 20_000);
+
+  it("creates the launcher-owned ingress directory as root:ingressGroup 0771 (AP-021 R2)", async () => {
+    const { ingressDirectory, ingressGid } = await launcherIngress();
+    const directoryStat = await lstat(ingressDirectory);
+    expect(directoryStat.isDirectory()).toBe(true);
+    expect(directoryStat.mode & 0o7777).toBe(0o771);
+    expect(directoryStat.uid).toBe(0);
+    expect(directoryStat.gid).toBe(ingressGid);
+  });
+
+  it("creates a daemon-owned 0660 Runtime-group ingress socket the Runtime identity can use but not remove or replace (AP-021 R4)", async () => {
+    const { ingressDirectory } = await launcherIngress();
+    const daemonUser = requiredEnvironment("AGENTPORT_G1_DAEMON_USER");
+    const runtimeGid = Number(requiredEnvironment("AGENTPORT_G1_RUNTIME_GID"));
+    const daemonUid = Number(
+      (await executeFile("id", ["-u", daemonUser])).stdout.trim(),
+    );
+    const child = spawn(
+      "runuser",
+      [
+        "-u",
+        daemonUser,
+        "--",
+        process.execPath,
+        join(
+          process.cwd(),
+          "dist-fixtures/tests/fixtures/ingress-socket-child.js",
+        ),
+        ingressDirectory,
+        String(runtimeGid),
+      ],
+      { stdio: ["pipe", "pipe", "inherit"] },
+    );
+    const exited = new Promise<number | null>((resolve) => {
+      child.once("exit", resolve);
+    });
+    try {
+      const line = await new Promise<string>((resolve, reject) => {
+        let buffer = "";
+        child.stdout.on("data", (chunk: Buffer) => {
+          buffer += chunk.toString("utf8");
+          const newline = buffer.indexOf("\n");
+          if (newline >= 0) resolve(buffer.slice(0, newline));
+        });
+        child.once("exit", () => {
+          reject(new Error("Ingress socket child exited before opening"));
+        });
+      });
+      const observation = JSON.parse(line) as {
+        endpoint: string;
+        processUid: number;
+      };
+      expect(observation.processUid).toBe(daemonUid);
+      expect(observation.processUid).toBeGreaterThan(0);
+      const socketStat = await lstat(observation.endpoint);
+      expect(socketStat.isSocket()).toBe(true);
+      expect(socketStat.mode & 0o7777).toBe(0o660);
+      expect(socketStat.uid).toBe(daemonUid);
+      expect(socketStat.gid).toBe(runtimeGid);
+
+      await expect(runtimeCanConnect(observation.endpoint)).resolves.toBe(true);
+      await expect(runtimeCanList(ingressDirectory)).resolves.toBe(false);
+      await expect(runtimeCanUnlink(observation.endpoint)).resolves.toBe(false);
+      await expect(
+        runtimeCanRename(
+          observation.endpoint,
+          `${ingressDirectory}/replaced-${randomUUID()}.sock`,
+        ),
+      ).resolves.toBe(false);
+      const after = await lstat(observation.endpoint);
+      expect(after.ino).toBe(socketStat.ino);
+    } finally {
+      child.stdin.end();
+      await exited;
+    }
   }, 20_000);
 });
