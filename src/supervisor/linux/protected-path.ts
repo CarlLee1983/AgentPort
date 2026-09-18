@@ -63,7 +63,7 @@ async function requireProtectedTarget(
     metadata.isSymbolicLink() ||
     metadata.uid !== 0 ||
     metadata.gid !== groupId ||
-    (metadata.mode & 0o777) !== mode
+    (metadata.mode & 0o7777) !== mode
   ) {
     throw new Error("Protected launcher directory ownership is invalid");
   }

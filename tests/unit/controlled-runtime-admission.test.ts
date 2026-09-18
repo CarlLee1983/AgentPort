@@ -6,6 +6,7 @@ import { afterEach, beforeEach, describe, expect, it, vi } from "vitest";
 
 import {
   createControlledRuntimeAdmission,
+  hasProtectedLauncherSocketMetadata,
   runtimeUmaskDeniesOtherWrite,
   type ControlledRuntimeAdmissionConfiguration,
 } from "../../src/bootstrap/create-controlled-runtime-admission.js";
@@ -29,6 +30,7 @@ function configuration(
     launcher: {
       socketPath: "/unreached/launcher.sock",
       workerIngressDirectory: "/unreached/ingress",
+      socketGroupId: 4,
       runtimeGroupId: 5,
       ingressGroupId: 6,
       ...launcher,
@@ -72,6 +74,27 @@ describe("controlled Runtime composition", () => {
     ).rejects.toThrow(
       "Controlled Runtime composition requires distinct ingress, socket and Runtime groups",
     );
+  });
+
+  it("refuses a stale or unrelated launcher socket group before reporting it ready", () => {
+    const launcher = configuration().launcher;
+    expect(
+      hasProtectedLauncherSocketMetadata(
+        { isSocket: () => true, uid: 0, gid: 99, mode: 0o140660 },
+        launcher,
+      ),
+    ).toBe(false);
+    expect(
+      hasProtectedLauncherSocketMetadata(
+        {
+          isSocket: () => true,
+          uid: 0,
+          gid: launcher.socketGroupId,
+          mode: 0o140660,
+        },
+        launcher,
+      ),
+    ).toBe(true);
   });
 
   describe("with an unprotected ingress directory (AC-04)", () => {

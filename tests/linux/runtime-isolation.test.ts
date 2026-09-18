@@ -233,8 +233,15 @@ describe.skipIf(!LINUX_G1_ENABLED)("Linux Runtime isolation", () => {
     const socketDirectory = dirname(socket);
     expect((await stat(ledger)).mode & 0o777).toBe(0o700);
     expect((await stat(socket)).mode & 0o777).toBe(0o660);
-    expect((await stat(socketDirectory)).mode & 0o777).toBe(0o750);
-    expect((await stat(socketDirectory)).uid).toBe(0);
+    const socketDirectoryMetadata = await stat(socketDirectory);
+    if (socket === "/run/agentport/launcher.sock") {
+      // Gate-056 deliberately shares this sticky parent with the daemon's
+      // admin socket. The fixed location prevents widening that exception.
+      expect(socketDirectoryMetadata.mode & 0o7777).toBe(0o1771);
+    } else {
+      expect(socketDirectoryMetadata.mode & 0o777).toBe(0o750);
+    }
+    expect(socketDirectoryMetadata.uid).toBe(0);
     for (const protectedPath of [
       ledger,
       socket,

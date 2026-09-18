@@ -4,6 +4,7 @@ import { describe, expect, it, vi } from "vitest";
 import type { ControlledRuntimeAdmissionComposition } from "../../src/bootstrap/create-controlled-runtime-admission.js";
 import type { DaemonConfiguration } from "../../src/daemon/configuration.js";
 import type { DaemonCredentials } from "../../src/daemon/credentials.js";
+import type { DeploymentReadinessSnapshot } from "../../src/daemon/deployment-readiness.js";
 import {
   DAEMON_SHUTDOWN_FAILED,
   ProductionDaemonLifecycle,
@@ -20,9 +21,11 @@ const configuration: DaemonConfiguration = {
   launcher: {
     socketPath: "/run/agentport/launcher.sock",
     workerIngressDirectory: "/run/agentport-ingress",
+    socketGroupId: 1001,
     runtimeGroupId: 1002,
     ingressGroupId: 1003,
   },
+  adminSocket: { groupId: 1004 },
   agents: [],
   principals: [],
 };
@@ -77,6 +80,21 @@ function fixture(options: { stopUnknown?: number } = {}) {
       events.push("composition-force-close");
       return Promise.resolve();
     },
+    observeDeploymentReadiness: () =>
+      Promise.resolve({
+        observedAt: "2026-09-18T12:34:56.789Z",
+        observation: "current" as const,
+        capabilities: {
+          service: "unavailable" as const,
+          agents: "none" as const,
+          launcher: "ready" as const,
+          runtime: "unverified" as const,
+          callerProvisioning: "absent" as const,
+          protectedTopology: "valid" as const,
+        },
+        recovery: "clear" as const,
+        storage: "healthy" as const,
+      }),
   };
   let accepting = true;
   const listener: LoopbackDurableAdmissionServer = {
@@ -103,6 +121,17 @@ function fixture(options: { stopUnknown?: number } = {}) {
       events.push("listener-force-close");
     },
   };
+  const admin = {
+    stopAccepting: () => events.push("admin-stop-accepting"),
+    close: () => {
+      events.push("admin-close");
+      return Promise.resolve();
+    },
+    forceClose: () => events.push("admin-force-close"),
+  };
+  let readiness:
+    | (() => DeploymentReadinessSnapshot | Promise<DeploymentReadinessSnapshot>)
+    | undefined;
   const lifecycle = new ProductionDaemonLifecycle(
     configuration,
     credentials,
@@ -115,10 +144,22 @@ function fixture(options: { stopUnknown?: number } = {}) {
         events.push("listen");
         return Promise.resolve(listener);
       },
+      startAdminServer: (options) => {
+        events.push("admin-listen");
+        readiness = options.readiness;
+        return Promise.resolve(admin);
+      },
     },
     1_000,
   );
-  return { lifecycle, events, composition, listener };
+  return {
+    lifecycle,
+    events,
+    composition,
+    listener,
+    admin,
+    readiness: () => readiness,
+  };
 }
 
 describe("production daemon lifecycle", () => {
@@ -126,7 +167,21 @@ describe("production daemon lifecycle", () => {
     const { lifecycle, events } = fixture();
     await lifecycle.start();
     expect(lifecycle.state).toBe("running");
-    expect(events).toEqual(["prepare", "listen", "initialize"]);
+    expect(events).toEqual(["prepare", "listen", "admin-listen", "initialize"]);
+    await lifecycle.stop();
+  });
+
+  it("projects composition prerequisites through the daemon lifecycle", async () => {
+    const { lifecycle, readiness } = fixture();
+    await lifecycle.start();
+    const observe = readiness();
+    if (observe === undefined)
+      throw new Error("admin readiness was not started");
+    await expect(observe()).resolves.toMatchObject({
+      level: "service-ready",
+      reason: "no-agents-configured",
+      capabilities: { service: "available", protectedTopology: "valid" },
+    });
     await lifecycle.stop();
   });
 
@@ -141,13 +196,17 @@ describe("production daemon lifecycle", () => {
     expect(events).toEqual([
       "prepare",
       "listen",
+      "admin-listen",
       "initialize",
       "stop-accepting",
+      "admin-stop-accepting",
       "begin-shutdown",
+      "admin-stop-accepting",
       "drain",
       "shutdown",
       "listener-close",
       "composition-close",
+      "admin-close",
     ]);
   });
 
@@ -175,7 +234,7 @@ describe("production daemon lifecycle", () => {
     const prepared = new Promise<void>((resolve) => {
       releasePreparation = resolve;
     });
-    const { lifecycle, composition, listener } = fixture();
+    const { lifecycle, composition, listener, admin } = fixture();
     const startListener = vi.fn(() => Promise.resolve(listener));
     const stopping = new ProductionDaemonLifecycle(
       configuration,
@@ -186,6 +245,7 @@ describe("production daemon lifecycle", () => {
           return composition;
         },
         startListener,
+        startAdminServer: () => Promise.resolve(admin),
       },
       1_000,
     );
@@ -200,7 +260,7 @@ describe("production daemon lifecycle", () => {
   });
 
   it("does not reconcile when the fixed port cannot be bound", async () => {
-    const { composition, events } = fixture();
+    const { composition, events, admin } = fixture();
     const initialize = vi.spyOn(composition, "initializeAfterRestart");
     const lifecycle = new ProductionDaemonLifecycle(
       configuration,
@@ -208,6 +268,7 @@ describe("production daemon lifecycle", () => {
       {
         prepareComposition: () => Promise.resolve(composition),
         startListener: () => Promise.reject(new LoopbackListenerBindError()),
+        startAdminServer: () => Promise.resolve(admin),
       },
       1_000,
     );
@@ -225,12 +286,16 @@ describe("production daemon lifecycle", () => {
     await expect(lifecycle.stop()).rejects.toMatchObject({
       code: DAEMON_SHUTDOWN_FAILED,
     });
-    expect(events.slice(-2)).toEqual(["listener-close", "composition-close"]);
+    expect(events.slice(-3)).toEqual([
+      "listener-close",
+      "composition-close",
+      "admin-close",
+    ]);
     expect(lifecycle.state).toBe("stopped");
   });
 
   it("forces only owned resources when request drain exceeds the deadline", async () => {
-    const { composition, listener, events } = fixture();
+    const { composition, listener, events, admin } = fixture();
     listener.drainRequests = () => new Promise<void>(() => undefined);
     listener.close = () => new Promise<void>(() => undefined);
     const lifecycle = new ProductionDaemonLifecycle(
@@ -239,6 +304,7 @@ describe("production daemon lifecycle", () => {
       {
         prepareComposition: () => Promise.resolve(composition),
         startListener: () => Promise.resolve(listener),
+        startAdminServer: () => Promise.resolve(admin),
       },
       10,
     );
@@ -254,7 +320,7 @@ describe("production daemon lifecycle", () => {
   });
 
   it("bounds a shutdown convergence promise that never resolves", async () => {
-    const { composition, listener, events } = fixture();
+    const { composition, listener, events, admin } = fixture();
     composition.prepareForDaemonShutdown = () => new Promise(() => undefined);
     const lifecycle = new ProductionDaemonLifecycle(
       configuration,
@@ -262,6 +328,7 @@ describe("production daemon lifecycle", () => {
       {
         prepareComposition: () => Promise.resolve(composition),
         startListener: () => Promise.resolve(listener),
+        startAdminServer: () => Promise.resolve(admin),
       },
       10,
     );
@@ -275,7 +342,7 @@ describe("production daemon lifecycle", () => {
   });
 
   it("bounds cleanup after a partial startup failure", async () => {
-    const { composition, listener, events } = fixture();
+    const { composition, listener, events, admin } = fixture();
     composition.initializeAfterRestart = () =>
       Promise.reject(new Error("startup cause must not escape"));
     listener.close = () => new Promise<void>(() => undefined);
@@ -285,6 +352,7 @@ describe("production daemon lifecycle", () => {
       {
         prepareComposition: () => Promise.resolve(composition),
         startListener: () => Promise.resolve(listener),
+        startAdminServer: () => Promise.resolve(admin),
       },
       10,
     );

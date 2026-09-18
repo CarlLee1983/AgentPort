@@ -24,9 +24,11 @@ const configuration = {
   launcher: {
     socketPath: "/run/agentport/launcher.sock",
     workerIngressDirectory: "/run/agentport/ingress",
+    socketGroupId: 987,
     runtimeGroupId: 988,
     ingressGroupId: 989,
   },
+  adminSocket: { groupId: 990 },
   agents: [
     {
       agentId: "primary",
@@ -74,6 +76,19 @@ describe("production daemon configuration", () => {
     ],
     ["port zero", { ...configuration, mcp: { port: 0 } }],
     ["invalid port", { ...configuration, mcp: { port: 65_536 } }],
+    ["invalid admin socket group", { ...configuration, adminSocket: {} }],
+    [
+      "Runtime-authorized admin socket group",
+      { ...configuration, adminSocket: { groupId: 988 } },
+    ],
+    [
+      "launcher-authorized admin socket group",
+      { ...configuration, adminSocket: { groupId: 987 } },
+    ],
+    [
+      "ingress-authorized admin socket group",
+      { ...configuration, adminSocket: { groupId: 989 } },
+    ],
     [
       "unknown Agent mapping",
       {

@@ -9,9 +9,11 @@
   "launcher": {
     "socketPath": "/run/agentport/launcher.sock",
     "workerIngressDirectory": "/run/agentport-ingress",
+    "socketGroupId": 10001,
     "runtimeGroupId": 10002,
     "ingressGroupId": 10003
   },
+  "adminSocket": { "groupId": 10004 },
   "agents": [],
   "principals": []
 }

@@ -30,6 +30,7 @@ import {
 import { AgentRegistry, type RegistryConfiguration } from "./registry.js";
 import { StorageIncidentCoordinator } from "./storage-incident-coordinator.js";
 import { verifyBeforeEachIngressOpen } from "./verified-ingress-factory.js";
+import type { DeploymentReadinessObservation } from "../daemon/deployment-readiness.js";
 
 export interface ControlledRuntimeAdmissionConfiguration {
   registry: RegistryConfiguration;
@@ -38,6 +39,7 @@ export interface ControlledRuntimeAdmissionConfiguration {
   launcher: {
     socketPath: string;
     workerIngressDirectory: string;
+    socketGroupId: number;
     runtimeGroupId: number;
     ingressGroupId: number;
   };
@@ -62,6 +64,8 @@ export interface ControlledRuntimeAdmissionComposition {
   close(): Promise<void>;
   /** Deadline fallback; terminates only resources owned by this daemon process. */
   forceClose(): Promise<void>;
+  /** Read-only host prerequisites; the daemon lifecycle supplies service state. */
+  observeDeploymentReadiness(): Promise<DeploymentReadinessObservation>;
 }
 
 function linuxStopEvidenceVerifier(): StopEvidenceVerifier {
@@ -126,15 +130,31 @@ async function verifyIngressDirectory(
 async function verifyDistinctGroups(
   launcher: ControlledRuntimeAdmissionConfiguration["launcher"],
 ): Promise<void> {
-  const socketGroupId = (await lstat(launcher.socketPath)).gid;
-  if (
-    launcher.ingressGroupId === socketGroupId ||
-    launcher.runtimeGroupId === socketGroupId
-  ) {
+  const socket = await lstat(launcher.socketPath);
+  if (!hasProtectedLauncherSocketMetadata(socket, launcher)) {
     throw new Error(
       "Controlled Runtime composition requires distinct ingress, socket and Runtime groups",
     );
   }
+}
+
+/** Pure metadata fence used before startup and every readiness observation. */
+export function hasProtectedLauncherSocketMetadata(
+  socket: Pick<
+    Awaited<ReturnType<typeof lstat>>,
+    "isSocket" | "uid" | "gid" | "mode"
+  >,
+  launcher: ControlledRuntimeAdmissionConfiguration["launcher"],
+): boolean {
+  const socketGroupId = socket.gid;
+  return (
+    socket.isSocket() &&
+    socket.uid === 0 &&
+    (Number(socket.mode) & 0o777) === 0o660 &&
+    socketGroupId === launcher.socketGroupId &&
+    launcher.ingressGroupId !== socketGroupId &&
+    launcher.runtimeGroupId !== socketGroupId
+  );
 }
 
 /**
@@ -167,7 +187,12 @@ export async function prepareControlledRuntimeAdmission(
   const { launcher: launcherConfiguration } = configuration;
   if (
     !validGroupId(launcherConfiguration.ingressGroupId) ||
+    !validGroupId(launcherConfiguration.socketGroupId) ||
     !validGroupId(launcherConfiguration.runtimeGroupId) ||
+    launcherConfiguration.socketGroupId ===
+      launcherConfiguration.ingressGroupId ||
+    launcherConfiguration.socketGroupId ===
+      launcherConfiguration.runtimeGroupId ||
     launcherConfiguration.ingressGroupId ===
       launcherConfiguration.runtimeGroupId
   ) {
@@ -247,6 +272,7 @@ export async function prepareControlledRuntimeAdmission(
     const mcpHandler = createDurableAdmissionMcpHandler(service);
     let initialized = false;
     let shutdownRequested = false;
+    let recovery: DeploymentReadinessObservation["recovery"] = "unknown";
     let initializePromise: Promise<void> | undefined;
     let shutdownPromise: Promise<DaemonShutdownResult> | undefined;
     let closePromise: Promise<void> | undefined;
@@ -272,6 +298,7 @@ export async function prepareControlledRuntimeAdmission(
         initializePromise ??= (async () => {
           await service.initializeAfterRestart(supervisor);
           initialized = true;
+          recovery = storageIncidents.isLatched() ? "blocked" : "clear";
           if (!shutdownRequested && closePromise === undefined) {
             store.openDispatchAdmission();
             dispatchOpen = true;
@@ -321,6 +348,35 @@ export async function prepareControlledRuntimeAdmission(
         store.closeDispatchAdmission();
         void mcpHandler.close().catch(() => undefined);
         await store.forceClose();
+      },
+      observeDeploymentReadiness: async () => {
+        let topology: "valid" | "invalid" = "valid";
+        try {
+          await verifyIngressDirectory(
+            ingressDirectory,
+            launcherConfiguration.ingressGroupId,
+          );
+          await verifyDistinctGroups(launcherConfiguration);
+        } catch {
+          topology = "invalid";
+        }
+        return {
+          observedAt: new Date().toISOString(),
+          observation: "current",
+          capabilities: {
+            service: "unavailable",
+            agents:
+              configuration.registry.agents.length === 0
+                ? "none"
+                : "configured",
+            launcher: topology === "valid" ? "ready" : "unavailable",
+            runtime: "unverified",
+            callerProvisioning: "absent",
+            protectedTopology: topology,
+          },
+          recovery,
+          storage: storageIncidents.isLatched() ? "incident" : "healthy",
+        };
       },
     };
   } catch (error) {

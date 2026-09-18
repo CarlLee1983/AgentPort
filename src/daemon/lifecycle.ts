@@ -7,6 +7,11 @@ import {
 import type { DaemonConfiguration } from "./configuration.js";
 import type { DaemonCredentials } from "./credentials.js";
 import { prepareProductionDaemonComposition } from "./composition.js";
+import {
+  startAdminReadinessServer,
+  type AdminReadinessServer,
+} from "./admin-server.js";
+import { evaluateDeploymentReadiness } from "./deployment-readiness.js";
 
 export const DAEMON_SHUTDOWN_DEADLINE_MS = 25_000;
 export const DAEMON_STARTUP_FAILED = "daemon_startup_failed";
@@ -40,6 +45,12 @@ export interface ProductionDaemonLifecycleDependencies {
     port: number;
     canAcceptRequest: () => boolean;
   }): Promise<LoopbackDurableAdmissionServer>;
+  startAdminServer?(options: {
+    groupId: number;
+    readiness: () =>
+      | ReturnType<typeof evaluateDeploymentReadiness>
+      | Promise<ReturnType<typeof evaluateDeploymentReadiness>>;
+  }): Promise<AdminReadinessServer>;
 }
 
 const defaultDependencies: ProductionDaemonLifecycleDependencies = {
@@ -53,6 +64,8 @@ const defaultDependencies: ProductionDaemonLifecycleDependencies = {
       port,
       canAcceptRequest,
     }),
+  startAdminServer: ({ groupId, readiness }) =>
+    startAdminReadinessServer({ groupId, readiness }),
 };
 
 function deadlineAfter(milliseconds: number): number {
@@ -90,6 +103,7 @@ export class ProductionDaemonLifecycle implements DaemonLifecycleControl {
   #stopPromise: Promise<void> | undefined;
   #composition: ControlledRuntimeAdmissionComposition | undefined;
   #listener: LoopbackDurableAdmissionServer | undefined;
+  #adminServer: AdminReadinessServer | undefined;
 
   constructor(
     private readonly configuration: DaemonConfiguration,
@@ -123,6 +137,7 @@ export class ProductionDaemonLifecycle implements DaemonLifecycleControl {
     this.#startPromise = this.#start().catch(async (error: unknown) => {
       this.#state = "stopping";
       this.#listener?.stopAccepting();
+      this.#adminServer?.stopAccepting();
       this.#composition?.beginShutdown();
       try {
         await beforeDeadline(
@@ -144,6 +159,7 @@ export class ProductionDaemonLifecycle implements DaemonLifecycleControl {
     this.#stopRequested = true;
     this.#state = "stopping";
     this.#listener?.stopAccepting();
+    this.#adminServer?.stopAccepting();
     this.#composition?.beginShutdown();
     this.#stopPromise = this.#stop();
     return this.#stopPromise;
@@ -165,6 +181,55 @@ export class ProductionDaemonLifecycle implements DaemonLifecycleControl {
       port: this.configuration.mcp.port,
       canAcceptRequest: () => this.#state === "running",
     });
+    const adminOptions = {
+      groupId: this.configuration.adminSocket.groupId,
+      readiness: async () => {
+        if (this.#state !== "running" || this.#composition === undefined) {
+          return evaluateDeploymentReadiness({
+            observedAt: new Date().toISOString(),
+            observation: "current",
+            capabilities: {
+              service: "unavailable",
+              agents:
+                this.configuration.agents.length === 0 ? "none" : "configured",
+              launcher: "unknown",
+              runtime: "unknown",
+              callerProvisioning: "absent",
+              protectedTopology: "unknown",
+            },
+            recovery: "unknown",
+            storage: "unknown",
+          });
+        }
+        try {
+          const observation =
+            await this.#composition.observeDeploymentReadiness();
+          return evaluateDeploymentReadiness({
+            ...observation,
+            capabilities: { ...observation.capabilities, service: "available" },
+          });
+        } catch {
+          return evaluateDeploymentReadiness({
+            observedAt: null,
+            observation: "unobserved",
+            capabilities: {
+              service: "unavailable",
+              agents: "unknown",
+              launcher: "unknown",
+              runtime: "unknown",
+              callerProvisioning: "unknown",
+              protectedTopology: "unknown",
+            },
+            recovery: "unknown",
+            storage: "unknown",
+          });
+        }
+      },
+    };
+    this.#adminServer =
+      this.dependencies.startAdminServer === undefined
+        ? await startAdminReadinessServer(adminOptions)
+        : await this.dependencies.startAdminServer(adminOptions);
     if (this.#isStopRequested()) {
       this.#listener.stopAccepting();
       this.#composition.beginShutdown();
@@ -191,6 +256,7 @@ export class ProductionDaemonLifecycle implements DaemonLifecycleControl {
         );
       }
       this.#listener?.stopAccepting();
+      this.#adminServer?.stopAccepting();
       this.#composition?.beginShutdown();
       if (this.#listener !== undefined) {
         await beforeDeadline(this.#listener.drainRequests(), deadline);
@@ -219,6 +285,7 @@ export class ProductionDaemonLifecycle implements DaemonLifecycleControl {
 
   async #closeOwnedResources(): Promise<void> {
     const listener = this.#listener;
+    const adminServer = this.#adminServer;
     const composition = this.#composition;
     let failure: unknown;
     if (listener !== undefined) {
@@ -236,20 +303,31 @@ export class ProductionDaemonLifecycle implements DaemonLifecycleControl {
         failure ??= error;
       }
     }
+    if (adminServer !== undefined) {
+      try {
+        await adminServer.close();
+      } catch (error) {
+        failure ??= error;
+      }
+    }
     if (failure !== undefined) {
       throw new Error("daemon resource close failed", { cause: failure });
     }
     if (this.#listener === listener) this.#listener = undefined;
+    if (this.#adminServer === adminServer) this.#adminServer = undefined;
     if (this.#composition === composition) this.#composition = undefined;
   }
 
   async #forceCloseOwnedResources(): Promise<void> {
     const listener = this.#listener;
+    const adminServer = this.#adminServer;
     const composition = this.#composition;
     this.#listener = undefined;
+    this.#adminServer = undefined;
     this.#composition = undefined;
     try {
       listener?.forceClose();
+      adminServer?.forceClose();
     } catch {
       // Deadline cleanup is best-effort but must never become unbounded.
     }

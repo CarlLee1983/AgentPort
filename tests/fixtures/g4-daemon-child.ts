@@ -1,4 +1,5 @@
 import { randomBytes, randomUUID } from "node:crypto";
+import { lstat } from "node:fs/promises";
 
 import {
   Client,
@@ -134,6 +135,7 @@ async function main(): Promise<void> {
   const databasePath = requiredEnvironment("AGENTPORT_G1_DATABASE_PATH");
   const workspacePath = requiredEnvironment("AGENTPORT_G1_WORKSPACE_PATH");
   const socketPath = requiredEnvironment("AGENTPORT_G1_LAUNCHER_SOCKET");
+  const socketGroupId = (await lstat(socketPath)).gid;
   const runtimeGroupId = Number(
     requiredEnvironment("AGENTPORT_G1_RUNTIME_GID"),
   );
@@ -189,6 +191,7 @@ async function main(): Promise<void> {
       launcher: {
         socketPath,
         workerIngressDirectory: ingressDirectory,
+        socketGroupId,
         runtimeGroupId,
         ingressGroupId,
       },

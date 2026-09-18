@@ -46,6 +46,7 @@ these supplementary groups:
 | launcher socket group (`agentport-launcher` in the example) | connect to the root-owned launcher socket                        |
 | `agentport-ingress`                                         | traverse and validate the launcher-owned ingress directory       |
 | Runtime group (`agentport-runtime` in the example)          | create ingress sockets owned by the daemon and usable by Runtime |
+| Administrator group (`agentport-admin` in the example)      | lets the daemon create `admin.sock` for local administrators     |
 
 The launcher socket group must contain only the daemon service account. The
 Runtime account must not join it or the ingress group. The daemon must not read
@@ -63,11 +64,14 @@ service skeleton.
 
 The daemon validates the configuration before opening SQLite or composing the
 service. Its strict top-level schema is `schemaVersion`, `mcp`, `storage`,
-`launcher`, `agents`, and `principals`. `storage.databasePath`,
+`launcher`, `adminSocket`, `agents`, and `principals`. `storage.databasePath`,
 `launcher.socketPath`, and `launcher.workerIngressDirectory` are normalized
-absolute paths. The launcher also declares numeric Runtime and ingress group
-IDs; the numbers in the example are placeholders and must match the target's
-`agentport-runtime` and `agentport-ingress` groups.
+absolute paths. The launcher declares three distinct numeric group IDs:
+`socketGroupId` is the numeric GID of the root-owned `launcher.sock`, while
+`runtimeGroupId` and `ingressGroupId` match `agentport-runtime` and
+`agentport-ingress`. `adminSocket.groupId` must differ from all three. The
+numbers in the example are placeholders; a missing, duplicate, or incorrect
+socket GID makes daemon startup and live readiness fail closed.
 Existing numeric storage limits and `recoveryOnly` remain administrator
 configuration options. Unknown fields, unsupported schema versions, unsafe
 file metadata, or invalid values fail closed. The production registry fixes
@@ -94,8 +98,9 @@ environment. Keep each value stable across restarts: rotating either one can
 invalidate already protected cursor or continuation data.
 
 The included unit runs as `agentport-daemon`, uses restrictive `UMask=0077`,
-orders itself after and requires `agentport-launcher.service`, and uses only
-the three AP-021 supplementary groups. Its `TimeoutStopSec=30s` deliberately
+orders itself after and requires `agentport-launcher.service`, and uses the
+three AP-021 supplementary groups plus the administrator group required for
+the AP-023 read-only socket. Its `TimeoutStopSec=30s` deliberately
 leaves a five-second service-manager safety margin beyond the daemon's
 25-second bounded shutdown deadline. SIGTERM and SIGINT
 share one shutdown operation: it fences new admission and dispatch, preserves
@@ -127,8 +132,7 @@ and systemd credential loading, startup reconciliation, and bounded shutdown.
 Restart reconciliation pauses queued work, quarantines unknown Executions, and
 does not replay Tasks, accepted answers, or Runtime commands automatically.
 
-AP-023 is still required for the admin socket and full Deployment Readiness
-observation. AP-024 is still required for Caller add/list/revoke, token
+AP-024 is still required for Caller add/list/revoke, token
 hashing, positive production Caller provisioning, and Registry hot reload.
 Until those capabilities exist, this daemon must reject production submission:
 it creates no Task or Workspace claim and sends no launcher request. Therefore
@@ -159,3 +163,32 @@ The Linux/systemd credential, signal and Stop Evidence suites must execute
 without skips on that target. A local macOS run, a skipped Linux test, or a
 passing `systemd-analyze verify` is not AP-022 Linux acceptance evidence and
 does not establish service or execution readiness.
+
+## Deployment Readiness observation
+
+The daemon owns `/run/agentport/admin.sock` only while it is running. The
+parent is root-owned and sticky; the launcher retains `launcher.sock`, while
+the daemon verifies and owns only `admin.sock` (`agentport-daemon:agentport-admin`,
+mode `0660`). The administrator protocol is one versioned JSON Lines request:
+
+```json
+{ "version": 1, "method": "get_readiness" }
+```
+
+It returns only the Deployment Readiness level, a stable reason code,
+observation time, and a sanitized capability summary. It accepts no Task,
+Caller identity, path, Runtime instruction, or mutation command.
+
+When the daemon is not running, an administrator may use the built offline
+diagnostic:
+
+```sh
+agentport doctor --config /etc/agentport/agentport.json
+```
+
+It reads only protected daemon and launcher configuration plus filesystem
+metadata; it does not start the daemon, open SQLite, read daemon credentials,
+or call a Runtime. Adding `--live` explicitly performs one fixed no-input
+Runtime health request under the Runtime account, with a 10-second deadline.
+Both paths print only a versioned sanitized readiness result or a stable error
+code.

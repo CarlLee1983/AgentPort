@@ -25,9 +25,11 @@ const configuration: DaemonConfiguration = {
   launcher: {
     socketPath: "/run/agentport/launcher.sock",
     workerIngressDirectory: "/run/agentport-ingress",
+    socketGroupId: 1001,
     runtimeGroupId: 1002,
     ingressGroupId: 1003,
   },
+  adminSocket: { groupId: 1004 },
   agents: [],
   principals: [],
 };

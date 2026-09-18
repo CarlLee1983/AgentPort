@@ -35,6 +35,7 @@ const absolutePath = boundedText.refine(
   (value) => isAbsolute(value) && normalize(value) === value,
 );
 const positiveInteger = z.number().int().positive();
+const adminSocketSchema = z.object({ groupId: positiveInteger }).strict();
 const storageSchema = z
   .object({
     databasePath: absolutePath,
@@ -121,16 +122,33 @@ const configurationSchema = z
       .object({
         socketPath: absolutePath,
         workerIngressDirectory: absolutePath,
+        socketGroupId: positiveInteger,
         runtimeGroupId: positiveInteger,
         ingressGroupId: positiveInteger,
       })
       .strict()
-      .refine((value) => value.runtimeGroupId !== value.ingressGroupId),
+      .refine(
+        (value) =>
+          value.socketGroupId !== value.runtimeGroupId &&
+          value.socketGroupId !== value.ingressGroupId &&
+          value.runtimeGroupId !== value.ingressGroupId,
+      ),
+    adminSocket: adminSocketSchema,
     agents: z.array(agentSchema).max(1024),
     principals: z.array(principalSchema).max(1024),
   })
   .strict()
   .superRefine((value, context) => {
+    if (
+      value.adminSocket.groupId === value.launcher.runtimeGroupId ||
+      value.adminSocket.groupId === value.launcher.ingressGroupId ||
+      value.adminSocket.groupId === value.launcher.socketGroupId
+    ) {
+      context.addIssue({
+        code: "custom",
+        message: "admin socket group must be isolated from Runtime groups",
+      });
+    }
     const agentIds = new Set<string>();
     for (const agent of value.agents) {
       if (
@@ -165,9 +183,11 @@ export interface DaemonConfiguration {
   launcher: {
     socketPath: string;
     workerIngressDirectory: string;
+    socketGroupId: number;
     runtimeGroupId: number;
     ingressGroupId: number;
   };
+  adminSocket: { groupId: number };
   agents: readonly AgentConfiguration[];
   principals: readonly PrincipalConfiguration[];
 }
@@ -198,6 +218,7 @@ export function parseDaemonConfiguration(value: unknown): DaemonConfiguration {
     // schema above has already established the store option contract.
     storage: { ...parsed.data.storage } as DurableAdmissionStoreOptions,
     launcher: { ...parsed.data.launcher },
+    adminSocket: { ...parsed.data.adminSocket },
     agents,
     principals,
   });
@@ -227,6 +248,7 @@ async function validateProtectedAncestors(
  */
 export async function readProtectedDaemonConfiguration(
   configurationPath: string,
+  expectedGroupId = process.getgid?.(),
 ): Promise<DaemonConfiguration> {
   try {
     if (
@@ -243,12 +265,11 @@ export async function readProtectedDaemonConfiguration(
     );
     try {
       const metadata = await handle.stat();
-      const daemonGroupId = process.getgid?.();
       if (
         !metadata.isFile() ||
         metadata.uid !== 0 ||
-        daemonGroupId === undefined ||
-        metadata.gid !== daemonGroupId ||
+        expectedGroupId === undefined ||
+        metadata.gid !== expectedGroupId ||
         (metadata.mode & 0o777) !== 0o640 ||
         metadata.size === 0 ||
         metadata.size > MAX_CONFIGURATION_BYTES

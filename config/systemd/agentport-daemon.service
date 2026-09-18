@@ -10,7 +10,7 @@ Group=agentport-daemon
 # These are the AP-021 groups required to connect to the launcher, create
 # ingress sockets, and hand each socket to the Runtime group. Do not add
 # administrators, Callers, or unrelated service accounts to these groups.
-SupplementaryGroups=agentport-launcher agentport-ingress agentport-runtime
+SupplementaryGroups=agentport-launcher agentport-ingress agentport-runtime agentport-admin
 WorkingDirectory=/opt/agentport/current
 ExecStart=/usr/bin/node /opt/agentport/current/dist/src/daemon/main.js --config /etc/agentport/agentport.json
 LoadCredential=cursorSecret:/etc/agentport/credentials/cursorSecret
@@ -24,7 +24,7 @@ PrivateDevices=yes
 PrivateTmp=yes
 ProtectHome=yes
 ProtectSystem=strict
-ReadWritePaths=/var/lib/agentport/daemon
+ReadWritePaths=/var/lib/agentport/daemon /run/agentport /run/agentport-ingress
 RestrictAddressFamilies=AF_UNIX AF_INET
 RestrictNamespaces=yes
 LockPersonality=yes

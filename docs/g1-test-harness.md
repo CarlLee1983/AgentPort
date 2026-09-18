@@ -4,6 +4,24 @@ This is an operator-controlled acceptance fixture, not a production installer.
 It contains no Runtime credential. The designated Ubuntu 24.04/amd64 target
 uses `config/g1/launcher.orbstack.json` and the accounts/groups named there.
 
+AP-023 additionally uses the shared root-owned parent `/run/agentport`.
+Provision the administrator group before starting the launcher or daemon. The
+Runtime account must not belong to it:
+
+```sh
+sudo groupadd --system agentport-admin 2>/dev/null || true
+sudo usermod --append --groups agentport-admin agentport-daemon
+sudo install -d -o root -g agentport-daemon -m 1771 /run/agentport
+sudo test "$(stat -c '%U:%G:%a' /run/agentport)" = root:agentport-daemon:1771
+if id -nG agentport-runtime | tr ' ' '\n' | grep -Fxq agentport-admin; then
+  echo 'agentport-runtime must not be in agentport-admin' >&2
+  exit 1
+fi
+```
+
+The launcher configuration must use `/run/agentport/launcher.sock` and
+`/run/agentport-ingress`; restart the launcher after installing that config.
+
 Before running `pnpm run test:linux` or `pnpm run test:claude`, an administrator
 creates the AP-021 fixture root independently of core data:
 
@@ -18,7 +36,8 @@ existing G1 variables checked by `scripts/require-g1-linux.mjs` and
 
 ```sh
 export AGENTPORT_G1_G4_FIXTURE_ROOT=/var/lib/agentport/g4-fixtures
-export AGENTPORT_G1_INGRESS_DIRECTORY=/run/agentport-g1-ingress
+export AGENTPORT_G1_LAUNCHER_SOCKET=/run/agentport/launcher.sock
+export AGENTPORT_G1_INGRESS_DIRECTORY=/run/agentport-ingress
 export AGENTPORT_G1_INGRESS_GID="$(getent group agentport-ingress | cut -d: -f3)"
 ```
 

@@ -33,10 +33,12 @@ const port = Number.parseInt(process.argv[1], 10);
 const lifecycle = new ProductionDaemonLifecycle(
   {
     mcp: { port },
+    adminSocket: { groupId: 1004 },
     storage: { databasePath: "/unreached.sqlite" },
     launcher: {
       socketPath: "/unreached-launcher.sock",
       workerIngressDirectory: "/unreached-ingress",
+      socketGroupId: 1001,
       runtimeGroupId: 1002,
       ingressGroupId: 1003,
     },
@@ -54,6 +56,11 @@ const lifecycle = new ProductionDaemonLifecycle(
         port: fixedPort,
         canAcceptRequest,
       }),
+    startAdminServer: async () => ({
+      stopAccepting: () => undefined,
+      close: async () => undefined,
+      forceClose: () => undefined,
+    }),
   },
   2_000,
 );
@@ -85,9 +92,11 @@ const configuration = {
   launcher: {
     socketPath: "/unreached-launcher.sock",
     workerIngressDirectory: "/unreached-ingress",
+    socketGroupId: 1001,
     runtimeGroupId: 1002,
     ingressGroupId: 1003,
   },
+  adminSocket: { groupId: 1004 },
   agents: [],
   principals: [],
 };

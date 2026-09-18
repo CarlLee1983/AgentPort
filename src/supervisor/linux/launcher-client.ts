@@ -18,6 +18,36 @@ import {
   type LinuxLauncherResult,
 } from "./launcher-protocol.js";
 
+const SHARED_LAUNCHER_SOCKET_PATH = "/run/agentport/launcher.sock";
+
+/**
+ * The Gate-056 shared parent is intentionally group-writable and sticky so
+ * the daemon can own only admin.sock. Other launcher parents remain strictly
+ * non-group-writable before a client connects.
+ */
+export function hasProtectedLauncherSocketMetadata(
+  socketPath: string,
+  socket: Pick<Awaited<ReturnType<typeof lstat>>, "isSocket" | "uid" | "mode">,
+  parent: Pick<
+    Awaited<ReturnType<typeof lstat>>,
+    "isDirectory" | "isSymbolicLink" | "uid" | "mode"
+  >,
+): boolean {
+  if (
+    !socket.isSocket() ||
+    socket.uid !== 0 ||
+    (Number(socket.mode) & 0o007) !== 0 ||
+    !parent.isDirectory() ||
+    parent.isSymbolicLink() ||
+    parent.uid !== 0
+  ) {
+    return false;
+  }
+  return socketPath === SHARED_LAUNCHER_SOCKET_PATH
+    ? (Number(parent.mode) & 0o7777) === 0o1771
+    : (Number(parent.mode) & 0o022) === 0;
+}
+
 export interface LinuxLauncherClientOptions {
   socketPath: string;
   timeoutMilliseconds?: number;
@@ -147,13 +177,7 @@ export class LinuxLauncherClient {
       ]);
       return (
         process.platform === "linux" &&
-        socket.isSocket() &&
-        socket.uid === 0 &&
-        (socket.mode & 0o007) === 0 &&
-        parent.isDirectory() &&
-        !parent.isSymbolicLink() &&
-        parent.uid === 0 &&
-        (parent.mode & 0o022) === 0
+        hasProtectedLauncherSocketMetadata(this.#socketPath, socket, parent)
       );
     } catch {
       return false;
