@@ -79,18 +79,38 @@ describe.skipIf(!LINUX_G1_ENABLED)(
       }
     });
 
-    it("prepares and re-prepares a 0771 ingress-style directory (C1)", async () => {
-      const parent = dirname(
-        requiredEnvironment("AGENTPORT_G1_LEDGER_DIRECTORY"),
-      );
-      const target = join(parent, "ingress-style-0771");
-      try {
-        await prepareProtectedLauncherDirectory(target, 0o771, 0);
-        await prepareProtectedLauncherDirectory(target, 0o771, 0);
-      } finally {
-        await rm(target, { recursive: true, force: true });
-      }
-    });
+    it.each([0o000, 0o002])(
+      "prepares and re-prepares a 0771 ingress-style directory with umask %s (C1)",
+      async (umask) => {
+        const parent = dirname(
+          requiredEnvironment("AGENTPORT_G1_LEDGER_DIRECTORY"),
+        );
+        const target = join(parent, `ingress-style-0771-${umask.toString(8)}`);
+        const ingressGroupId = Number(
+          requiredEnvironment("AGENTPORT_G1_INGRESS_GID"),
+        );
+        const previousUmask = process.umask(umask);
+        try {
+          await prepareProtectedLauncherDirectory(
+            target,
+            0o771,
+            ingressGroupId,
+          );
+          await prepareProtectedLauncherDirectory(
+            target,
+            0o771,
+            ingressGroupId,
+          );
+          const metadata = await lstat(target);
+          expect(metadata.uid).toBe(0);
+          expect(metadata.gid).toBe(ingressGroupId);
+          expect(metadata.mode & 0o777).toBe(0o771);
+        } finally {
+          process.umask(previousUmask);
+          await rm(target, { recursive: true, force: true });
+        }
+      },
+    );
 
     it("refuses an ingress directory symlinked to /tmp without following it (AP-021 security matrix)", async () => {
       const parent = dirname(

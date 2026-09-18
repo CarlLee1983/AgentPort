@@ -1,5 +1,13 @@
 import { execFile, spawnSync } from "node:child_process";
-import { chmod, chown, mkdir, mkdtemp, rm, stat } from "node:fs/promises";
+import {
+  chmod,
+  chown,
+  lstat,
+  mkdir,
+  mkdtemp,
+  rm,
+  stat,
+} from "node:fs/promises";
 import { release } from "node:os";
 import { basename, join } from "node:path";
 import { promisify } from "node:util";
@@ -38,7 +46,7 @@ async function accountIdentity(
 
 describe.skipIf(!G4_ENABLED)("real Claude interaction through MCP", () => {
   it("runs the native Question and continuation interaction as the non-root daemon account", async () => {
-    const coreDataPath = requiredEnvironment("AGENTPORT_G1_CORE_DATA_PATH");
+    const fixtureRoot = requiredEnvironment("AGENTPORT_G1_G4_FIXTURE_ROOT");
     const workspacePath = requiredEnvironment("AGENTPORT_G1_WORKSPACE_PATH");
     const daemonUser = requiredEnvironment("AGENTPORT_G1_DAEMON_USER");
     const runtimeGroupId = Number(
@@ -47,18 +55,35 @@ describe.skipIf(!G4_ENABLED)("real Claude interaction through MCP", () => {
     const ingressGroupId = Number(
       requiredEnvironment("AGENTPORT_G1_INGRESS_GID"),
     );
-    await stat(workspacePath);
+    const [fixtureRootMetadata] = await Promise.all([
+      lstat(fixtureRoot),
+      stat(workspacePath),
+    ]);
+    expect(fixtureRootMetadata.isDirectory()).toBe(true);
+    expect(fixtureRootMetadata.isSymbolicLink()).toBe(false);
+    expect(fixtureRootMetadata.uid).toBe(0);
+    expect(fixtureRootMetadata.gid).toBe(0);
+    expect(fixtureRootMetadata.mode & 0o777).toBe(0o711);
     const daemon = await accountIdentity(daemonUser);
-    const base = await mkdtemp(join(coreDataPath, "g4-interaction-"));
+    // Keep the child ingress socket below the launcher protocol's 96-byte
+    // endpoint bound while retaining the dedicated G4 fixture root.
+    const base = await mkdtemp(join(fixtureRoot, "g4-"));
     const ingressDirectory = join(base, "ingress");
     const databaseDirectory = join(base, "db");
+    expect(
+      Buffer.byteLength(
+        join(base, "ingress", `${"0".repeat(36)}.sock`),
+        "utf8",
+      ),
+    ).toBeLessThanOrEqual(96);
     try {
       // Root-only fixture preparation (ADR-0006): the launcher-owned ingress
       // directory stays root:ingressGroup 0771; the SQLite directory is
       // owned by the daemon account so the composition never needs root
       // itself (R1).
-      // mkdtemp creates the base 0700; the daemon and Runtime identities
-      // must traverse it to reach the ingress and database directories.
+      // GATE-054 keeps core data root-only. The dedicated fixture root and
+      // this base are traverse-only so the daemon can reach its own ingress
+      // and database directories without gaining core-data access.
       await chmod(base, 0o711);
       await mkdir(ingressDirectory);
       await chown(ingressDirectory, 0, ingressGroupId);

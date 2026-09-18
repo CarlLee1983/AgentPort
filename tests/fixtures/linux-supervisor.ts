@@ -1,5 +1,5 @@
 import { randomUUID } from "node:crypto";
-import { execFile } from "node:child_process";
+import { execFile, spawn } from "node:child_process";
 import { access, lstat, readFile } from "node:fs/promises";
 import { join } from "node:path";
 import { promisify } from "node:util";
@@ -14,12 +14,86 @@ const executeFile = promisify(execFile);
 export const LINUX_G1_ENABLED =
   process.platform === "linux" && process.env["AGENTPORT_G1_LINUX"] === "1";
 
+interface NonRootResponse<T> {
+  uid: number;
+  result: T;
+}
+
 export function requiredEnvironment(name: string): string {
   const value = process.env[name];
   if (value === undefined || value.length === 0) {
     throw new Error(`${name} is required for the Linux G1 suite`);
   }
   return value;
+}
+
+async function daemonUid(): Promise<number> {
+  const result = await executeFile("id", [
+    "-u",
+    requiredEnvironment("AGENTPORT_G1_DAEMON_USER"),
+  ]);
+  const uid = Number(result.stdout.trim());
+  if (!Number.isSafeInteger(uid) || uid < 1) {
+    throw new Error("Linux G1 daemon account must be non-root");
+  }
+  return uid;
+}
+
+export async function invokeFixtureAsDaemon<T>(
+  fixturePath: string,
+  request: Record<string, unknown>,
+  timeoutMilliseconds: number,
+): Promise<T> {
+  const expectedUid = await daemonUid();
+  const child = spawn(
+    "/usr/sbin/runuser",
+    [
+      "--user",
+      requiredEnvironment("AGENTPORT_G1_DAEMON_USER"),
+      "--",
+      "/usr/bin/env",
+      "-i",
+      "PATH=/usr/local/sbin:/usr/local/bin:/usr/sbin:/usr/bin:/sbin:/bin",
+      process.execPath,
+      fixturePath,
+    ],
+    { stdio: ["pipe", "pipe", "pipe"] },
+  );
+  let output = "";
+  let errors = "";
+  child.stdout.setEncoding("utf8");
+  child.stderr.setEncoding("utf8");
+  child.stdout.on("data", (chunk: string) => {
+    output += chunk;
+  });
+  child.stderr.on("data", (chunk: string) => {
+    errors += chunk;
+  });
+  child.stdin.end(JSON.stringify(request));
+  const exitCode = await new Promise<number | null>((resolve, reject) => {
+    const timer = setTimeout(() => {
+      child.kill("SIGKILL");
+      reject(new Error("Timed out waiting for non-root Supervisor fixture"));
+    }, timeoutMilliseconds + 5_000);
+    child.once("error", (error) => {
+      clearTimeout(timer);
+      reject(error);
+    });
+    child.once("close", (code) => {
+      clearTimeout(timer);
+      resolve(code);
+    });
+  });
+  if (exitCode !== 0) {
+    throw new Error("Non-root Supervisor fixture failed", {
+      cause: errors.slice(0, 2_048),
+    });
+  }
+  const response = JSON.parse(output) as NonRootResponse<T>;
+  if (response.uid !== expectedUid) {
+    throw new Error("Supervisor fixture did not use the daemon identity");
+  }
+  return response.result;
 }
 
 export function linuxSupervisor(
@@ -130,10 +204,24 @@ export async function restartLauncher(): Promise<void> {
     ["restart", requiredEnvironment("AGENTPORT_G1_LAUNCHER_SERVICE")],
     LAUNCHER_RESTART_TIMEOUT_MS,
   );
-  await waitForPath(
-    requiredEnvironment("AGENTPORT_G1_LAUNCHER_SOCKET"),
-    LAUNCHER_RESTART_TIMEOUT_MS,
-  );
+  await waitForLauncherReady();
+}
+
+async function waitForLauncherReady(): Promise<void> {
+  const socketPath = requiredEnvironment("AGENTPORT_G1_LAUNCHER_SOCKET");
+  const deadline = Date.now() + LAUNCHER_RESTART_TIMEOUT_MS;
+  while (Date.now() <= deadline) {
+    try {
+      const authority = await new LinuxLauncherClient({
+        socketPath,
+      }).dispatchAuthority();
+      if (authority !== undefined) return;
+    } catch {
+      // A stale socket can exist while the replacement launcher initializes.
+    }
+    await new Promise((resolve) => setTimeout(resolve, 50));
+  }
+  throw new Error("Timed out waiting for the launcher to become ready");
 }
 
 export async function abruptlyRestartLauncher(): Promise<void> {
@@ -158,7 +246,10 @@ export async function abruptlyRestartLauncher(): Promise<void> {
       ]);
       if (currentPid !== "0" && currentPid !== priorPid) {
         const socket = await lstat(socketPath);
-        if (socket.isSocket() && socket.ino !== priorSocketInode) return;
+        if (socket.isSocket() && socket.ino !== priorSocketInode) {
+          await waitForLauncherReady();
+          return;
+        }
       }
     } catch {
       // The expected restart window is not a failure until the deadline.

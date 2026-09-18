@@ -41,6 +41,12 @@
       "workerEntrypoint": "/opt/agentport-g1/current/dist/src/runtime/worker/entrypoint.js",
       "workerArguments": ["--mode", "isolation-probe"]
     },
+    "g1-recovery": {
+      "workspaceIdentity": "filesystem",
+      "workspacePath": "/srv/agentport/workspaces/g1",
+      "workerEntrypoint": "/opt/agentport-g1/current/dist/src/runtime/worker/entrypoint.js",
+      "workerArguments": ["--mode", "idle"]
+    },
     "g1-claude-structured": {
       "workspaceIdentity": "g1-workspace",
       "workspacePath": "/srv/agentport/workspaces/g1",
@@ -49,7 +55,7 @@
         "--mode",
         "claude-structured",
         "--claude-executable",
-        "/usr/local/bin/claude"
+        "/usr/bin/claude"
       ]
     },
     "g1-claude-question": {
@@ -60,7 +66,7 @@
         "--mode",
         "claude-question",
         "--claude-executable",
-        "/usr/local/bin/claude"
+        "/usr/bin/claude"
       ]
     },
     "g4-claude-interaction": {
@@ -71,7 +77,7 @@
         "--mode",
         "claude-g4",
         "--claude-executable",
-        "/usr/local/bin/claude"
+        "/usr/bin/claude"
       ]
     },
     "g1-claude-cancel-active": {
@@ -82,7 +88,7 @@
         "--mode",
         "claude-cancel-active",
         "--claude-executable",
-        "/usr/local/bin/claude"
+        "/usr/bin/claude"
       ]
     },
     "g1-claude-cancel-question": {
@@ -93,7 +99,7 @@
         "--mode",
         "claude-cancel-question",
         "--claude-executable",
-        "/usr/local/bin/claude"
+        "/usr/bin/claude"
       ]
     }
   }

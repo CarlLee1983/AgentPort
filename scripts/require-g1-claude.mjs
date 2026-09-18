@@ -18,6 +18,7 @@ async function main() {
     "AGENTPORT_G1_CANDIDATE_REVISION",
     "AGENTPORT_G1_CLAUDE_EXECUTABLE",
     "AGENTPORT_G1_CLAUDE_WORKSPACE",
+    "AGENTPORT_G1_G4_FIXTURE_ROOT",
     "AGENTPORT_G1_LAUNCHER_SOCKET",
     "AGENTPORT_G1_RUNTIME_HOME",
     "AGENTPORT_G1_RUNTIME_GID",
@@ -52,17 +53,25 @@ async function main() {
   const runtimeUid = Number(process.env.AGENTPORT_G1_RUNTIME_UID);
   const runtimeGid = Number(process.env.AGENTPORT_G1_RUNTIME_GID);
   const claudeExecutable = process.env.AGENTPORT_G1_CLAUDE_EXECUTABLE;
+  const g4FixtureRoot = process.env.AGENTPORT_G1_G4_FIXTURE_ROOT;
   const claudeConfigDirectory = join(runtimeHome, ".claude");
   const credentialPath = join(claudeConfigDirectory, ".credentials.json");
   await Promise.all([
     access(process.env.AGENTPORT_G1_CLAUDE_WORKSPACE),
+    access(g4FixtureRoot),
     access(process.env.AGENTPORT_G1_LAUNCHER_SOCKET),
     access(claudeExecutable),
   ]);
-  const [homeMetadata, configMetadata, credentialMetadata] = await Promise.all([
+  const [
+    homeMetadata,
+    configMetadata,
+    credentialMetadata,
+    g4FixtureRootMetadata,
+  ] = await Promise.all([
     lstat(runtimeHome),
     lstat(claudeConfigDirectory),
     lstat(credentialPath),
+    lstat(g4FixtureRoot),
   ]);
   if (
     !Number.isSafeInteger(runtimeUid) ||
@@ -81,6 +90,15 @@ async function main() {
     (credentialMetadata.mode & 0o077) !== 0
   ) {
     throw new Error("unprotected-credential-source");
+  }
+  if (
+    !g4FixtureRootMetadata.isDirectory() ||
+    g4FixtureRootMetadata.isSymbolicLink() ||
+    g4FixtureRootMetadata.uid !== 0 ||
+    g4FixtureRootMetadata.gid !== 0 ||
+    (g4FixtureRootMetadata.mode & 0o777) !== 0o711
+  ) {
+    throw new Error("unprotected-g4-fixture-root");
   }
 
   const auth = spawnSync(

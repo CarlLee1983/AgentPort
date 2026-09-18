@@ -643,18 +643,23 @@ export class SqliteDurableAdmissionStore {
     this.#retentionSweepIntervalMs =
       options.retentionSweepIntervalMs ?? 60 * 60 * 1_000;
     this.#retentionEnabled = options.recoveryOnly !== true;
-    const siblingWorker = new URL(
-      "./sqlite-durable-admission-worker.js",
-      import.meta.url,
-    );
-    // Vitest executes TypeScript sources but Node workers do not receive Vite transforms.
-    // The canonical test command builds first; use that emitted worker when source has no JS sibling.
-    const workerUrl = existsSync(siblingWorker)
-      ? siblingWorker
-      : new URL(
-          "../../dist/src/storage/sqlite-durable-admission-worker.js",
-          import.meta.url,
-        );
+    // Vitest executes TypeScript sources but Node workers do not receive Vite
+    // transforms. G4 compiles its child fixture into dist-fixtures, so support
+    // the sibling worker plus the repository build from either source layout.
+    const workerUrl = [
+      new URL("./sqlite-durable-admission-worker.js", import.meta.url),
+      new URL(
+        "../../dist/src/storage/sqlite-durable-admission-worker.js",
+        import.meta.url,
+      ),
+      new URL(
+        "../../../dist/src/storage/sqlite-durable-admission-worker.js",
+        import.meta.url,
+      ),
+    ].find((candidate) => existsSync(candidate));
+    if (workerUrl === undefined) {
+      throw new Error("SQLite durable-admission worker is unavailable");
+    }
     this.#worker = new Worker(workerUrl, {
       workerData: {
         ...resolvedOptions,

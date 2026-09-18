@@ -21,10 +21,31 @@ for (const name of [
   "AGENTPORT_G1_RUNTIME_HOME",
   "AGENTPORT_G1_WORKSPACE_PATH",
   "AGENTPORT_G1_DAEMON_USER",
+  "AGENTPORT_G1_G4_FIXTURE_ROOT",
+  "AGENTPORT_G1_INGRESS_DIRECTORY",
+  "AGENTPORT_G1_INGRESS_GID",
 ]) {
   if (!process.env[name]) throw new Error(`${name} is required`);
 }
 await access(process.env.AGENTPORT_G1_LAUNCHER_SOCKET);
+const { LinuxLauncherClient } =
+  await import("../dist/src/supervisor/linux/launcher-client.js");
+const readinessDeadline = Date.now() + 60_000;
+let dispatchAuthority;
+while (Date.now() <= readinessDeadline) {
+  try {
+    dispatchAuthority = await new LinuxLauncherClient({
+      socketPath: process.env.AGENTPORT_G1_LAUNCHER_SOCKET,
+    }).dispatchAuthority();
+    if (dispatchAuthority !== undefined) break;
+  } catch {
+    // A stale socket can remain while launcher recovery is still sealing units.
+  }
+  await new Promise((resolve) => setTimeout(resolve, 100));
+}
+if (dispatchAuthority === undefined) {
+  throw new Error("designated Linux launcher is not ready");
+}
 const cgroup = await stat("/sys/fs/cgroup");
 if (!cgroup.isDirectory()) throw new Error("cgroup v2 root is unavailable");
 const controllers = await readFile("/sys/fs/cgroup/cgroup.controllers", "utf8");

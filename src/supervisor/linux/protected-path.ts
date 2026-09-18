@@ -103,7 +103,11 @@ export async function prepareProtectedLauncherDirectory(
 
   for (const candidate of missing.reverse()) {
     const isTarget = candidate === path;
-    await mkdir(candidate, { mode: isTarget ? mode : 0o700 });
+    // Create every component without group/other write before assigning the
+    // target's final group and mode. Otherwise a permissive launcher umask can
+    // create a new 0771 target as root's primary group, which the safety check
+    // must (correctly) reject before chown.
+    await mkdir(candidate, { mode: 0o700 });
     if (!isTarget) await requireProtectedAncestor(candidate);
   }
 

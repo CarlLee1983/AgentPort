@@ -111,6 +111,7 @@ describe("S3-A no-production-dispatch contract", () => {
         ).toEqual([
           "./sqlite-durable-admission-worker.js",
           "../../dist/src/storage/sqlite-durable-admission-worker.js",
+          "../../../dist/src/storage/sqlite-durable-admission-worker.js",
         ]);
       } else {
         expect(workerCalls).toHaveLength(0);

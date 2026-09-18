@@ -80,11 +80,12 @@ describe("Claude Driver credential boundary", () => {
       },
     ],
     [
-      "missing credential source",
+      "an unrecognized credential source",
       {
         loggedIn: true,
         authMethod: "claude.ai",
         apiProvider: "firstParty",
+        apiKeySource: "unrecognized",
         subscriptionType: "max",
       },
     ],
@@ -107,6 +108,17 @@ describe("Claude Driver credential boundary", () => {
     ).toBe(true);
   });
 
+  it("accepts current official Claude status without apiKeySource", () => {
+    expect(
+      isClaudeSubscriptionAuthStatus({
+        loggedIn: true,
+        authMethod: "claude.ai",
+        apiProvider: "firstParty",
+        subscriptionType: "max",
+      }),
+    ).toBe(true);
+  });
+
   it("runs the root harness without ambient credentials or process injection", () => {
     expect(
       createG1ClaudeHarnessEnvironment({
@@ -115,6 +127,7 @@ describe("Claude Driver credential boundary", () => {
         AGENTPORT_G1_CLAUDE: "1",
         AGENTPORT_G1_LINUX: "1",
         AGENTPORT_G1_RUNTIME_HOME: "/runtime",
+        AGENTPORT_G1_G4_FIXTURE_ROOT: "/g4-fixtures",
         ANTHROPIC_API_KEY: "credential-marker",
         CLAUDE_CODE_OAUTH_TOKEN: "oauth-marker",
         NODE_OPTIONS: "--import=/host/injection.mjs",
@@ -126,6 +139,7 @@ describe("Claude Driver credential boundary", () => {
       AGENTPORT_G1_CLAUDE: "1",
       AGENTPORT_G1_LINUX: "1",
       AGENTPORT_G1_RUNTIME_HOME: "/runtime",
+      AGENTPORT_G1_G4_FIXTURE_ROOT: "/g4-fixtures",
       PATH: "/usr/local/sbin:/usr/local/bin:/usr/sbin:/usr/bin:/sbin:/bin",
     });
   });

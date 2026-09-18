@@ -253,9 +253,10 @@ Runtime env 只提供該 execution 所需 vendor 憑證；核心 DB／credential
 | 受保護秘密 | `/etc/agentport/credentials/` | root 0700 | 讀；經 `LoadCredential` 傳遞 | 只經 systemd credential 取得 `cursorSecret`、`continuationEncryptionKey` | 只在 Execution 期間經 credential 取得 ingress token 與單次 resume 資料 |
 | SQLite 與 control-reserve | `/var/lib/agentport/daemon/` | agentport-daemon 0700 | 無 | 讀寫 | 無 |
 | launcher ledger | `/var/lib/agentport/launcher/` | root 0700 | 讀寫 | 無 | 無 |
+| G4 fixture root | `/var/lib/agentport/g4-fixtures/` | root 0711 | 建立、清理 | traverse 專用 | 無讀寫 |
 | launcher socket | `/run/agentport/launcher.sock` | root:launcher 群組 0660 | 擁有 | 連線 | 無 |
 | admin socket | `/run/agentport/admin.sock` | agentport-daemon:agentport-admin 0660，唯讀查詢 | 無 | 擁有 | 無 |
-| ingress 目錄 | `/run/agentport/ingress` | root:agentport-ingress 0771 | 建立、驗證 | 驗證，建立 socket | 僅 traverse |
+| ingress 目錄 | `/run/agentport-ingress` | root:agentport-ingress 0771 | 建立、驗證 | 驗證，建立 socket | 僅 traverse |
 | per-execution ingress socket | ingress 目錄內 | agentport-daemon:runtime 群組 0660 | 無 | 建立、listen | 連線並以 token 認證 |
 | runtime-home | `/var/lib/agentport/runtime-home` | agentport-runtime 0700 | 驗證 | 無 | 讀寫 |
 | Workspace | `/var/agentport/workspaces/<agent>` 或管理者指定路徑 | Runtime 可存取 | 驗證 | 無 | 讀寫 |

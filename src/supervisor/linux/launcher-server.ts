@@ -572,6 +572,10 @@ export class LinuxLauncherServer {
         "--property=KillMode=control-group",
         "--property=TimeoutStopSec=2s",
         "--property=PrivateMounts=yes",
+        // The supervisor consumes sanitized worker observation frames from the
+        // exact worker unit journal; inheriting systemd-run's transient pipe
+        // closes stdout after launch and can terminate a reporting worker.
+        "--property=StandardOutput=journal",
         `--property=LoadCredential=${RUNTIME_CREDENTIAL_NAME}:${credentialSource}`,
         "--collect",
         "/usr/bin/env",

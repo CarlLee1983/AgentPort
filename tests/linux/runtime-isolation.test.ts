@@ -213,6 +213,9 @@ describe.skipIf(!LINUX_G1_ENABLED)("Linux Runtime isolation", () => {
           `LOGNAME=${runtimeUser}`,
           "PATH=/usr/local/bin:/usr/bin:/bin",
           `USER=${runtimeUser}`,
+          // Node 24.21.0 on the designated Linux target derives this marker
+          // after env -i; it is not launcher, Caller, or credential input.
+          "UV_USE_IO_URING=0",
         ]),
       );
     } finally {

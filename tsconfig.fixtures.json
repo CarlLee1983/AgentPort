@@ -8,6 +8,7 @@
   },
   "include": [],
   "files": [
+    "tests/fixtures/ap021-recovery-child.ts",
     "tests/fixtures/g4-daemon-child.ts",
     "tests/fixtures/ingress-socket-child.ts"
   ]

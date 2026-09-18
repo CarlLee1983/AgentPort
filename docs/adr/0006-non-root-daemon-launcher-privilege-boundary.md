@@ -10,6 +10,8 @@ status: accepted
 
 GATE-040 補充：Node 無法把 launcher 建立的 listening socket 交給非子程序的 daemon，因此 ingress 目錄由 launcher 擁有，daemon 在其中建立每個 socket（0660，daemon uid 與 Runtime 群組）。daemon 需加入 `agentport-ingress` 與 Runtime 群組；Runtime 只能 traverse 目錄，不能列出、刪除或替換 socket，worker 仍以 ingress token 認證。
 
+GATE-054 補充：G4 的非 root daemon fixture 不能在 root-only core-data 目錄下放置自己的 ingress 與 SQLite 資料。core-data 維持 `root:root` 0700；fixture 改用獨立的 `root:root` 0711 暫存根目錄。此根目錄僅供 daemon traverse 到每次測試建立的 root-owned ingress 與 daemon-owned database，Runtime 仍不得讀寫 core-data 或 fixture root。
+
 代價是 S3-B composition 與 ingress 建立流程需重做，並需同步修正 `docs/deployment-guide.md` 與實作不一致之處。回退成 root daemon 在技術上容易，但會重新把不可信輸入解析放到 root 程序中，必須以新 ADR 明確接受該風險。
 
 **Falsified if:** `src/bootstrap/create-controlled-runtime-admission.ts` 在正式部署路徑仍要求 `getuid() === 0`；或 `src/supervisor/linux/launcher-server.ts` 的 launcher socket 群組允許 daemon 服務帳號以外的成員；或 daemon 需要直接擁有、建立 `src/runtime/worker/ingress.ts` 使用的 ingress 目錄才能運作。

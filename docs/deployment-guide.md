@@ -133,7 +133,7 @@ sudo chmod 750 /var/agentport/workspaces
   "runtimeGroup": "agentport-runtime",
   "runtimeHome": "/home/agentport-runtime",
   "nodeExecutable": "/usr/bin/node",
-  "ingressDirectory": "/run/agentport/ingress",
+  "ingressDirectory": "/run/agentport-ingress",
   "ingressGroup": "agentport-ingress",
   "profiles": {
     "profile-project-a": {

@@ -478,7 +478,27 @@ export async function preflightLinuxOperations(
       ),
       { ingressGroupId: ingressGid, allowRootProcess: true },
     );
-    check("worker_ingress_path", ingressAssessment.ok ? "pass" : "fail");
+    check(
+      "worker_ingress_path",
+      ingressAssessment.ok &&
+        (await dependencies.runtimeAccess(
+          launcher.ingressDirectory,
+          launcher.runtimeUser,
+          "traverse",
+        )) &&
+        !(await dependencies.runtimeAccess(
+          launcher.ingressDirectory,
+          launcher.runtimeUser,
+          "read",
+        )) &&
+        !(await dependencies.runtimeAccess(
+          launcher.ingressDirectory,
+          launcher.runtimeUser,
+          "write",
+        ))
+        ? "pass"
+        : "fail",
+    );
   } catch {
     check("path_inspection", "fail");
   }

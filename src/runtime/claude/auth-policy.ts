@@ -8,6 +8,7 @@ const G1_CLAUDE_HARNESS_VARIABLES = [
   "AGENTPORT_G1_CLAUDE_EXECUTABLE",
   "AGENTPORT_G1_CLAUDE_WORKSPACE",
   "AGENTPORT_G1_CORE_DATA_PATH",
+  "AGENTPORT_G1_G4_FIXTURE_ROOT",
   "AGENTPORT_G1_DAEMON_USER",
   "AGENTPORT_G1_INGRESS_GID",
   "AGENTPORT_G1_LAUNCHER_CONFIG",
@@ -47,6 +48,9 @@ export function isClaudeSubscriptionAuthStatus(value: unknown): boolean {
     typeof subscriptionType === "string" &&
     subscriptionType.length > 0 &&
     Buffer.byteLength(subscriptionType, "utf8") <= 64 &&
-    apiKeySource === "none"
+    // GATE-053: current official Claude Code releases omit this field. The
+    // G1 harness supplies this status only from its clean environment, where
+    // API-key and environment OAuth sources have already been excluded.
+    (apiKeySource === undefined || apiKeySource === "none")
   );
 }

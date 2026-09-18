@@ -129,10 +129,14 @@ async function verifyDistinctGroups(
  * permissions; a umask that denies other-write keeps the Runtime identity from
  * connecting inside that window.
  */
+export function runtimeUmaskDeniesOtherWrite(status: string): boolean {
+  const umask = /^Umask:\s+([0-7]+)$/m.exec(status)?.[1];
+  return umask !== undefined && (Number.parseInt(umask, 8) & 0o002) !== 0;
+}
+
 async function requireRestrictiveUmask(): Promise<void> {
   const status = await readFile("/proc/self/status", "utf8");
-  const umask = /^Umask:\s+([0-7]+)$/m.exec(status)?.[1];
-  if (umask === undefined || (Number.parseInt(umask, 8) & 0o002) === 0) {
+  if (!runtimeUmaskDeniesOtherWrite(status)) {
     throw new Error(
       "Controlled Runtime composition requires a umask that denies other write",
     );

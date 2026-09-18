@@ -6,6 +6,7 @@ import { afterEach, beforeEach, describe, expect, it, vi } from "vitest";
 
 import {
   createControlledRuntimeAdmission,
+  runtimeUmaskDeniesOtherWrite,
   type ControlledRuntimeAdmissionConfiguration,
 } from "../../src/bootstrap/create-controlled-runtime-admission.js";
 
@@ -134,5 +135,22 @@ describe("controlled Runtime composition", () => {
         ),
       ).rejects.toThrow(UNPROTECTED_INGRESS);
     });
+  });
+});
+
+describe("controlled Runtime umask gate", () => {
+  it.each([
+    ["0022", true],
+    ["0002", true],
+    ["0020", false],
+    ["0000", false],
+  ])("interprets Umask %s", (umask, expected) => {
+    expect(
+      runtimeUmaskDeniesOtherWrite(`Name:\tnode\nUmask:\t${umask}\n`),
+    ).toBe(expected);
+  });
+
+  it("fails closed when Linux does not report a process umask", () => {
+    expect(runtimeUmaskDeniesOtherWrite("Name:\tnode\n")).toBe(false);
   });
 });

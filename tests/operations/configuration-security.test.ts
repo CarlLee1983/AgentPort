@@ -58,6 +58,7 @@ function validDependencies() {
     ],
   ]);
   const effectiveAccess = new Set<string>();
+  effectiveAccess.add("/run/agentport-ingress:traverse");
   const canonicalAliases = new Map<string, string>();
   return {
     paths,
@@ -263,6 +264,27 @@ describe("Linux administrator configuration preflight", () => {
           gid: 988,
           mode: 0o750,
         });
+      },
+    ],
+    [
+      "Runtime cannot traverse the protected ingress directory",
+      "worker_ingress_path",
+      (fixture: ReturnType<typeof validDependencies>) => {
+        fixture.effectiveAccess.delete("/run/agentport-ingress:traverse");
+      },
+    ],
+    [
+      "Runtime ACL grants ingress read",
+      "worker_ingress_path",
+      (fixture: ReturnType<typeof validDependencies>) => {
+        fixture.effectiveAccess.add("/run/agentport-ingress:read");
+      },
+    ],
+    [
+      "Runtime ACL grants ingress write",
+      "worker_ingress_path",
+      (fixture: ReturnType<typeof validDependencies>) => {
+        fixture.effectiveAccess.add("/run/agentport-ingress:write");
       },
     ],
   ])("rejects %s with a sanitized %s check", async (_label, code, change) => {

@@ -10,4 +10,11 @@ Anthropic 條款（2026-09-17 核對）將訂閱 OAuth 限於 Claude Code 的一
 
 Claude Code 不內附於發行包、由官方 apt 套件庫安裝指定版本並 hold 的決定不變，沿用 ADR-0007。runtime-home 同時保存 OAuth credential 與 Runtime Session 檔，屬於需備份、反安裝預設保留的受保護資料。
 
+GATE-053（2026-09-18）核准一項受限的 CLI 狀態相容：官方 apt 的 Claude Code
+2.1.267-1 與 2.1.276-1 會在已登入的 subscription OAuth 狀態中省略
+`apiKeySource`。G1 僅在 `env -i` 的乾淨 harness 中接受這個省略，且仍須同時
+驗證 `loggedIn=true`、`authMethod=claude.ai`、`apiProvider=firstParty` 與非空、受
+長度限制的 `subscriptionType`；欄位存在時仍只能是 `none`。這不接受 API key、
+環境 OAuth token 或其他 credential source。
+
 **Falsified if:** `src/runtime/claude/driver.ts` 的授權判定不再要求 subscription OAuth 且沒有對應的 API key 路徑 Story；或 Anthropic 條款明確禁止訂閱憑證用於此部署型態；或 `tests/contracts/claude-driver-boundary.test.ts` 改為接受環境注入的憑證。
