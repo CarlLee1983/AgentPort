@@ -5,6 +5,7 @@ import { isAbsolute, join, normalize } from "node:path";
 import type { McpHttpHandler } from "@modelcontextprotocol/server";
 
 import {
+  type DaemonShutdownResult,
   DurableAgentExecutionService,
   type StopEvidenceVerifier,
 } from "../core/agent-execution-service.js";
@@ -46,9 +47,21 @@ export interface ControlledRuntimeAdmissionComposition {
   registry: AgentRegistry;
   service: AgentExecutionService;
   mcpHandler: McpHttpHandler;
+  auditRecorder: Pick<
+    SqliteDurableAdmissionStore,
+    "flushAudit" | "recordAudit"
+  >;
   /** Internal scheduler seam; no MCP caller can select a Reference or profile. */
   dispatch(taskId: string): ReturnType<ControlledRuntimeDispatcher["dispatch"]>;
+  /** Must complete before admission or dispatch is opened. */
+  initializeAfterRestart(): Promise<void>;
+  /** Synchronous lifecycle fence: later dispatch attempts cannot claim or launch. */
+  beginShutdown(): void;
+  /** Administrative stop keeps active work in recovery until explicit acknowledgement. */
+  prepareForDaemonShutdown(): Promise<DaemonShutdownResult>;
   close(): Promise<void>;
+  /** Deadline fallback; terminates only resources owned by this daemon process. */
+  forceClose(): Promise<void>;
 }
 
 function linuxStopEvidenceVerifier(): StopEvidenceVerifier {
@@ -147,7 +160,7 @@ async function requireRestrictiveUmask(): Promise<void> {
  * Explicit S3-B composition.  The S3-A composition intentionally remains in
  * create-durable-admission.ts and has no runtime imports or process control.
  */
-export async function createControlledRuntimeAdmission(
+export async function prepareControlledRuntimeAdmission(
   configuration: ControlledRuntimeAdmissionConfiguration,
 ): Promise<ControlledRuntimeAdmissionComposition> {
   requireNonRootLinux();
@@ -174,8 +187,10 @@ export async function createControlledRuntimeAdmission(
   );
   await verifyDistinctGroups(launcherConfiguration);
   await requireRestrictiveUmask();
+  let dispatchOpen = false;
   const launcher = new LinuxLauncherClient({
     socketPath: configuration.launcher.socketPath,
+    canStart: () => dispatchOpen,
   });
   const supervisor = new LinuxExecutionSupervisor(launcher);
   const storageIncidents = new StorageIncidentCoordinator(
@@ -186,6 +201,7 @@ export async function createControlledRuntimeAdmission(
     configuration.storage,
     storageIncidents,
   );
+  store.closeDispatchAdmission();
   try {
     const registry = await AgentRegistry.create(configuration.registry, store);
     const service = new DurableAgentExecutionService(registry, store, {
@@ -226,24 +242,102 @@ export async function createControlledRuntimeAdmission(
       launcher,
       supervisor,
       ingressFactory,
+      { isOpen: () => dispatchOpen },
     );
-    await service.initializeAfterRestart(supervisor);
     const mcpHandler = createDurableAdmissionMcpHandler(service);
+    let initialized = false;
+    let shutdownRequested = false;
+    let initializePromise: Promise<void> | undefined;
+    let shutdownPromise: Promise<DaemonShutdownResult> | undefined;
+    let closePromise: Promise<void> | undefined;
+    const activeDispatches = new Set<
+      ReturnType<ControlledRuntimeDispatcher["dispatch"]>
+    >();
     return {
       registry,
       service,
       mcpHandler,
-      dispatch: (taskId) => dispatcher.dispatch(taskId),
-      close: async () => {
-        try {
-          await mcpHandler.close();
-        } finally {
-          await store.close();
-        }
+      auditRecorder: store,
+      dispatch: (taskId) => {
+        if (!dispatchOpen) return Promise.resolve({ kind: "unavailable" });
+        const pending = dispatcher.dispatch(taskId);
+        activeDispatches.add(pending);
+        void pending.then(
+          () => activeDispatches.delete(pending),
+          () => activeDispatches.delete(pending),
+        );
+        return pending;
+      },
+      initializeAfterRestart: () => {
+        initializePromise ??= (async () => {
+          await service.initializeAfterRestart(supervisor);
+          initialized = true;
+          if (!shutdownRequested && closePromise === undefined) {
+            store.openDispatchAdmission();
+            dispatchOpen = true;
+          }
+        })();
+        return initializePromise;
+      },
+      beginShutdown: () => {
+        shutdownRequested = true;
+        dispatchOpen = false;
+        store.closeDispatchAdmission();
+      },
+      prepareForDaemonShutdown: () => {
+        shutdownRequested = true;
+        dispatchOpen = false;
+        store.closeDispatchAdmission();
+        shutdownPromise ??= (async () => {
+          await Promise.allSettled(activeDispatches);
+          if (!initialized) {
+            return {
+              activeExecutions: 0,
+              stopConfirmed: 0,
+              stopUnknown: 0,
+            };
+          }
+          return service.prepareForDaemonShutdown(supervisor);
+        })();
+        return shutdownPromise;
+      },
+      close: () => {
+        shutdownRequested = true;
+        dispatchOpen = false;
+        store.closeDispatchAdmission();
+        closePromise ??= (async () => {
+          await Promise.allSettled(activeDispatches);
+          try {
+            await mcpHandler.close();
+          } finally {
+            await store.close();
+          }
+        })();
+        return closePromise;
+      },
+      forceClose: async () => {
+        shutdownRequested = true;
+        dispatchOpen = false;
+        store.closeDispatchAdmission();
+        void mcpHandler.close().catch(() => undefined);
+        await store.forceClose();
       },
     };
   } catch (error) {
     await store.close();
+    throw error;
+  }
+}
+
+export async function createControlledRuntimeAdmission(
+  configuration: ControlledRuntimeAdmissionConfiguration,
+): Promise<ControlledRuntimeAdmissionComposition> {
+  const composition = await prepareControlledRuntimeAdmission(configuration);
+  try {
+    await composition.initializeAfterRestart();
+    return composition;
+  } catch (error) {
+    await composition.close().catch(() => undefined);
     throw error;
   }
 }

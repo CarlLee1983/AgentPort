@@ -60,7 +60,9 @@ interface Options {
   busyTimeoutMs?: number;
   continuationEncryptionKey?: string;
   registryRevisionFence: SharedArrayBuffer;
+  dispatchAdmissionFence: SharedArrayBuffer;
   testCommitBarrier: SharedArrayBuffer;
+  testDispatchCommitBarrier: SharedArrayBuffer;
 }
 interface Request {
   requestId: number;
@@ -90,6 +92,10 @@ const continuationEncryptionKey = continuationKey(
 );
 const registryRevisionFence = new Int32Array(options.registryRevisionFence);
 const testCommitBarrier = new Int32Array(options.testCommitBarrier);
+const testDispatchCommitBarrier = new Int32Array(
+  options.testDispatchCommitBarrier,
+);
+const dispatchAdmissionFence = new Int32Array(options.dispatchAdmissionFence);
 const physicalAdmissionBytes =
   options.physicalAdmissionBytes ?? 2 * 1024 * 1024 * 1024;
 const physicalControlReserveBytes =
@@ -2807,246 +2813,259 @@ function claimAndPrepare(p: Record<string, unknown>) {
   const workspaceId = binding.workspaceIdentity.filesystemIdentity;
   const stamp = now();
   try {
-    return registryFencedTransaction(p.expectedRegistryRevision, () => {
-      const row = db
-        .prepare(
-          "SELECT t.task_id,t.context_id,t.state,t.lifecycle_state,t.agent_id,t.execution_limit_seconds,t.input_wait_seconds,c.binding_snapshot_id AS context_binding_snapshot_id,b.workspace_id AS context_workspace_id,b.payload_json AS context_binding_payload FROM tasks t JOIN contexts c ON c.context_id=t.context_id JOIN binding_snapshots b ON b.binding_snapshot_id=c.binding_snapshot_id WHERE t.scope=? AND t.task_id=?",
-        )
-        .get(scope, taskId) as Record<string, unknown> | undefined;
-      if (row?.lifecycle_state !== null && row?.lifecycle_state !== undefined) {
-        throwFailure(
-          "operation_conflict",
-          "task already has an execution lifecycle",
-          taskId,
-        );
-      }
-      if (
-        !row ||
-        !allowed(row.agent_id, p.allowedAgentIds) ||
-        (row.state !== "queued" && row.state !== "paused")
-      ) {
-        throwFailure(
-          "invalid_state",
-          "task cannot prepare an execution",
-          taskId,
-        );
-      }
-      let contextBinding: Record<string, unknown> | undefined;
-      try {
-        const value: unknown = JSON.parse(String(row.context_binding_payload));
-        contextBinding = isRecord(value) ? value : undefined;
-      } catch {
-        contextBinding = undefined;
-      }
-      const contextWorkspace = contextBinding?.workspaceIdentity;
-      const contextPolicy = contextBinding?.policy;
-      if (
-        contextBinding === undefined ||
-        !isRecord(contextWorkspace) ||
-        !isRecord(contextPolicy) ||
-        row.context_workspace_id !== workspaceId ||
-        contextWorkspace.filesystemIdentity !== workspaceId ||
-        contextBinding.configurationRevision !==
-          binding.configurationRevision ||
-        contextBinding.runtimeDriver !== binding.runtimeDriver ||
-        contextBinding.runtimeVersion !== binding.runtimeVersion ||
-        contextBinding.launchProfileId !== binding.launchProfileId ||
-        contextPolicy.maximumExecutionLimitSeconds !==
-          bindingPolicy.maximumExecutionLimitSeconds ||
-        contextPolicy.maximumInputWaitSeconds !==
-          bindingPolicy.maximumInputWaitSeconds
-      ) {
-        throwFailure(
-          "operation_conflict",
-          "Context binding changed before dispatch",
-          taskId,
-        );
-      }
-      if (
-        row.state !== "queued" ||
-        !isEligibleContextHead(
-          scope,
-          authorizedAgentIds(p.allowedAgentIds),
-          taskId,
-        )
-      ) {
-        throwFailure(
-          "invalid_state",
-          "task is not an eligible Context queue head",
-          taskId,
-        );
-      }
-      const activeExecutions = Number(
-        (
-          db
-            .prepare(
-              "SELECT COUNT(*) AS count FROM execution_workspace_claims WHERE status IN ('held','quarantined')",
-            )
-            .get() as { count: number }
-        ).count,
-      );
-      if (activeExecutions >= (options.activeExecutionCapacity ?? 4)) {
-        throwFailure(
-          "queue_capacity",
-          "global active execution capacity is exhausted",
-          taskId,
-        );
-      }
-      const continuationIntent = db
-        .prepare(
-          "SELECT mode,context_summary FROM context_continuations WHERE context_id=? AND target_task_id=? AND consumed_by_execution_id IS NULL",
-        )
-        .get(row.context_id, taskId) as Record<string, unknown> | undefined;
-      let launchContinuation:
-        | {
-            kind: "resume";
-            sourceReference: {
-              executionId: string;
-              generation: string;
-              daemonEpoch: string;
-              launchProfileId: string;
-              workspaceIdentity: string;
-            };
-            sessionReference: string;
-            protectedSessionToken: string;
-          }
-        | { kind: "fresh_session"; contextSummary: string }
-        | undefined;
-      if (continuationIntent?.mode === "preserve") {
-        const tokenRow = db
+    return registryFencedTransaction(
+      p.expectedRegistryRevision,
+      () => {
+        const row = db
           .prepare(
-            `SELECT token.*,source.execution_id,source.generation,source.daemon_epoch,source.launch_profile_id,source.workspace_id
-             FROM runtime_session_tokens token
-             JOIN executions source ON source.execution_id=token.source_execution_id
-             WHERE token.context_id=? AND token.state='current'`,
+            "SELECT t.task_id,t.context_id,t.state,t.lifecycle_state,t.agent_id,t.execution_limit_seconds,t.input_wait_seconds,c.binding_snapshot_id AS context_binding_snapshot_id,b.workspace_id AS context_workspace_id,b.payload_json AS context_binding_payload FROM tasks t JOIN contexts c ON c.context_id=t.context_id JOIN binding_snapshots b ON b.binding_snapshot_id=c.binding_snapshot_id WHERE t.scope=? AND t.task_id=?",
           )
-          .get(row.context_id) as Record<string, unknown> | undefined;
+          .get(scope, taskId) as Record<string, unknown> | undefined;
         if (
-          tokenRow === undefined ||
-          tokenRow.workspace_identity !== workspaceId ||
-          tokenRow.runtime_driver !== binding.runtimeDriver ||
-          tokenRow.runtime_version !== binding.runtimeVersion
+          row?.lifecycle_state !== null &&
+          row?.lifecycle_state !== undefined
+        ) {
+          throwFailure(
+            "operation_conflict",
+            "task already has an execution lifecycle",
+            taskId,
+          );
+        }
+        if (
+          !row ||
+          !allowed(row.agent_id, p.allowedAgentIds) ||
+          (row.state !== "queued" && row.state !== "paused")
         ) {
           throwFailure(
             "invalid_state",
-            "protected continuation is unavailable",
+            "task cannot prepare an execution",
+            taskId,
           );
         }
-        const protectedSessionToken = decryptContinuationToken(tokenRow);
+        let contextBinding: Record<string, unknown> | undefined;
+        try {
+          const value: unknown = JSON.parse(
+            String(row.context_binding_payload),
+          );
+          contextBinding = isRecord(value) ? value : undefined;
+        } catch {
+          contextBinding = undefined;
+        }
+        const contextWorkspace = contextBinding?.workspaceIdentity;
+        const contextPolicy = contextBinding?.policy;
         if (
-          tokenRow.session_reference !==
-          sessionReferenceFor(
-            {
+          contextBinding === undefined ||
+          !isRecord(contextWorkspace) ||
+          !isRecord(contextPolicy) ||
+          row.context_workspace_id !== workspaceId ||
+          contextWorkspace.filesystemIdentity !== workspaceId ||
+          contextBinding.configurationRevision !==
+            binding.configurationRevision ||
+          contextBinding.runtimeDriver !== binding.runtimeDriver ||
+          contextBinding.runtimeVersion !== binding.runtimeVersion ||
+          contextBinding.launchProfileId !== binding.launchProfileId ||
+          contextPolicy.maximumExecutionLimitSeconds !==
+            bindingPolicy.maximumExecutionLimitSeconds ||
+          contextPolicy.maximumInputWaitSeconds !==
+            bindingPolicy.maximumInputWaitSeconds
+        ) {
+          throwFailure(
+            "operation_conflict",
+            "Context binding changed before dispatch",
+            taskId,
+          );
+        }
+        if (
+          row.state !== "queued" ||
+          !isEligibleContextHead(
+            scope,
+            authorizedAgentIds(p.allowedAgentIds),
+            taskId,
+          )
+        ) {
+          throwFailure(
+            "invalid_state",
+            "task is not an eligible Context queue head",
+            taskId,
+          );
+        }
+        const activeExecutions = Number(
+          (
+            db
+              .prepare(
+                "SELECT COUNT(*) AS count FROM execution_workspace_claims WHERE status IN ('held','quarantined')",
+              )
+              .get() as { count: number }
+          ).count,
+        );
+        if (activeExecutions >= (options.activeExecutionCapacity ?? 4)) {
+          throwFailure(
+            "queue_capacity",
+            "global active execution capacity is exhausted",
+            taskId,
+          );
+        }
+        const continuationIntent = db
+          .prepare(
+            "SELECT mode,context_summary FROM context_continuations WHERE context_id=? AND target_task_id=? AND consumed_by_execution_id IS NULL",
+          )
+          .get(row.context_id, taskId) as Record<string, unknown> | undefined;
+        let launchContinuation:
+          | {
+              kind: "resume";
+              sourceReference: {
+                executionId: string;
+                generation: string;
+                daemonEpoch: string;
+                launchProfileId: string;
+                workspaceIdentity: string;
+              };
+              sessionReference: string;
+              protectedSessionToken: string;
+            }
+          | { kind: "fresh_session"; contextSummary: string }
+          | undefined;
+        if (continuationIntent?.mode === "preserve") {
+          const tokenRow = db
+            .prepare(
+              `SELECT token.*,source.execution_id,source.generation,source.daemon_epoch,source.launch_profile_id,source.workspace_id
+             FROM runtime_session_tokens token
+             JOIN executions source ON source.execution_id=token.source_execution_id
+             WHERE token.context_id=? AND token.state='current'`,
+            )
+            .get(row.context_id) as Record<string, unknown> | undefined;
+          if (
+            tokenRow === undefined ||
+            tokenRow.workspace_identity !== workspaceId ||
+            tokenRow.runtime_driver !== binding.runtimeDriver ||
+            tokenRow.runtime_version !== binding.runtimeVersion
+          ) {
+            throwFailure(
+              "invalid_state",
+              "protected continuation is unavailable",
+            );
+          }
+          const protectedSessionToken = decryptContinuationToken(tokenRow);
+          if (
+            tokenRow.session_reference !==
+            sessionReferenceFor(
+              {
+                executionId: String(tokenRow.execution_id),
+                generation: String(tokenRow.generation),
+                daemonEpoch: String(tokenRow.daemon_epoch),
+                launchProfileId: String(tokenRow.launch_profile_id),
+                workspaceIdentity: String(tokenRow.workspace_id),
+              },
+              protectedSessionToken,
+            )
+          ) {
+            throwFailure(
+              "invalid_state",
+              "protected continuation is unavailable",
+            );
+          }
+          launchContinuation = {
+            kind: "resume",
+            sourceReference: {
               executionId: String(tokenRow.execution_id),
               generation: String(tokenRow.generation),
               daemonEpoch: String(tokenRow.daemon_epoch),
               launchProfileId: String(tokenRow.launch_profile_id),
               workspaceIdentity: String(tokenRow.workspace_id),
             },
+            sessionReference: String(tokenRow.session_reference),
             protectedSessionToken,
-          )
-        ) {
-          throwFailure(
-            "invalid_state",
-            "protected continuation is unavailable",
-          );
+          };
+          const invalidated = db
+            .prepare(
+              "UPDATE runtime_session_tokens SET state='invalidated',invalidated_at=? WHERE session_reference=? AND context_id=? AND state='current'",
+            )
+            .run(stamp, tokenRow.session_reference, row.context_id);
+          if (invalidated.changes !== 1) {
+            throwFailure(
+              "operation_conflict",
+              "protected continuation dispatch lost its claim",
+            );
+          }
+          db.prepare(
+            "UPDATE contexts SET session_reference=NULL WHERE context_id=?",
+          ).run(row.context_id);
+        } else if (continuationIntent?.mode === "fresh_session") {
+          if (typeof continuationIntent.context_summary !== "string") {
+            throwFailure("invalid_state", "fresh continuation is unavailable");
+          }
+          launchContinuation = {
+            kind: "fresh_session",
+            contextSummary: continuationIntent.context_summary,
+          };
         }
-        launchContinuation = {
-          kind: "resume",
-          sourceReference: {
-            executionId: String(tokenRow.execution_id),
-            generation: String(tokenRow.generation),
-            daemonEpoch: String(tokenRow.daemon_epoch),
-            launchProfileId: String(tokenRow.launch_profile_id),
-            workspaceIdentity: String(tokenRow.workspace_id),
-          },
-          sessionReference: String(tokenRow.session_reference),
-          protectedSessionToken,
-        };
-        const invalidated = db
-          .prepare(
-            "UPDATE runtime_session_tokens SET state='invalidated',invalidated_at=? WHERE session_reference=? AND context_id=? AND state='current'",
-          )
-          .run(stamp, tokenRow.session_reference, row.context_id);
-        if (invalidated.changes !== 1) {
-          throwFailure(
-            "operation_conflict",
-            "protected continuation dispatch lost its claim",
-          );
+        const executionLimitSeconds =
+          row.execution_limit_seconds === null ||
+          row.execution_limit_seconds === undefined
+            ? Math.min(
+                3_600,
+                Number(bindingPolicy.maximumExecutionLimitSeconds),
+              )
+            : Number(row.execution_limit_seconds);
+        const inputWaitSeconds =
+          row.input_wait_seconds === null ||
+          row.input_wait_seconds === undefined
+            ? Math.min(86_400, Number(bindingPolicy.maximumInputWaitSeconds))
+            : Number(row.input_wait_seconds);
+        db.prepare(
+          "UPDATE tasks SET execution_limit_seconds=?,input_wait_seconds=? WHERE task_id=?",
+        ).run(executionLimitSeconds, inputWaitSeconds, taskId);
+        db.prepare(
+          "INSERT INTO executions(execution_id,task_id,binding_snapshot_id,generation,daemon_epoch,launch_profile_id,workspace_id,state,lifecycle_state,revision,created_at,updated_at) VALUES(?,?,?,?,?,?,?,'prepared',?,1,?,?)",
+        ).run(
+          executionId,
+          taskId,
+          row.context_binding_snapshot_id,
+          generation,
+          daemonEpoch,
+          binding.launchProfileId,
+          workspaceId,
+          dispatchIntent ? "starting" : null,
+          stamp,
+          stamp,
+        );
+        db.prepare(
+          "INSERT INTO execution_workspace_claims(workspace_id,execution_id,status,claimed_at,updated_at) VALUES(?,?,'held',?,?)",
+        ).run(workspaceId, executionId, stamp, stamp);
+        if (continuationIntent !== undefined) {
+          const consumed = db
+            .prepare(
+              "UPDATE context_continuations SET consumed_by_execution_id=?,updated_at=? WHERE context_id=? AND target_task_id=? AND consumed_by_execution_id IS NULL",
+            )
+            .run(executionId, stamp, row.context_id, taskId);
+          if (consumed.changes !== 1) {
+            throwFailure(
+              "operation_conflict",
+              "continuation dispatch lost its claim",
+            );
+          }
         }
         db.prepare(
-          "UPDATE contexts SET session_reference=NULL WHERE context_id=?",
-        ).run(row.context_id);
-      } else if (continuationIntent?.mode === "fresh_session") {
-        if (typeof continuationIntent.context_summary !== "string") {
-          throwFailure("invalid_state", "fresh continuation is unavailable");
-        }
-        launchContinuation = {
-          kind: "fresh_session",
-          contextSummary: continuationIntent.context_summary,
-        };
-      }
-      const executionLimitSeconds =
-        row.execution_limit_seconds === null ||
-        row.execution_limit_seconds === undefined
-          ? Math.min(3_600, Number(bindingPolicy.maximumExecutionLimitSeconds))
-          : Number(row.execution_limit_seconds);
-      const inputWaitSeconds =
-        row.input_wait_seconds === null || row.input_wait_seconds === undefined
-          ? Math.min(86_400, Number(bindingPolicy.maximumInputWaitSeconds))
-          : Number(row.input_wait_seconds);
-      db.prepare(
-        "UPDATE tasks SET execution_limit_seconds=?,input_wait_seconds=? WHERE task_id=?",
-      ).run(executionLimitSeconds, inputWaitSeconds, taskId);
-      db.prepare(
-        "INSERT INTO executions(execution_id,task_id,binding_snapshot_id,generation,daemon_epoch,launch_profile_id,workspace_id,state,lifecycle_state,revision,created_at,updated_at) VALUES(?,?,?,?,?,?,?,'prepared',?,1,?,?)",
-      ).run(
-        executionId,
-        taskId,
-        row.context_binding_snapshot_id,
-        generation,
-        daemonEpoch,
-        binding.launchProfileId,
-        workspaceId,
-        dispatchIntent ? "starting" : null,
-        stamp,
-        stamp,
-      );
-      db.prepare(
-        "INSERT INTO execution_workspace_claims(workspace_id,execution_id,status,claimed_at,updated_at) VALUES(?,?,'held',?,?)",
-      ).run(workspaceId, executionId, stamp, stamp);
-      if (continuationIntent !== undefined) {
-        const consumed = db
-          .prepare(
-            "UPDATE context_continuations SET consumed_by_execution_id=?,updated_at=? WHERE context_id=? AND target_task_id=? AND consumed_by_execution_id IS NULL",
-          )
-          .run(executionId, stamp, row.context_id, taskId);
-        if (consumed.changes !== 1) {
-          throwFailure(
-            "operation_conflict",
-            "continuation dispatch lost its claim",
-          );
-        }
-      }
-      db.prepare(
-        "UPDATE tasks SET state='paused',lifecycle_state=?,reason=?,revision=revision+1,updated_at=? WHERE task_id=?",
-      ).run(
-        dispatchIntent ? "starting" : null,
-        dispatchIntent ? "execution_starting" : "execution_prepared",
-        stamp,
-        taskId,
-      );
-      const prepared = execution(
-        db
-          .prepare(
-            "SELECT e.*,w.status AS claim_status FROM executions e JOIN execution_workspace_claims w ON w.execution_id=e.execution_id WHERE e.execution_id=?",
-          )
-          .get(executionId) as Record<string, unknown>,
-      );
-      return launchContinuation === undefined
-        ? prepared
-        : { ...prepared, launchContinuation };
-    });
+          "UPDATE tasks SET state='paused',lifecycle_state=?,reason=?,revision=revision+1,updated_at=? WHERE task_id=?",
+        ).run(
+          dispatchIntent ? "starting" : null,
+          dispatchIntent ? "execution_starting" : "execution_prepared",
+          stamp,
+          taskId,
+        );
+        const prepared = execution(
+          db
+            .prepare(
+              "SELECT e.*,w.status AS claim_status FROM executions e JOIN execution_workspace_claims w ON w.execution_id=e.execution_id WHERE e.execution_id=?",
+            )
+            .get(executionId) as Record<string, unknown>,
+        );
+        return launchContinuation === undefined
+          ? prepared
+          : { ...prepared, launchContinuation };
+      },
+      acquireDispatchCommitFence,
+    );
   } catch (error) {
     if (
       error instanceof Error &&
@@ -3223,7 +3242,14 @@ function interruptExecution(p: Record<string, unknown>) {
     return execution(updated);
   })();
 }
-function recoverExecutions() {
+function recoverExecutions(p: Record<string, unknown>) {
+  const recoveryReason = p.reason ?? "daemon_restart";
+  if (
+    recoveryReason !== "daemon_restart" &&
+    recoveryReason !== "daemon_shutdown"
+  ) {
+    throwFailure("operation_conflict", "recovery reason is invalid");
+  }
   const stamp = now();
   db.transaction(() => {
     const active = db
@@ -3235,11 +3261,11 @@ function recoverExecutions() {
     }[];
     if (active.length === 0) return;
     db.prepare(
-      "UPDATE tasks SET lifecycle_state='recovering',reason='daemon_restart',revision=revision+1,updated_at=? WHERE task_id IN (SELECT e.task_id FROM executions e JOIN execution_workspace_claims claim ON claim.execution_id=e.execution_id WHERE e.lifecycle_state IS NOT NULL AND claim.status IN ('held','quarantined') AND NOT EXISTS (SELECT 1 FROM execution_terminals terminal WHERE terminal.execution_id=e.execution_id))",
-    ).run(stamp);
+      "UPDATE tasks SET lifecycle_state='recovering',reason=?,revision=revision+1,updated_at=? WHERE task_id IN (SELECT e.task_id FROM executions e JOIN execution_workspace_claims claim ON claim.execution_id=e.execution_id WHERE e.lifecycle_state IS NOT NULL AND claim.status IN ('held','quarantined') AND NOT EXISTS (SELECT 1 FROM execution_terminals terminal WHERE terminal.execution_id=e.execution_id))",
+    ).run(recoveryReason, stamp);
     db.prepare(
-      "UPDATE executions SET state='recovering',lifecycle_state=CASE WHEN lifecycle_state IS NULL THEN NULL ELSE 'recovering' END,accounting_phase='stopped',accounting_phase_started_at=NULL,recovery_reason=COALESCE(recovery_reason,'daemon_restart'),recovery_started_at=COALESCE(recovery_started_at,?),revision=revision+1,updated_at=? WHERE state='prepared' AND execution_id IN (SELECT execution_id FROM execution_workspace_claims WHERE status IN ('held','quarantined'))",
-    ).run(stamp, stamp);
+      "UPDATE executions SET state='recovering',lifecycle_state=CASE WHEN lifecycle_state IS NULL THEN NULL ELSE 'recovering' END,accounting_phase='stopped',accounting_phase_started_at=NULL,recovery_reason=COALESCE(recovery_reason,?),recovery_started_at=COALESCE(recovery_started_at,?),revision=revision+1,updated_at=? WHERE state='prepared' AND execution_id IN (SELECT execution_id FROM execution_workspace_claims WHERE status IN ('held','quarantined'))",
+    ).run(recoveryReason, stamp, stamp);
     db.prepare(
       "UPDATE execution_workspace_claims SET status='quarantined',updated_at=? WHERE execution_id IN (SELECT execution_id FROM executions WHERE state='recovering')",
     ).run(stamp);
@@ -3529,11 +3555,31 @@ function waitAtTestCommitBarrier(): void {
   Atomics.notify(testCommitBarrier, 1);
   Atomics.wait(testCommitBarrier, 0, 1);
 }
+function waitAtTestDispatchCommitBarrier(): void {
+  if (Atomics.load(testDispatchCommitBarrier, 0) !== 1) return;
+  Atomics.store(testDispatchCommitBarrier, 1, 1);
+  Atomics.notify(testDispatchCommitBarrier, 1);
+  Atomics.wait(testDispatchCommitBarrier, 0, 1);
+  if (Atomics.exchange(testDispatchCommitBarrier, 2, 0) === 1) {
+    throw new Error("test dispatch commit rollback");
+  }
+}
+function acquireDispatchCommitFence(): () => void {
+  if (Atomics.compareExchange(dispatchAdmissionFence, 0, 1, 2) !== 1) {
+    throwFailure("invalid_state", "dispatch admission is closed");
+  }
+  return () => {
+    const state = Atomics.compareExchange(dispatchAdmissionFence, 0, 2, 1);
+    if (state === 3) Atomics.store(dispatchAdmissionFence, 0, 0);
+  };
+}
 function registryFencedTransaction<T>(
   expectedRevision: unknown,
   operation: () => T,
+  acquireCommitFence?: () => () => void,
 ): T {
   db.exec("BEGIN IMMEDIATE");
+  let releaseCommitFence: (() => void) | undefined;
   try {
     requireRegistryRevision(expectedRevision);
     const result = operation();
@@ -3543,6 +3589,8 @@ function registryFencedTransaction<T>(
     // this final boundary a no-op in those cases.
     maybeFail();
     waitAtTestCommitBarrier();
+    releaseCommitFence = acquireCommitFence?.();
+    if (releaseCommitFence !== undefined) waitAtTestDispatchCommitBarrier();
     acquireRegistryCommitFence();
     try {
       requireRegistryRevision(expectedRevision);
@@ -3550,8 +3598,11 @@ function registryFencedTransaction<T>(
     } finally {
       releaseRegistryCommitFence();
     }
+    releaseCommitFence?.();
+    releaseCommitFence = undefined;
     return result;
   } catch (error) {
+    releaseCommitFence?.();
     if (db.inTransaction) db.exec("ROLLBACK");
     throw error;
   }
@@ -4899,7 +4950,7 @@ parentPort?.on("message", (message: Request) => {
       requireWritableLifecycle();
       result = commitTerminal(p);
     } else if (message.command === "recoverExecutions") {
-      result = recoverExecutions();
+      result = recoverExecutions(p);
     } else if (message.command === "quarantineExecution") {
       result = quarantineExecution(p);
     } else if (message.command === "getExecution") {

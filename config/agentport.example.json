@@ -1,0 +1,17 @@
+{
+  "schemaVersion": 1,
+  "mcp": {
+    "port": 3333
+  },
+  "storage": {
+    "databasePath": "/var/lib/agentport/daemon/agentport.sqlite"
+  },
+  "launcher": {
+    "socketPath": "/run/agentport/launcher.sock",
+    "workerIngressDirectory": "/run/agentport-ingress",
+    "runtimeGroupId": 10002,
+    "ingressGroupId": 10003
+  },
+  "agents": [],
+  "principals": []
+}

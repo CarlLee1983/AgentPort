@@ -2,7 +2,10 @@ import type {
   ExecutionSupervisor,
   RuntimeIngressDescriptor,
 } from "../core/execution-supervisor.js";
-import type { ControlledRuntimeDispatchLifecycle } from "../core/agent-execution-service.js";
+import type {
+  ControlledRuntimeDispatchLifecycle,
+  RuntimeDispatchPreparation,
+} from "../core/agent-execution-service.js";
 import type { ExecutionReference } from "../core/types.js";
 import type { RuntimeWorkerIngressLifecycle } from "../runtime/worker/ingress.js";
 
@@ -18,6 +21,10 @@ export interface RuntimeIngressFactory {
   }): Promise<{ session: RuntimeIngressDescriptor; close(): Promise<void> }>;
 }
 
+export interface DispatchLifecycleFence {
+  isOpen(): boolean;
+}
+
 /** Coordinates launcher I/O while the core remains the lifecycle owner. */
 export class ControlledRuntimeDispatcher {
   constructor(
@@ -25,23 +32,41 @@ export class ControlledRuntimeDispatcher {
     private readonly launcher: DispatchAuthoritySource,
     private readonly supervisor: ExecutionSupervisor,
     private readonly ingressFactory?: RuntimeIngressFactory,
+    private readonly lifecycleFence?: DispatchLifecycleFence,
   ) {}
+
+  #dispatchIsOpen(): boolean {
+    return this.lifecycleFence?.isOpen() !== false;
+  }
 
   async dispatch(
     taskId: string,
   ): Promise<
     { kind: "started" } | { kind: "unavailable" } | { kind: "indeterminate" }
   > {
+    if (!this.#dispatchIsOpen()) return { kind: "unavailable" };
     const daemonEpoch = await this.launcher.dispatchAuthority();
-    if (daemonEpoch === undefined) return { kind: "unavailable" };
-    const preparation = await this.lifecycle.prepareForDispatch(
-      taskId,
-      daemonEpoch,
-    );
+    if (daemonEpoch === undefined || !this.#dispatchIsOpen()) {
+      return { kind: "unavailable" };
+    }
+    let preparation: RuntimeDispatchPreparation;
+    try {
+      preparation = await this.lifecycle.prepareForDispatch(
+        taskId,
+        daemonEpoch,
+      );
+    } catch (error) {
+      if (!this.#dispatchIsOpen()) return { kind: "unavailable" };
+      throw error;
+    }
     const { reference } = preparation;
     let ingress: Awaited<ReturnType<RuntimeIngressFactory["open"]>> | undefined;
     let result;
     try {
+      if (!this.#dispatchIsOpen()) {
+        await this.#stopAndQuarantine(reference);
+        return { kind: "indeterminate" };
+      }
       if (this.ingressFactory !== undefined) {
         ingress = await this.ingressFactory.open({
           taskId,
@@ -90,6 +115,11 @@ export class ControlledRuntimeDispatcher {
       // This synchronous fence and the start call share one main-thread turn;
       // an already-observed storage incident cannot cross the final start seam.
       this.lifecycle.assertDispatchStartAllowed(taskId, reference);
+      if (!this.#dispatchIsOpen()) {
+        await ingress?.close().catch(() => undefined);
+        await this.#stopAndQuarantine(reference);
+        return { kind: "indeterminate" };
+      }
       result = await this.supervisor.start(
         reference,
         ingress?.session,

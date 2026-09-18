@@ -151,6 +151,49 @@ describe("Linux Stop Evidence authority", () => {
     },
   );
 
+  it.skipIf(!PROTECTED_SOCKET_TEST)(
+    "does not write a start frame when admission closes after connect",
+    async () => {
+      const directory = await mkdtemp(join(tmpdir(), "agentport-fence-"));
+      const socketPath = join(directory, "launcher.sock");
+      let received = "";
+      const server = createServer((socket) => {
+        socket.setEncoding("utf8");
+        socket.on("data", (chunk: string) => {
+          received += chunk;
+        });
+      });
+      await new Promise<void>((resolve, reject) => {
+        server.once("error", reject);
+        server.listen(socketPath, resolve);
+      });
+      await chmod(socketPath, 0o660);
+      let checks = 0;
+      try {
+        const launcher = new LinuxLauncherClient({
+          socketPath,
+          canStart: () => {
+            checks += 1;
+            return checks < 3;
+          },
+        });
+        await expect(launcher.request("start", reference)).resolves.toEqual({
+          kind: "unavailable",
+        });
+        expect(checks).toBe(3);
+        expect(received).toBe("");
+      } finally {
+        await new Promise<void>((resolve, reject) => {
+          server.close((error) => {
+            if (error === undefined) resolve();
+            else reject(error);
+          });
+        });
+        await rm(directory, { recursive: true, force: true });
+      }
+    },
+  );
+
   it.skipIf(!PROTECTED_SOCKET_TEST).each([
     {
       name: "another generation",

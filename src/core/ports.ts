@@ -131,7 +131,9 @@ export interface DurableAdmissionStore {
     activeElapsedMs?: number;
     now?: string;
   }): Promise<StoredTerminalCommit>;
-  recoverExecutions(): Promise<StoredExecution[]>;
+  recoverExecutions(request?: {
+    reason?: "daemon_restart" | "daemon_shutdown";
+  }): Promise<StoredExecution[]>;
   quarantineExecution(request: {
     accessScopeId: string;
     allowedAgentIds: readonly string[];

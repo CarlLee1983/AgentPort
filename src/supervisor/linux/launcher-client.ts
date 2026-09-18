@@ -21,15 +21,19 @@ import {
 export interface LinuxLauncherClientOptions {
   socketPath: string;
   timeoutMilliseconds?: number;
+  /** Production daemon lifecycle fence; omitted by standalone Supervisor fixtures. */
+  canStart?: () => boolean;
 }
 
 export class LinuxLauncherClient {
   readonly #socketPath: string;
   readonly #timeoutMilliseconds: number;
+  readonly #canStart: () => boolean;
 
   constructor(options: LinuxLauncherClientOptions) {
     this.#socketPath = options.socketPath;
     this.#timeoutMilliseconds = options.timeoutMilliseconds ?? 5000;
+    this.#canStart = options.canStart ?? (() => true);
   }
 
   async request(
@@ -69,7 +73,15 @@ export class LinuxLauncherClient {
           policy?: RuntimeExecutionPolicy;
         },
   ): Promise<LinuxLauncherResult> {
+    if (requestWithoutId.action === "start" && !this.#canStart()) {
+      return { kind: "unavailable" };
+    }
     if (!(await this.#isProtectedSocket())) return { kind: "unavailable" };
+    // The last asynchronous check above can overlap SIGTERM. Recheck in the
+    // same main-thread turn that creates the launcher connection.
+    if (requestWithoutId.action === "start" && !this.#canStart()) {
+      return { kind: "unavailable" };
+    }
     const requestId = randomUUID();
     const request: LinuxLauncherRequest = {
       requestId,
@@ -94,6 +106,10 @@ export class LinuxLauncherClient {
 
       socket.setEncoding("utf8");
       socket.once("connect", () => {
+        if (request.action === "start" && !this.#canStart()) {
+          finish({ kind: "unavailable" });
+          return;
+        }
         socket.write(encodeLauncherFrame(request));
       });
       socket.on("data", (chunk: string) => {
