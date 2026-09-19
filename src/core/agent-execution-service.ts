@@ -83,6 +83,12 @@ export interface StopEvidenceVerifier {
   verify(value: unknown): TerminalStopEvidence | undefined;
 }
 
+export interface DaemonShutdownResult {
+  activeExecutions: number;
+  stopConfirmed: number;
+  stopUnknown: number;
+}
+
 export interface PlatformNeutralPreparationFixture {
   service: DurableAgentExecutionService;
   prepareExecution: (
@@ -293,46 +299,14 @@ export class DurableAgentExecutionService implements AgentExecutionService {
         reason: "daemon_restart",
         eventType: "daemon_restart_paused",
       });
-      const recovering = await this.store.recoverExecutions();
+      const recovering = await this.store.recoverExecutions({
+        reason: "daemon_restart",
+      });
       if (recoverySupervisor === undefined) return;
-      const reconciled = await Promise.all(
-        recovering.map(async (execution) => {
-          const reference: ExecutionReference = {
-            executionId: execution.executionId,
-            generation: execution.generation,
-            daemonEpoch: execution.daemonEpoch,
-            launchProfileId: execution.launchProfileId,
-            workspaceIdentity: execution.workspaceId,
-          };
-          this.#storageIncidentSafety?.track(execution.taskId, reference);
-          try {
-            const reconciliation =
-              await recoverySupervisor.reconcile(reference);
-            let stoppedEvidence =
-              reconciliation.kind === "stopped"
-                ? reconciliation.evidence
-                : undefined;
-            if (reconciliation.kind === "running") {
-              const stopped = await recoverySupervisor.revokeAndStop(reference);
-              if (stopped.kind === "stopped") {
-                stoppedEvidence = stopped.evidence;
-              }
-            }
-            const verified =
-              this.#stopEvidenceVerifier?.verify(stoppedEvidence);
-            if (verified !== undefined) {
-              await this.store.confirmRecoveryStopped({
-                evidence: verified,
-                now: this.#now().toISOString(),
-              });
-              return true;
-            }
-            return false;
-          } catch {
-            // Unknown external state stays durably recovering and quarantined.
-            return false;
-          }
-        }),
+      const reconciled = await this.#reconcileForRecovery(
+        recovering,
+        recoverySupervisor,
+        false,
       );
       if (
         this.#storageIncidentSafety !== undefined &&
@@ -348,6 +322,89 @@ export class DurableAgentExecutionService implements AgentExecutionService {
       if (error instanceof ApplicationError) throw error;
       throw storageError(error);
     }
+  }
+
+  /**
+   * Administrative daemon shutdown is recovery, not Caller cancellation. It
+   * pauses queued work and quarantines active claims before asking the trusted
+   * Supervisor to seal each generation. Even confirmed stop remains recovery
+   * evidence until the existing acknowledgement contract concludes it.
+   */
+  async prepareForDaemonShutdown(
+    recoverySupervisor: ExecutionRecoveryPort,
+  ): Promise<DaemonShutdownResult> {
+    try {
+      await this.store.transitionTasks({
+        fromState: "queued",
+        toState: "paused",
+        reason: "daemon_restart",
+        eventType: "daemon_restart_paused",
+      });
+      const recovering = await this.store.recoverExecutions({
+        reason: "daemon_shutdown",
+      });
+      const reconciled = await this.#reconcileForRecovery(
+        recovering,
+        recoverySupervisor,
+        true,
+      );
+      const stopConfirmed = reconciled.filter(Boolean).length;
+      return {
+        activeExecutions: recovering.length,
+        stopConfirmed,
+        stopUnknown: recovering.length - stopConfirmed,
+      };
+    } catch (error) {
+      if (error instanceof ApplicationError) throw error;
+      throw storageError(error);
+    }
+  }
+
+  async #reconcileForRecovery(
+    recovering: readonly StoredExecution[],
+    recoverySupervisor: ExecutionRecoveryPort,
+    stopUnlessAlreadyStopped: boolean,
+  ): Promise<boolean[]> {
+    return Promise.all(
+      recovering.map(async (execution) => {
+        const reference: ExecutionReference = {
+          executionId: execution.executionId,
+          generation: execution.generation,
+          daemonEpoch: execution.daemonEpoch,
+          launchProfileId: execution.launchProfileId,
+          workspaceIdentity: execution.workspaceId,
+        };
+        this.#storageIncidentSafety?.track(execution.taskId, reference);
+        try {
+          const reconciliation = await recoverySupervisor.reconcile(reference);
+          let stoppedEvidence =
+            reconciliation.kind === "stopped"
+              ? reconciliation.evidence
+              : undefined;
+          if (
+            reconciliation.kind === "running" ||
+            (stopUnlessAlreadyStopped && reconciliation.kind !== "stopped")
+          ) {
+            const stopped = await recoverySupervisor.revokeAndStop(reference);
+            if (stopped.kind === "stopped") {
+              stoppedEvidence = stopped.evidence;
+            }
+          }
+          const verified = this.#stopEvidenceVerifier?.verify(stoppedEvidence);
+          if (verified !== undefined) {
+            await this.store.confirmRecoveryStopped({
+              evidence: verified,
+              now: this.#now().toISOString(),
+            });
+            return true;
+          }
+          return false;
+        } catch {
+          // Unknown external state stays durably recovering and quarantined.
+          return false;
+        }
+      }),
+    );
   }
 
   async prepareForDispatch(

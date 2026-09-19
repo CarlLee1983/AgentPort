@@ -1,6 +1,11 @@
+import { createHash } from "node:crypto";
 import { realpath, stat } from "node:fs/promises";
 import { isAbsolute, relative, resolve } from "node:path";
 
+import {
+  hashCallerToken,
+  isCallerTokenHash,
+} from "../security/caller-token.js";
 import {
   MAX_AGENT_DESCRIPTION_BYTES,
   MAX_IDENTIFIER_CHARACTERS,
@@ -8,6 +13,7 @@ import {
   type AgentPolicy,
   type WorkspaceIdentity,
 } from "../core/types.js";
+import { resolveApprovedWorkspace } from "../security/workspace.js";
 
 export type { AgentPolicy, WorkspaceIdentity } from "../core/types.js";
 
@@ -29,8 +35,19 @@ export interface PrincipalConfiguration {
   allowedAgentIds: readonly string[];
 }
 
+export interface CallerCredentialConfiguration {
+  callerId: string;
+  principalId: string;
+  tokenHash: string;
+  active: boolean;
+}
+
 export interface RegistryConfiguration {
+  /** Legacy fixture-only clear-token map; production config accepts hashes only. */
   credentials: Readonly<Record<string, string>>;
+  registryRevision?: number;
+  workspaceRoot?: string;
+  callers?: readonly CallerCredentialConfiguration[];
   principals: readonly PrincipalConfiguration[];
   agents: readonly AgentConfiguration[];
 }
@@ -55,11 +72,16 @@ export interface PrincipalAuthorization {
 }
 
 export interface RegistryRevisionFence {
-  installRegistryRevision(revision: number): Promise<void>;
+  installRegistryRevision(
+    revision: number,
+    persist?: boolean,
+    fingerprint?: string,
+  ): Promise<void>;
 }
 
 interface RegistrySnapshot {
   credentials: ReadonlyMap<string, string>;
+  callers: ReadonlyMap<string, CallerCredentialConfiguration>;
   principals: ReadonlyMap<string, PrincipalConfiguration>;
   agents: ReadonlyMap<string, ResolvedAgentBinding>;
 }
@@ -82,6 +104,7 @@ function isPositiveSafeInteger(value: number): boolean {
 
 async function resolveAgent(
   configuration: AgentConfiguration,
+  workspaceRoot?: string,
 ): Promise<ResolvedAgentBinding> {
   if (
     configuration.agentId.length === 0 ||
@@ -106,7 +129,15 @@ async function resolveAgent(
       "Configured Agent description is outside the supported bounds",
     );
   }
-  const canonicalPath = await realpath(resolve(configuration.workspacePath));
+  const canonicalPath =
+    workspaceRoot === undefined
+      ? await realpath(resolve(configuration.workspacePath))
+      : (
+          await resolveApprovedWorkspace(
+            workspaceRoot,
+            configuration.workspacePath,
+          )
+        ).canonicalPath;
   const workspaceStat = await stat(canonicalPath);
   if (!workspaceStat.isDirectory()) {
     throw new Error(
@@ -149,7 +180,10 @@ async function buildSnapshot(
     if (agents.has(agentConfiguration.agentId)) {
       throw new Error(`Duplicate Agent ID: ${agentConfiguration.agentId}`);
     }
-    const resolvedAgent = await resolveAgent(agentConfiguration);
+    const resolvedAgent = await resolveAgent(
+      agentConfiguration,
+      configuration.workspaceRoot,
+    );
     for (const existing of agents.values()) {
       if (
         existing.workspace.filesystemIdentity ===
@@ -198,6 +232,32 @@ async function buildSnapshot(
   }
 
   const credentials = new Map<string, string>();
+  const callers = new Map<string, CallerCredentialConfiguration>();
+  for (const caller of configuration.callers ?? []) {
+    if (
+      caller.callerId.length === 0 ||
+      caller.callerId.length > MAX_IDENTIFIER_CHARACTERS ||
+      !/^[A-Za-z0-9][A-Za-z0-9._:-]*$/u.test(caller.callerId) ||
+      !isCallerTokenHash(caller.tokenHash) ||
+      callers.has(caller.callerId) ||
+      !principals.has(caller.principalId)
+    ) {
+      throw new Error("Invalid Caller credential configuration");
+    }
+    const stored = {
+      callerId: caller.callerId,
+      principalId: caller.principalId,
+      tokenHash: caller.tokenHash,
+      active: caller.active,
+    };
+    callers.set(caller.callerId, stored);
+    if (caller.active) {
+      if (credentials.has(caller.tokenHash)) {
+        throw new Error("Duplicate Caller credential hash");
+      }
+      credentials.set(caller.tokenHash, caller.principalId);
+    }
+  }
   for (const [token, principalId] of Object.entries(
     configuration.credentials,
   )) {
@@ -210,46 +270,99 @@ async function buildSnapshot(
     credentials.set(token, principalId);
   }
 
-  return { agents, credentials, principals };
+  return { agents, credentials, callers, principals };
+}
+
+function configurationFingerprint(
+  configuration: RegistryConfiguration,
+): string {
+  const canonical = JSON.stringify({
+    callers: configuration.callers ?? [],
+    principals: configuration.principals,
+    agents: configuration.agents,
+    workspaceRoot: configuration.workspaceRoot,
+  });
+  return `sha256:v1:${createHash("sha256").update(canonical, "utf8").digest("hex")}`;
+}
+
+function initialRegistryRevision(configuration: RegistryConfiguration): number {
+  const revision = configuration.registryRevision ?? 1;
+  if (
+    !Number.isSafeInteger(revision) ||
+    revision < 1 ||
+    revision > 2_147_483_647
+  ) {
+    throw new Error("Registry revision is outside the supported bounds");
+  }
+  return revision;
 }
 
 export class AgentRegistry {
   readonly #revisionFence: RegistryRevisionFence;
   #revision = 1;
+  #configurationFingerprint: string;
   #mutationFenceAvailable = true;
   #replacementTail: Promise<void> = Promise.resolve();
 
   private constructor(
     private snapshot: RegistrySnapshot,
     revisionFence: RegistryRevisionFence,
+    revision: number,
+    configurationFingerprint: string,
   ) {
     this.#revisionFence = revisionFence;
+    this.#revision = revision;
+    this.#configurationFingerprint = configurationFingerprint;
   }
 
   static async create(
     configuration: RegistryConfiguration,
     revisionFence: RegistryRevisionFence,
   ): Promise<AgentRegistry> {
+    const revision = initialRegistryRevision(configuration);
     const registry = new AgentRegistry(
       await buildSnapshot(configuration),
       revisionFence,
+      revision,
+      configurationFingerprint(configuration),
     );
-    await revisionFence.installRegistryRevision(registry.#revision);
+    await revisionFence.installRegistryRevision(
+      registry.#revision,
+      configuration.registryRevision !== undefined,
+      registry.#configurationFingerprint,
+    );
     return registry;
   }
 
   async replace(configuration: RegistryConfiguration): Promise<void> {
     const replacement = this.#replacementTail.then(async () => {
+      const configuredRevision = configuration.registryRevision;
+      const nextRevision =
+        configuredRevision === undefined
+          ? this.#revision + 1
+          : initialRegistryRevision(configuration);
+      const fingerprint = configurationFingerprint(configuration);
       const next = await buildSnapshot(configuration);
-      const nextRevision = this.#revision + 1;
+      if (nextRevision === this.#revision) {
+        if (fingerprint === this.#configurationFingerprint) return;
+        throw new Error("Registry revision is stale");
+      }
+      if (nextRevision < this.#revision) {
+        throw new Error("Registry revision is stale");
+      }
       try {
-        await this.#revisionFence.installRegistryRevision(nextRevision);
+        await this.#revisionFence.installRegistryRevision(
+          nextRevision,
+          configuredRevision !== undefined,
+          fingerprint,
+        );
       } catch (error) {
         this.#mutationFenceAvailable = false;
         throw error;
       }
       this.snapshot = next;
       this.#revision = nextRevision;
+      this.#configurationFingerprint = fingerprint;
       this.#mutationFenceAvailable = true;
     });
     this.#replacementTail = replacement.catch(() => undefined);
@@ -261,7 +374,25 @@ export class AgentRegistry {
   }
 
   authenticate(token: string): string | undefined {
-    return this.snapshot.credentials.get(token);
+    return (
+      this.snapshot.credentials.get(hashCallerToken(token)) ??
+      // Clear tokens remain supported only by in-memory test compositions;
+      // production configuration parsing rejects them.
+      this.snapshot.credentials.get(token)
+    );
+  }
+
+  hasActiveCallerCredentials(): boolean {
+    if ([...this.snapshot.callers.values()].some((caller) => caller.active)) {
+      return true;
+    }
+    return [...this.snapshot.credentials.keys()].some(isCallerTokenHash);
+  }
+
+  listCallers(): CallerCredentialConfiguration[] {
+    return [...this.snapshot.callers.values()]
+      .map((caller) => ({ ...caller }))
+      .sort((left, right) => compareIdentifier(left.callerId, right.callerId));
   }
 
   authorize(principalId: string): PrincipalAuthorization | undefined {

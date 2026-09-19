@@ -19,6 +19,16 @@ import {
 } from "./protocol.js";
 
 export const LOOPBACK_MAX_REQUEST_BODY_BYTES = 128 * 1024;
+export const LOOPBACK_LISTENER_BIND_FAILED = "loopback_listener_bind_failed";
+
+export class LoopbackListenerBindError extends Error {
+  readonly code = LOOPBACK_LISTENER_BIND_FAILED;
+
+  constructor() {
+    super(LOOPBACK_LISTENER_BIND_FAILED);
+    this.name = "LoopbackListenerBindError";
+  }
+}
 
 interface AuthenticatedRequest extends IncomingMessage {
   auth?: AuthInfo;
@@ -30,8 +40,16 @@ function isRecord(value: unknown): value is Record<string, unknown> {
 
 export interface LoopbackDurableAdmissionServer {
   url: URL;
+  readonly accepting: boolean;
+  readonly activeRequestCount: number;
   flushAudit(): Promise<void>;
+  /** Synchronously closes the listener and rejects later request admission. */
+  stopAccepting(): void;
+  /** Waits only for requests already admitted to finish their HTTP response. */
+  drainRequests(): Promise<void>;
   close(): Promise<void>;
+  /** Deadline fallback; destroys only connections owned by this listener. */
+  forceClose(): void;
 }
 
 type ProductAuditRecorder = Pick<
@@ -190,6 +208,20 @@ function rejectBadRequest(
   );
 }
 
+function rejectAdmissionUnavailable(
+  response: import("node:http").ServerResponse,
+): void {
+  rejectBadRequest(response, -32_003, "Admission unavailable", 503);
+}
+
+function admissionIsOpen(canAcceptRequest?: () => boolean): boolean {
+  try {
+    return canAcceptRequest?.() !== false;
+  } catch {
+    return false;
+  }
+}
+
 function rejectUnknownTool(
   response: import("node:http").ServerResponse,
   id: unknown,
@@ -255,7 +287,19 @@ export async function startLoopbackDurableAdmissionServer(options: {
   registry: AgentRegistry;
   handler: McpHttpHandler;
   auditRecorder: ProductAuditRecorder;
+  /** Omit for the existing ephemeral-port test fixture behavior. */
+  port?: number;
+  /** Lifecycle-owned admission fence for otherwise valid MCP requests. */
+  canAcceptRequest?: () => boolean;
 }): Promise<LoopbackDurableAdmissionServer> {
+  if (
+    options.port !== undefined &&
+    (!Number.isInteger(options.port) ||
+      options.port <= 0 ||
+      options.port > 65_535)
+  ) {
+    throw new LoopbackListenerBindError();
+  }
   const enqueueAudit = (record: SanitizedAuditRecord): void => {
     void options.auditRecorder.recordAudit(record).catch(() => undefined);
   };
@@ -297,6 +341,26 @@ export async function startLoopbackDurableAdmissionServer(options: {
   const serveMcp = toNodeHandler(auditedHandler);
   const validateHost = localhostHostValidation();
   const validateOrigin = localhostOriginValidation();
+  let accepting = true;
+  let activeRequestCount = 0;
+  let listenerDrain: Promise<void> | undefined;
+  let resolveRequestDrain: (() => void) | undefined;
+  let requestDrain = Promise.resolve();
+  const beginRequest = (): void => {
+    if (activeRequestCount === 0) {
+      requestDrain = new Promise<void>((resolve) => {
+        resolveRequestDrain = resolve;
+      });
+    }
+    activeRequestCount += 1;
+  };
+  const endRequest = (): void => {
+    activeRequestCount -= 1;
+    if (activeRequestCount === 0) {
+      resolveRequestDrain?.();
+      resolveRequestDrain = undefined;
+    }
+  };
   const httpServer = createServer((request, response) => {
     if (request.url !== "/mcp") {
       response.writeHead(404).end();
@@ -317,6 +381,16 @@ export async function startLoopbackDurableAdmissionServer(options: {
         }),
       );
       rejectUnauthorized(response);
+      return;
+    }
+    if (!accepting || !admissionIsOpen(options.canAcceptRequest)) {
+      enqueueAudit(
+        auditRequest(undefined, authInfo.clientId, "admission_unavailable", {
+          method: request.headers["mcp-method"] ?? request.method,
+          protocolVersion: request.headers["mcp-protocol-version"],
+        }),
+      );
+      rejectAdmissionUnavailable(response);
       return;
     }
     const declaredMethod = request.headers["mcp-method"];
@@ -347,6 +421,13 @@ export async function startLoopbackDurableAdmissionServer(options: {
       response.writeHead(400).end();
       return;
     }
+    beginRequest();
+    let requestEnded = false;
+    const endTrackedRequest = (): void => {
+      if (requestEnded) return;
+      requestEnded = true;
+      endRequest();
+    };
     void (async () => {
       let parsedBody: unknown;
       if (request.method === "POST") {
@@ -484,28 +565,67 @@ export async function startLoopbackDurableAdmissionServer(options: {
           response.destroy();
         }
       }
-    })();
+    })()
+      .catch(() => {
+        if (!response.headersSent) {
+          rejectBadRequest(response, -32_603, "Internal protocol error", 500);
+        } else {
+          response.destroy();
+        }
+      })
+      .finally(endTrackedRequest);
   });
 
-  await new Promise<void>((resolve, reject) => {
-    httpServer.once("error", reject);
-    httpServer.listen(0, "127.0.0.1", resolve);
-  });
+  try {
+    await new Promise<void>((resolve, reject) => {
+      httpServer.once("error", reject);
+      httpServer.listen(options.port ?? 0, "127.0.0.1", resolve);
+    });
+  } catch {
+    httpServer.close();
+    throw new LoopbackListenerBindError();
+  }
   const address = httpServer.address();
   if (address === null || typeof address === "string") {
     throw new Error("Loopback MCP server did not expose a TCP address");
   }
   return {
     url: new URL(`http://127.0.0.1:${String(address.port)}/mcp`),
+    get accepting(): boolean {
+      return accepting;
+    },
+    get activeRequestCount(): number {
+      return activeRequestCount;
+    },
     flushAudit,
-    close: async () => {
-      await new Promise<void>((resolve, reject) => {
+    stopAccepting: () => {
+      if (!accepting) return;
+      accepting = false;
+      listenerDrain = new Promise<void>((resolve, reject) => {
         httpServer.close((error) => {
           if (error === undefined) resolve();
           else reject(error);
         });
       });
+    },
+    drainRequests: async () => requestDrain,
+    close: async () => {
+      if (accepting) {
+        accepting = false;
+        listenerDrain = new Promise<void>((resolve, reject) => {
+          httpServer.close((error) => {
+            if (error === undefined) resolve();
+            else reject(error);
+          });
+        });
+      }
+      await Promise.all([listenerDrain, requestDrain]);
       await flushAudit();
+    },
+    forceClose: () => {
+      accepting = false;
+      httpServer.closeAllConnections();
+      httpServer.close();
     },
   };
 }

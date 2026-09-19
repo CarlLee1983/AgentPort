@@ -1,5 +1,13 @@
 import { execFile } from "node:child_process";
-import { chmod, chown, mkdir, mkdtemp, rm, unlink } from "node:fs/promises";
+import {
+  chmod,
+  chown,
+  lstat,
+  mkdir,
+  mkdtemp,
+  rm,
+  unlink,
+} from "node:fs/promises";
 import { join } from "node:path";
 import { promisify } from "node:util";
 
@@ -45,6 +53,9 @@ describe.skipIf(!LINUX_G1_ENABLED)("non-root composition recovery", () => {
       databasePath: join(databaseDirectory, "agentport.sqlite"),
       workspacePath: requiredEnvironment("AGENTPORT_G1_WORKSPACE_PATH"),
       socketPath: requiredEnvironment("AGENTPORT_G1_LAUNCHER_SOCKET"),
+      socketGroupId: (
+        await lstat(requiredEnvironment("AGENTPORT_G1_LAUNCHER_SOCKET"))
+      ).gid,
       ingressDirectory: requiredEnvironment("AGENTPORT_G1_INGRESS_DIRECTORY"),
       runtimeGroupId: Number(requiredEnvironment("AGENTPORT_G1_RUNTIME_GID")),
       ingressGroupId: Number(requiredEnvironment("AGENTPORT_G1_INGRESS_GID")),

@@ -10,6 +10,7 @@ interface Request {
   databasePath: string;
   workspacePath: string;
   socketPath: string;
+  socketGroupId: number;
   ingressDirectory: string;
   runtimeGroupId: number;
   ingressGroupId: number;
@@ -67,6 +68,7 @@ function configuration(request: Request) {
     launcher: {
       socketPath: request.socketPath,
       workerIngressDirectory: request.ingressDirectory,
+      socketGroupId: request.socketGroupId,
       runtimeGroupId: request.runtimeGroupId,
       ingressGroupId: request.ingressGroupId,
     },

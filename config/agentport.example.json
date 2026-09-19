@@ -1,0 +1,22 @@
+{
+  "schemaVersion": 1,
+  "registryRevision": 1,
+  "workspaceRoot": "/var/agentport/workspaces",
+  "mcp": {
+    "port": 3333
+  },
+  "storage": {
+    "databasePath": "/var/lib/agentport/daemon/agentport.sqlite"
+  },
+  "launcher": {
+    "socketPath": "/run/agentport/launcher.sock",
+    "workerIngressDirectory": "/run/agentport-ingress",
+    "socketGroupId": 10001,
+    "runtimeGroupId": 10002,
+    "ingressGroupId": 10003
+  },
+  "adminSocket": { "groupId": 10004 },
+  "agents": [],
+  "principals": [],
+  "callers": []
+}

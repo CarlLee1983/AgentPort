@@ -5,6 +5,7 @@ import { isAbsolute, join, normalize } from "node:path";
 import type { McpHttpHandler } from "@modelcontextprotocol/server";
 
 import {
+  type DaemonShutdownResult,
   DurableAgentExecutionService,
   type StopEvidenceVerifier,
 } from "../core/agent-execution-service.js";
@@ -29,14 +30,18 @@ import {
 import { AgentRegistry, type RegistryConfiguration } from "./registry.js";
 import { StorageIncidentCoordinator } from "./storage-incident-coordinator.js";
 import { verifyBeforeEachIngressOpen } from "./verified-ingress-factory.js";
+import type { DeploymentReadinessObservation } from "../daemon/deployment-readiness.js";
 
 export interface ControlledRuntimeAdmissionConfiguration {
   registry: RegistryConfiguration;
   cursorSecret: string;
   storage: DurableAdmissionStoreOptions;
+  /** Production keeps this closed until a verified Runtime readiness contract exists. */
+  canAdmitTasks?: () => boolean;
   launcher: {
     socketPath: string;
     workerIngressDirectory: string;
+    socketGroupId: number;
     runtimeGroupId: number;
     ingressGroupId: number;
   };
@@ -46,9 +51,25 @@ export interface ControlledRuntimeAdmissionComposition {
   registry: AgentRegistry;
   service: AgentExecutionService;
   mcpHandler: McpHttpHandler;
+  auditRecorder: Pick<
+    SqliteDurableAdmissionStore,
+    "flushAudit" | "recordAudit"
+  >;
   /** Internal scheduler seam; no MCP caller can select a Reference or profile. */
   dispatch(taskId: string): ReturnType<ControlledRuntimeDispatcher["dispatch"]>;
+  /** Replaces only the validated Agent/Principal/Caller registry revision. */
+  reloadRegistry?(configuration: RegistryConfiguration): Promise<void>;
+  /** Must complete before admission or dispatch is opened. */
+  initializeAfterRestart(): Promise<void>;
+  /** Synchronous lifecycle fence: later dispatch attempts cannot claim or launch. */
+  beginShutdown(): void;
+  /** Administrative stop keeps active work in recovery until explicit acknowledgement. */
+  prepareForDaemonShutdown(): Promise<DaemonShutdownResult>;
   close(): Promise<void>;
+  /** Deadline fallback; terminates only resources owned by this daemon process. */
+  forceClose(): Promise<void>;
+  /** Read-only host prerequisites; the daemon lifecycle supplies service state. */
+  observeDeploymentReadiness(): Promise<DeploymentReadinessObservation>;
 }
 
 function linuxStopEvidenceVerifier(): StopEvidenceVerifier {
@@ -113,15 +134,31 @@ async function verifyIngressDirectory(
 async function verifyDistinctGroups(
   launcher: ControlledRuntimeAdmissionConfiguration["launcher"],
 ): Promise<void> {
-  const socketGroupId = (await lstat(launcher.socketPath)).gid;
-  if (
-    launcher.ingressGroupId === socketGroupId ||
-    launcher.runtimeGroupId === socketGroupId
-  ) {
+  const socket = await lstat(launcher.socketPath);
+  if (!hasProtectedLauncherSocketMetadata(socket, launcher)) {
     throw new Error(
       "Controlled Runtime composition requires distinct ingress, socket and Runtime groups",
     );
   }
+}
+
+/** Pure metadata fence used before startup and every readiness observation. */
+export function hasProtectedLauncherSocketMetadata(
+  socket: Pick<
+    Awaited<ReturnType<typeof lstat>>,
+    "isSocket" | "uid" | "gid" | "mode"
+  >,
+  launcher: ControlledRuntimeAdmissionConfiguration["launcher"],
+): boolean {
+  const socketGroupId = socket.gid;
+  return (
+    socket.isSocket() &&
+    socket.uid === 0 &&
+    (Number(socket.mode) & 0o777) === 0o660 &&
+    socketGroupId === launcher.socketGroupId &&
+    launcher.ingressGroupId !== socketGroupId &&
+    launcher.runtimeGroupId !== socketGroupId
+  );
 }
 
 /**
@@ -147,14 +184,19 @@ async function requireRestrictiveUmask(): Promise<void> {
  * Explicit S3-B composition.  The S3-A composition intentionally remains in
  * create-durable-admission.ts and has no runtime imports or process control.
  */
-export async function createControlledRuntimeAdmission(
+export async function prepareControlledRuntimeAdmission(
   configuration: ControlledRuntimeAdmissionConfiguration,
 ): Promise<ControlledRuntimeAdmissionComposition> {
   requireNonRootLinux();
   const { launcher: launcherConfiguration } = configuration;
   if (
     !validGroupId(launcherConfiguration.ingressGroupId) ||
+    !validGroupId(launcherConfiguration.socketGroupId) ||
     !validGroupId(launcherConfiguration.runtimeGroupId) ||
+    launcherConfiguration.socketGroupId ===
+      launcherConfiguration.ingressGroupId ||
+    launcherConfiguration.socketGroupId ===
+      launcherConfiguration.runtimeGroupId ||
     launcherConfiguration.ingressGroupId ===
       launcherConfiguration.runtimeGroupId
   ) {
@@ -174,8 +216,10 @@ export async function createControlledRuntimeAdmission(
   );
   await verifyDistinctGroups(launcherConfiguration);
   await requireRestrictiveUmask();
+  let dispatchOpen = false;
   const launcher = new LinuxLauncherClient({
     socketPath: configuration.launcher.socketPath,
+    canStart: () => dispatchOpen,
   });
   const supervisor = new LinuxExecutionSupervisor(launcher);
   const storageIncidents = new StorageIncidentCoordinator(
@@ -186,6 +230,7 @@ export async function createControlledRuntimeAdmission(
     configuration.storage,
     storageIncidents,
   );
+  store.closeDispatchAdmission();
   try {
     const registry = await AgentRegistry.create(configuration.registry, store);
     const service = new DurableAgentExecutionService(registry, store, {
@@ -226,24 +271,172 @@ export async function createControlledRuntimeAdmission(
       launcher,
       supervisor,
       ingressFactory,
+      { isOpen: () => dispatchOpen },
     );
-    await service.initializeAfterRestart(supervisor);
-    const mcpHandler = createDurableAdmissionMcpHandler(service);
+    const activeDispatches = new Set<
+      ReturnType<ControlledRuntimeDispatcher["dispatch"]>
+    >();
+    const pendingDispatches = new Map<
+      string,
+      ReturnType<ControlledRuntimeDispatcher["dispatch"]>
+    >();
+    let registryConfiguration = configuration.registry;
+    const canAdmitTasks = (): boolean => {
+      try {
+        return configuration.canAdmitTasks?.() !== false;
+      } catch {
+        return false;
+      }
+    };
+    const dispatchTask = (
+      taskId: string,
+    ): ReturnType<ControlledRuntimeDispatcher["dispatch"]> => {
+      const existing = pendingDispatches.get(taskId);
+      if (existing !== undefined) return existing;
+      if (!dispatchOpen || !canAdmitTasks()) {
+        return Promise.resolve({ kind: "unavailable" });
+      }
+      const pending = dispatcher.dispatch(taskId);
+      pendingDispatches.set(taskId, pending);
+      activeDispatches.add(pending);
+      void pending.then(
+        () => {
+          pendingDispatches.delete(taskId);
+          activeDispatches.delete(pending);
+        },
+        () => {
+          pendingDispatches.delete(taskId);
+          activeDispatches.delete(pending);
+        },
+      );
+      return pending;
+    };
+    const mcpHandler = createDurableAdmissionMcpHandler(service, {
+      dispatch: dispatchTask,
+      canSubmitTask: canAdmitTasks,
+      canDispatchTask: canAdmitTasks,
+    });
+    let initialized = false;
+    let shutdownRequested = false;
+    let recovery: DeploymentReadinessObservation["recovery"] = "unknown";
+    let initializePromise: Promise<void> | undefined;
+    let shutdownPromise: Promise<DaemonShutdownResult> | undefined;
+    let closePromise: Promise<void> | undefined;
     return {
       registry,
       service,
       mcpHandler,
-      dispatch: (taskId) => dispatcher.dispatch(taskId),
-      close: async () => {
-        try {
-          await mcpHandler.close();
-        } finally {
-          await store.close();
+      auditRecorder: store,
+      dispatch: (taskId) => {
+        return dispatchTask(taskId);
+      },
+      reloadRegistry: async (nextConfiguration) => {
+        if (shutdownRequested || closePromise !== undefined) {
+          throw new Error("daemon registry reload is unavailable");
         }
+        await registry.replace(nextConfiguration);
+        registryConfiguration = nextConfiguration;
+      },
+      initializeAfterRestart: () => {
+        initializePromise ??= (async () => {
+          await service.initializeAfterRestart(supervisor);
+          initialized = true;
+          recovery = storageIncidents.isLatched() ? "blocked" : "clear";
+          if (!shutdownRequested && closePromise === undefined) {
+            store.openDispatchAdmission();
+            dispatchOpen = true;
+          }
+        })();
+        return initializePromise;
+      },
+      beginShutdown: () => {
+        shutdownRequested = true;
+        dispatchOpen = false;
+        store.closeDispatchAdmission();
+      },
+      prepareForDaemonShutdown: () => {
+        shutdownRequested = true;
+        dispatchOpen = false;
+        store.closeDispatchAdmission();
+        shutdownPromise ??= (async () => {
+          await Promise.allSettled(activeDispatches);
+          if (!initialized) {
+            return {
+              activeExecutions: 0,
+              stopConfirmed: 0,
+              stopUnknown: 0,
+            };
+          }
+          return service.prepareForDaemonShutdown(supervisor);
+        })();
+        return shutdownPromise;
+      },
+      close: () => {
+        shutdownRequested = true;
+        dispatchOpen = false;
+        store.closeDispatchAdmission();
+        closePromise ??= (async () => {
+          await Promise.allSettled(activeDispatches);
+          try {
+            await mcpHandler.close();
+          } finally {
+            await store.close();
+          }
+        })();
+        return closePromise;
+      },
+      forceClose: async () => {
+        shutdownRequested = true;
+        dispatchOpen = false;
+        store.closeDispatchAdmission();
+        void mcpHandler.close().catch(() => undefined);
+        await store.forceClose();
+      },
+      observeDeploymentReadiness: async () => {
+        let topology: "valid" | "invalid" = "valid";
+        try {
+          await verifyIngressDirectory(
+            ingressDirectory,
+            launcherConfiguration.ingressGroupId,
+          );
+          await verifyDistinctGroups(launcherConfiguration);
+        } catch {
+          topology = "invalid";
+        }
+        return {
+          observedAt: new Date().toISOString(),
+          observation: "current",
+          capabilities: {
+            service: "unavailable",
+            agents:
+              registryConfiguration.agents.length === 0 ? "none" : "configured",
+            launcher: topology === "valid" ? "ready" : "unavailable",
+            runtime: "unverified",
+            callerProvisioning: registry.hasActiveCallerCredentials()
+              ? "present"
+              : "absent",
+            protectedTopology: topology,
+          },
+          recovery,
+          storage: storageIncidents.isLatched() ? "incident" : "healthy",
+        };
       },
     };
   } catch (error) {
     await store.close();
+    throw error;
+  }
+}
+
+export async function createControlledRuntimeAdmission(
+  configuration: ControlledRuntimeAdmissionConfiguration,
+): Promise<ControlledRuntimeAdmissionComposition> {
+  const composition = await prepareControlledRuntimeAdmission(configuration);
+  try {
+    await composition.initializeAfterRestart();
+    return composition;
+  } catch (error) {
+    await composition.close().catch(() => undefined);
     throw error;
   }
 }

@@ -1,0 +1,34 @@
+[Unit]
+Description=AgentPort control daemon
+Requires=agentport-launcher.service
+After=local-fs.target network.target agentport-launcher.service
+
+[Service]
+Type=simple
+User=agentport-daemon
+Group=agentport-daemon
+# These are the AP-021 groups required to connect to the launcher, create
+# ingress sockets, and hand each socket to the Runtime group. Do not add
+# administrators, Callers, or unrelated service accounts to these groups.
+SupplementaryGroups=agentport-launcher agentport-ingress agentport-runtime agentport-admin
+WorkingDirectory=/opt/agentport/current
+ExecStart=/usr/bin/node /opt/agentport/current/dist/src/daemon/main.js --config /etc/agentport/agentport.json
+ExecReload=/bin/kill -HUP $MAINPID
+LoadCredential=cursorSecret:/etc/agentport/credentials/cursorSecret
+LoadCredential=continuationEncryptionKey:/etc/agentport/credentials/continuationEncryptionKey
+Restart=on-failure
+RestartSec=1s
+UMask=0077
+TimeoutStopSec=30s
+NoNewPrivileges=yes
+PrivateDevices=yes
+PrivateTmp=yes
+ProtectHome=yes
+ProtectSystem=strict
+ReadWritePaths=/var/lib/agentport/daemon /run/agentport /run/agentport-ingress
+RestrictAddressFamilies=AF_UNIX AF_INET
+RestrictNamespaces=yes
+LockPersonality=yes
+
+[Install]
+WantedBy=multi-user.target

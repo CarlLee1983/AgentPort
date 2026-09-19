@@ -4,6 +4,8 @@ import { join } from "node:path";
 import { describe, expect, it } from "vitest";
 
 import { createDurableAdmissionFixture } from "../fixtures/durable-admission.js";
+import { AgentRegistry } from "../../src/bootstrap/registry.js";
+import { SqliteDurableAdmissionStore } from "../../src/storage/sqlite-durable-admission-store.js";
 
 const ACTOR = { principalId: "principal-a" };
 
@@ -30,6 +32,45 @@ async function revokeBeforeCommit(
 }
 
 describe("Registry revision fence", () => {
+  it("persists the production Registry high-water revision across restart", async () => {
+    const fixture = await createDurableAdmissionFixture();
+    let reopened: SqliteDurableAdmissionStore | undefined;
+    try {
+      const current = {
+        ...fixture.registryConfiguration,
+        registryRevision: 4,
+      };
+      await AgentRegistry.create(current, fixture.store);
+      await fixture.store.close();
+      reopened = await SqliteDurableAdmissionStore.open({
+        databasePath: fixture.databasePath,
+      });
+      await expect(
+        AgentRegistry.create({ ...current, registryRevision: 3 }, reopened),
+      ).rejects.toMatchObject({ code: "storage_unavailable" });
+      await expect(
+        AgentRegistry.create(
+          {
+            ...current,
+            registryRevision: 4,
+            principals: current.principals.map((principal) =>
+              principal.principalId === "principal-a"
+                ? { ...principal, active: false }
+                : principal,
+            ),
+          },
+          reopened,
+        ),
+      ).rejects.toMatchObject({ code: "storage_unavailable" });
+      await expect(
+        AgentRegistry.create({ ...current, registryRevision: 4 }, reopened),
+      ).resolves.toBeDefined();
+    } finally {
+      await reopened?.close();
+      await fixture.close();
+    }
+  });
+
   it("rolls back an in-flight edit and leaves no receipt after membership revocation", async () => {
     const fixture = await createDurableAdmissionFixture();
     try {

@@ -39,11 +39,13 @@ import {
 
 type ExternalErrorCode =
   | "access_denied"
+  | "execution_not_ready"
   | "internal_error"
   | Exclude<ApplicationError["code"], "membership_revoked">;
 
 const ERROR_MESSAGES: Readonly<Record<ExternalErrorCode, string>> = {
   access_denied: "Access denied",
+  execution_not_ready: "Runtime execution is not ready",
   internal_error: "The requested operation could not be completed",
   invalid_state: "The Task cannot be changed in its current state",
   not_found: "Resource not found",
@@ -57,6 +59,16 @@ const ERROR_MESSAGES: Readonly<Record<ExternalErrorCode, string>> = {
   tombstone_capacity: "Operation receipt capacity is exhausted",
   validation_error: "The request violates configured limits",
 };
+
+class ExecutionNotReadyError extends Error {
+  readonly code = "execution_not_ready" as const;
+  readonly retryable = false;
+
+  constructor() {
+    super("Runtime execution is not ready");
+    this.name = "ExecutionNotReadyError";
+  }
+}
 
 function result(
   payload: Record<string, unknown>,
@@ -102,18 +114,23 @@ function parseInput<T extends z.ZodType>(
 function failure(error: unknown, mutation: boolean): CallToolResult {
   const applicationError =
     error instanceof ApplicationError ? error : undefined;
+  const executionNotReady =
+    error instanceof ExecutionNotReadyError ? error : undefined;
   const code: ExternalErrorCode =
-    applicationError === undefined
-      ? "internal_error"
-      : applicationError.code === "membership_revoked"
-        ? "access_denied"
-        : applicationError.code;
+    executionNotReady !== undefined
+      ? executionNotReady.code
+      : applicationError === undefined
+        ? "internal_error"
+        : applicationError.code === "membership_revoked"
+          ? "access_denied"
+          : applicationError.code;
   const candidate = {
     ok: false,
     error: {
       code,
       message: ERROR_MESSAGES[code],
-      retryable: applicationError?.retryable ?? false,
+      retryable:
+        executionNotReady?.retryable ?? applicationError?.retryable ?? false,
       safeRetry:
         mutation && applicationError?.retryable === true
           ? "same_operation_id"
@@ -159,8 +176,29 @@ function invokeInput<T extends z.ZodType>(
   return invoke(() => operation(parseInput(schema, input)), mutation);
 }
 
+function scheduleDispatch(
+  dispatch: ((taskId: string) => Promise<unknown>) | undefined,
+  canDispatchTask: (() => boolean) | undefined,
+  taskId: string,
+): void {
+  if (dispatch === undefined) return;
+  try {
+    if (canDispatchTask?.() === false) return;
+  } catch {
+    return;
+  }
+  void Promise.resolve()
+    .then(() => dispatch(taskId))
+    .catch(() => undefined);
+}
+
 export function createDurableAdmissionMcpHandler(
   service: AgentExecutionService,
+  options: {
+    dispatch?: (taskId: string) => Promise<unknown>;
+    canSubmitTask?: () => boolean;
+    canDispatchTask?: () => boolean;
+  } = {},
 ): McpHttpHandler {
   return createMcpHandler(
     ({ authInfo }) => {
@@ -192,7 +230,7 @@ export function createDurableAdmissionMcpHandler(
         "agentport_submit_task",
         {
           description:
-            "Durably admit a new queued Task and Context without starting a Runtime.",
+            "Durably admit a new Task for the selected Agent and schedule its Runtime execution.",
           inputSchema: publishedInput(submitTaskInputSchema),
           outputSchema: mutationSuccessSchema,
         },
@@ -201,6 +239,9 @@ export function createDurableAdmissionMcpHandler(
             submitTaskInputSchema,
             input,
             async (input) => {
+              if (options.canSubmitTask?.() === false) {
+                throw new ExecutionNotReadyError();
+              }
               const mutation = await service.submitTask(actor, {
                 operationId: input.operationId,
                 agentId: input.agentId,
@@ -215,6 +256,13 @@ export function createDurableAdmissionMcpHandler(
                   ? {}
                   : { inputWaitSeconds: input.inputWaitSeconds }),
               });
+              if (mutation.task.state === "queued") {
+                scheduleDispatch(
+                  options.dispatch,
+                  options.canDispatchTask,
+                  mutation.task.taskId,
+                );
+              }
               return { task: mutation.task, replayed: mutation.replayed };
             },
             true,
@@ -253,6 +301,13 @@ export function createDurableAdmissionMcpHandler(
             input,
             async (input) => {
               const mutation = await service.reply(actor, input);
+              if (mutation.task.state === "queued") {
+                scheduleDispatch(
+                  options.dispatch,
+                  options.canDispatchTask,
+                  mutation.task.taskId,
+                );
+              }
               return { task: mutation.task, replayed: mutation.replayed };
             },
             true,
@@ -280,6 +335,13 @@ export function createDurableAdmissionMcpHandler(
                   ? {}
                   : { contextSummary: input.contextSummary }),
               });
+              if (mutation.task.state === "queued") {
+                scheduleDispatch(
+                  options.dispatch,
+                  options.canDispatchTask,
+                  mutation.task.taskId,
+                );
+              }
               return { task: mutation.task, replayed: mutation.replayed };
             },
             true,

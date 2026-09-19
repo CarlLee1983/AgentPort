@@ -1,4 +1,8 @@
+import { execFile } from "node:child_process";
 import { access, readFile, stat } from "node:fs/promises";
+import { promisify } from "node:util";
+
+const executeFile = promisify(execFile);
 
 if (process.platform !== "linux") {
   throw new Error("test:linux must run on the designated Linux target");
@@ -26,6 +30,35 @@ for (const name of [
   "AGENTPORT_G1_INGRESS_GID",
 ]) {
   if (!process.env[name]) throw new Error(`${name} is required`);
+}
+if (
+  process.env.AGENTPORT_G1_LAUNCHER_SOCKET !== "/run/agentport/launcher.sock"
+) {
+  throw new Error("AP-023 requires /run/agentport/launcher.sock");
+}
+if (process.env.AGENTPORT_G1_INGRESS_DIRECTORY !== "/run/agentport-ingress") {
+  throw new Error("AP-023 requires /run/agentport-ingress");
+}
+const administratorGroup = await executeFile("getent", [
+  "group",
+  "agentport-admin",
+]);
+const administratorGroupId = Number(
+  administratorGroup.stdout.trim().split(":")[2],
+);
+if (!Number.isSafeInteger(administratorGroupId) || administratorGroupId < 1) {
+  throw new Error("agentport-admin group is invalid");
+}
+const [daemonGroups, runtimeGroups] = await Promise.all([
+  executeFile("id", ["-G", process.env.AGENTPORT_G1_DAEMON_USER]),
+  executeFile("id", ["-G", process.env.AGENTPORT_G1_RUNTIME_USER]),
+]);
+const groups = (output) => output.stdout.trim().split(/\s+/u).map(Number);
+if (!groups(daemonGroups).includes(administratorGroupId)) {
+  throw new Error("daemon account is not in agentport-admin");
+}
+if (groups(runtimeGroups).includes(administratorGroupId)) {
+  throw new Error("Runtime account must not be in agentport-admin");
 }
 await access(process.env.AGENTPORT_G1_LAUNCHER_SOCKET);
 const { LinuxLauncherClient } =

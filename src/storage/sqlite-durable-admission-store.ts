@@ -608,7 +608,11 @@ function canonicalDatabasePath(databasePath: string): string {
 export class SqliteDurableAdmissionStore {
   readonly #worker: Worker;
   readonly #registryRevisionFence = new Int32Array(new SharedArrayBuffer(8));
+  readonly #dispatchAdmissionFence = new Int32Array(new SharedArrayBuffer(4));
   readonly #testCommitBarrier = new Int32Array(new SharedArrayBuffer(8));
+  readonly #testDispatchCommitBarrier = new Int32Array(
+    new SharedArrayBuffer(12),
+  );
   readonly #pending = new Map<number, Pending>();
   readonly #auditQueue: QueuedAudit[] = [];
   readonly #auditIdleWaiters: AuditIdleWaiter[] = [];
@@ -634,6 +638,7 @@ export class SqliteDurableAdmissionStore {
     private readonly storageIncident?: StorageIncidentReporter,
   ) {
     validateOptions(options);
+    Atomics.store(this.#dispatchAdmissionFence, 0, 1);
     const resolvedOptions = {
       ...options,
       databasePath: canonicalDatabasePath(options.databasePath),
@@ -664,7 +669,9 @@ export class SqliteDurableAdmissionStore {
       workerData: {
         ...resolvedOptions,
         registryRevisionFence: this.#registryRevisionFence.buffer,
+        dispatchAdmissionFence: this.#dispatchAdmissionFence.buffer,
         testCommitBarrier: this.#testCommitBarrier.buffer,
+        testDispatchCommitBarrier: this.#testDispatchCommitBarrier.buffer,
       },
     });
     this.#worker.on("message", (reply: WorkerReply) => {
@@ -706,6 +713,27 @@ export class SqliteDurableAdmissionStore {
     await this.#request("ready", {}, false, Math.max(this.#timeoutMs, 2_000));
     this.#scheduleRetention();
   }
+  openDispatchAdmission(): void {
+    Atomics.store(this.#dispatchAdmissionFence, 0, 1);
+  }
+  closeDispatchAdmission(): void {
+    for (;;) {
+      const state = Atomics.load(this.#dispatchAdmissionFence, 0);
+      if (state === 0 || state === 3) return;
+      if (
+        state === 1 &&
+        Atomics.compareExchange(this.#dispatchAdmissionFence, 0, 1, 0) === 1
+      ) {
+        return;
+      }
+      if (
+        state === 2 &&
+        Atomics.compareExchange(this.#dispatchAdmissionFence, 0, 2, 3) === 2
+      ) {
+        return;
+      }
+    }
+  }
   async lookupReceipt(
     request: LookupStoredReceiptRequest,
   ): Promise<StoredTask | undefined> {
@@ -713,11 +741,23 @@ export class SqliteDurableAdmissionStore {
       StoredTask | undefined
     >;
   }
-  async installRegistryRevision(revision: number): Promise<void> {
+  async installRegistryRevision(
+    revision: number,
+    persist = false,
+    fingerprint?: string,
+  ): Promise<void> {
     if (!Number.isSafeInteger(revision) || revision < 1) {
       throw new TypeError("Registry revision must be a positive safe integer");
     }
+    if (
+      persist &&
+      (fingerprint === undefined ||
+        !/^sha256:v1:[0-9a-f]{64}$/u.test(fingerprint))
+    ) {
+      throw new TypeError("Registry fingerprint is required for persistence");
+    }
     await this.#acquireRegistryCommitFence();
+    const previous = Atomics.load(this.#registryRevisionFence, 0);
     try {
       const current = Atomics.load(this.#registryRevisionFence, 0);
       if (revision < current) {
@@ -728,7 +768,16 @@ export class SqliteDurableAdmissionStore {
       Atomics.store(this.#registryRevisionFence, 1, 0);
       Atomics.notify(this.#registryRevisionFence, 1);
     }
-    await this.#request("installRegistryRevision", { revision });
+    try {
+      await this.#request("installRegistryRevision", {
+        revision,
+        persist,
+        ...(fingerprint === undefined ? {} : { fingerprint }),
+      });
+    } catch (error) {
+      Atomics.store(this.#registryRevisionFence, 0, previous);
+      throw error;
+    }
   }
   async submit(
     request: SubmitStoredTaskRequest,
@@ -914,8 +963,14 @@ export class SqliteDurableAdmissionStore {
       request,
     ) as Promise<StoredTerminalCommit>;
   }
-  async recoverExecutions(): Promise<StoredExecution[]> {
-    return this.#request("recoverExecutions", {}) as Promise<StoredExecution[]>;
+  async recoverExecutions(
+    request: {
+      reason?: "daemon_restart" | "daemon_shutdown";
+    } = {},
+  ): Promise<StoredExecution[]> {
+    return this.#request("recoverExecutions", request) as Promise<
+      StoredExecution[]
+    >;
   }
   async quarantineExecution(request: {
     accessScopeId: string;
@@ -1049,6 +1104,8 @@ export class SqliteDurableAdmissionStore {
     probe:
       | "block"
       | "armCommitBarrier"
+      | "armDispatchCommitBarrier"
+      | "armDispatchCommitRollback"
       | "corruptReservedControlSummary"
       | "exhaustRestartEventReserve"
       | "exitClean"
@@ -1068,11 +1125,13 @@ export class SqliteDurableAdmissionStore {
       | "inspectSchemaVersions"
       | "inspectDurability"
       | "releaseCommitBarrier"
+      | "releaseDispatchCommitBarrier"
       | "setFutureSchemaVersion"
       | "truncatePhysicalControlReserve"
       | "underfundTaskEventLedger"
       | "underfundTaskReservationLedger"
       | "waitForCommitBarrier"
+      | "waitForDispatchCommitBarrier"
       | "waitForRegistryRevision"
       | "zeroTaskReservationLedger",
     milliseconds = 0,
@@ -1082,13 +1141,34 @@ export class SqliteDurableAdmissionStore {
       Atomics.store(this.#testCommitBarrier, 0, 1);
       return Promise.resolve();
     }
+    if (
+      probe === "armDispatchCommitBarrier" ||
+      probe === "armDispatchCommitRollback"
+    ) {
+      Atomics.store(this.#testDispatchCommitBarrier, 1, 0);
+      Atomics.store(
+        this.#testDispatchCommitBarrier,
+        2,
+        probe === "armDispatchCommitRollback" ? 1 : 0,
+      );
+      Atomics.store(this.#testDispatchCommitBarrier, 0, 1);
+      return Promise.resolve();
+    }
     if (probe === "releaseCommitBarrier") {
       Atomics.store(this.#testCommitBarrier, 0, 0);
       Atomics.notify(this.#testCommitBarrier, 0);
       return Promise.resolve();
     }
+    if (probe === "releaseDispatchCommitBarrier") {
+      Atomics.store(this.#testDispatchCommitBarrier, 0, 0);
+      Atomics.notify(this.#testDispatchCommitBarrier, 0);
+      return Promise.resolve();
+    }
     if (probe === "waitForCommitBarrier") {
       return this.#waitForSharedValue(this.#testCommitBarrier, 1, 1);
+    }
+    if (probe === "waitForDispatchCommitBarrier") {
+      return this.#waitForSharedValue(this.#testDispatchCommitBarrier, 1, 1);
     }
     if (probe === "waitForRegistryRevision") {
       if (!Number.isSafeInteger(milliseconds) || milliseconds < 1) {
@@ -1119,6 +1199,27 @@ export class SqliteDurableAdmissionStore {
       await this.#request("close", {}, true, null);
     })();
     return this.#closePromise;
+  }
+
+  /**
+   * Deadline fallback for daemon teardown. This never changes Task or
+   * Execution state; it only terminates this process's SQLite worker after the
+   * graceful persistence path has failed to finish in time.
+   */
+  async forceClose(): Promise<void> {
+    this.#closing = true;
+    this.#closed = true;
+    if (this.#retentionTimer !== undefined) {
+      clearTimeout(this.#retentionTimer);
+      this.#retentionTimer = undefined;
+    }
+    const error = new DurableAdmissionStoreError({
+      code: "storage_unavailable",
+      message: "storage was closed at the daemon shutdown deadline",
+    });
+    this.#terminalError ??= error;
+    this.#failAll(this.#terminalError);
+    await this.#worker.terminate();
   }
 
   async #acquireRegistryCommitFence(): Promise<void> {

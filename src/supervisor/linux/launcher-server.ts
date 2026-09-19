@@ -220,11 +220,33 @@ export class LinuxLauncherServer {
       0,
     );
     const socketGroupId = await this.#groupId(this.options.socketGroup);
-    await prepareProtectedLauncherDirectory(
-      dirname(this.options.socketPath),
-      0o750,
-      socketGroupId,
-    );
+    const socketDirectory = dirname(this.options.socketPath);
+    if (socketDirectory === "/run/agentport") {
+      // GATE-056: root retains the shared parent; the sticky bit prevents the
+      // daemon from replacing the root-owned launcher socket.
+      const daemonGroupId = await this.#groupId("agentport-daemon");
+      await prepareProtectedLauncherDirectory(
+        socketDirectory,
+        0o1771,
+        daemonGroupId,
+      );
+      const metadata = await lstat(socketDirectory);
+      if (
+        !metadata.isDirectory() ||
+        metadata.isSymbolicLink() ||
+        metadata.uid !== 0 ||
+        metadata.gid !== daemonGroupId ||
+        (metadata.mode & 0o7777) !== 0o1771
+      ) {
+        throw new Error("Shared launcher directory is unsafe");
+      }
+    } else {
+      await prepareProtectedLauncherDirectory(
+        socketDirectory,
+        0o750,
+        socketGroupId,
+      );
+    }
     await this.#prepareIngressDirectory(socketGroupId);
     this.#dispatchAuthorityEpoch = `epoch-${randomUUID()}`;
     const recordedUnits = await this.#sealPriorLauncherEpoch();

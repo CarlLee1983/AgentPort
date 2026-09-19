@@ -24,7 +24,11 @@ import type {
 import type { ExecutionReference, RuntimeQuestionIdentity } from "./types.js";
 
 export interface DurableAdmissionStore {
-  installRegistryRevision(revision: number): Promise<void>;
+  installRegistryRevision(
+    revision: number,
+    persist?: boolean,
+    fingerprint?: string,
+  ): Promise<void>;
   lookupReceipt(
     request: LookupStoredReceiptRequest,
   ): Promise<StoredTask | undefined>;
@@ -131,7 +135,9 @@ export interface DurableAdmissionStore {
     activeElapsedMs?: number;
     now?: string;
   }): Promise<StoredTerminalCommit>;
-  recoverExecutions(): Promise<StoredExecution[]>;
+  recoverExecutions(request?: {
+    reason?: "daemon_restart" | "daemon_shutdown";
+  }): Promise<StoredExecution[]>;
   quarantineExecution(request: {
     accessScopeId: string;
     allowedAgentIds: readonly string[];
