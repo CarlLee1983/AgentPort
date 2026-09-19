@@ -120,6 +120,134 @@ describe("production daemon main", () => {
     expect(fixture.signalListeners.size).toBe(0);
   });
 
+  it("reloads the protected registry on SIGHUP and keeps the signal loop alive", async () => {
+    const fixture = dependencies();
+    const reload = vi.fn<(value: DaemonConfiguration) => Promise<void>>(() =>
+      Promise.resolve(),
+    );
+    const readConfiguration = vi
+      .fn<DaemonMainDependencies["readConfiguration"]>()
+      .mockResolvedValue(configuration);
+    fixture.value.readConfiguration = readConfiguration;
+    fixture.value.createLifecycle = () => ({
+      get state() {
+        return fixture.lifecycle.state;
+      },
+      start: fixture.start,
+      stop: fixture.stop,
+      reload,
+    });
+    const running = runProductionDaemon(
+      ["--config", "/etc/agentport/agentport.json"],
+      fixture.value,
+    );
+    await vi.waitFor(() => {
+      expect(fixture.start).toHaveBeenCalled();
+    });
+    fixture.signalListeners.get("SIGHUP")?.();
+    await vi.waitFor(() => {
+      expect(reload).toHaveBeenCalledWith(configuration);
+    });
+    expect(readConfiguration).toHaveBeenCalledTimes(2);
+    fixture.signalListeners.get("SIGTERM")?.();
+    await running;
+  });
+
+  it("projects SIGHUP reload failures without exposing the cause", async () => {
+    const fixture = dependencies();
+    const reload = vi.fn(() =>
+      Promise.reject(new Error("protected-path-and-secret-sentinel")),
+    );
+    fixture.value.createLifecycle = () => ({
+      get state() {
+        return fixture.lifecycle.state;
+      },
+      start: fixture.start,
+      stop: fixture.stop,
+      reload,
+    });
+    const running = runProductionDaemon(
+      ["--config", "/etc/agentport/agentport.json"],
+      fixture.value,
+    );
+    await vi.waitFor(() => {
+      expect(fixture.start).toHaveBeenCalled();
+    });
+    fixture.signalListeners.get("SIGHUP")?.();
+    await vi.waitFor(() => {
+      expect(fixture.errors).toContain(
+        JSON.stringify({ code: "daemon_reload_failed" }),
+      );
+    });
+    expect(fixture.errors.join()).not.toContain(
+      "protected-path-and-secret-sentinel",
+    );
+    fixture.signalListeners.get("SIGTERM")?.();
+    await running;
+  });
+
+  it("serializes SIGHUP read-and-replace cycles in signal order", async () => {
+    const fixture = dependencies();
+    const reload = vi.fn<(value: DaemonConfiguration) => Promise<void>>(() =>
+      Promise.resolve(),
+    );
+    const delayed: Array<(value: DaemonConfiguration) => void> = [];
+    let reads = 0;
+    const first = { ...configuration, callers: [] };
+    const second = {
+      ...configuration,
+      callers: [
+        {
+          callerId: "second",
+          principalId: "principal-a",
+          tokenHash: "sha256:v1:" + "b".repeat(64),
+          active: true,
+        },
+      ],
+    };
+    fixture.value.readConfiguration = vi.fn(() => {
+      reads += 1;
+      if (reads === 1) return Promise.resolve(configuration);
+      return new Promise<DaemonConfiguration>((resolve) => {
+        delayed.push(resolve);
+      });
+    });
+    fixture.value.createLifecycle = () => ({
+      get state() {
+        return fixture.lifecycle.state;
+      },
+      start: fixture.start,
+      stop: fixture.stop,
+      reload,
+    });
+    const running = runProductionDaemon(
+      ["--config", "/etc/agentport/agentport.json"],
+      fixture.value,
+    );
+    await vi.waitFor(() => {
+      expect(fixture.start).toHaveBeenCalled();
+    });
+    fixture.signalListeners.get("SIGHUP")?.();
+    await vi.waitFor(() => {
+      expect(delayed).toHaveLength(1);
+    });
+    fixture.signalListeners.get("SIGHUP")?.();
+    await new Promise((resolve) => setImmediate(resolve));
+    expect(delayed).toHaveLength(1);
+    delayed.shift()?.(first);
+    await vi.waitFor(() => {
+      expect(delayed).toHaveLength(1);
+    });
+    delayed.shift()?.(second);
+    await vi.waitFor(() => {
+      expect(reload).toHaveBeenCalledTimes(2);
+    });
+    expect(reload.mock.calls[0]?.[0]).toBe(first);
+    expect(reload.mock.calls[1]?.[0]).toBe(second);
+    fixture.signalListeners.get("SIGTERM")?.();
+    await running;
+  });
+
   it("does not start after a signal received during configuration loading", async () => {
     const fixture = dependencies();
     let release: ((value: DaemonConfiguration) => void) | undefined;

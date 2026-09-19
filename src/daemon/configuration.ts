@@ -6,9 +6,12 @@ import { z } from "zod";
 
 import type {
   AgentConfiguration,
+  CallerCredentialConfiguration,
   PrincipalConfiguration,
 } from "../bootstrap/registry.js";
 import type { DurableAdmissionStoreOptions } from "../storage/sqlite-durable-admission-store.js";
+import { CALLER_TOKEN_HASH_PATTERN } from "../security/caller-token.js";
+import { DEFAULT_AGENT_WORKSPACE_ROOT } from "../security/workspace.js";
 
 const MAX_CONFIGURATION_BYTES = 128 * 1024;
 const DEFAULT_MCP_PORT = 3333;
@@ -110,10 +113,20 @@ const principalSchema = z
     allowedAgentIds: z.array(identifier).max(1024),
   })
   .strict();
+const callerSchema = z
+  .object({
+    callerId: identifier,
+    principalId: identifier,
+    tokenHash: z.string().regex(CALLER_TOKEN_HASH_PATTERN),
+    active: z.boolean(),
+  })
+  .strict();
 
 const configurationSchema = z
   .object({
     schemaVersion: z.literal(1),
+    registryRevision: z.number().int().min(1).max(2_147_483_647).default(1),
+    workspaceRoot: absolutePath.default(DEFAULT_AGENT_WORKSPACE_ROOT),
     mcp: z
       .object({ port: z.number().int().min(1).max(65_535).optional() })
       .strict(),
@@ -136,6 +149,7 @@ const configurationSchema = z
     adminSocket: adminSocketSchema,
     agents: z.array(agentSchema).max(1024),
     principals: z.array(principalSchema).max(1024),
+    callers: z.array(callerSchema).max(1024).default([]),
   })
   .strict()
   .superRefine((value, context) => {
@@ -175,9 +189,24 @@ const configurationSchema = z
         });
       }
     }
+    const callerIds = new Set<string>();
+    const callerHashes = new Set<string>();
+    for (const caller of value.callers) {
+      if (
+        callerIds.has(caller.callerId) ||
+        callerHashes.has(caller.tokenHash) ||
+        !principalIds.has(caller.principalId)
+      ) {
+        context.addIssue({ code: "custom", message: "invalid caller mapping" });
+      }
+      callerIds.add(caller.callerId);
+      callerHashes.add(caller.tokenHash);
+    }
   });
 
 export interface DaemonConfiguration {
+  registryRevision?: number;
+  workspaceRoot?: string;
   mcp: { port: number };
   storage: DurableAdmissionStoreOptions;
   launcher: {
@@ -190,6 +219,7 @@ export interface DaemonConfiguration {
   adminSocket: { groupId: number };
   agents: readonly AgentConfiguration[];
   principals: readonly PrincipalConfiguration[];
+  callers?: readonly CallerCredentialConfiguration[];
 }
 
 function freeze<T>(value: T): T {
@@ -212,7 +242,10 @@ export function parseDaemonConfiguration(value: unknown): DaemonConfiguration {
     ...principal,
     allowedAgentIds: [...principal.allowedAgentIds],
   }));
+  const callers = parsed.data.callers.map((caller) => ({ ...caller }));
   return freeze({
+    registryRevision: parsed.data.registryRevision,
+    workspaceRoot: parsed.data.workspaceRoot,
     mcp: { port: parsed.data.mcp.port ?? DEFAULT_MCP_PORT },
     // Zod's optional-output type includes explicit `undefined`; the strict
     // schema above has already established the store option contract.
@@ -221,6 +254,7 @@ export function parseDaemonConfiguration(value: unknown): DaemonConfiguration {
     adminSocket: { ...parsed.data.adminSocket },
     agents,
     principals,
+    callers,
   });
 }
 

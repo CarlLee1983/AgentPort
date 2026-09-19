@@ -38,8 +38,11 @@ export interface DaemonMainDependencies {
     configuration: DaemonConfiguration,
     credentials: DaemonCredentials,
   ): DaemonLifecycleControl;
-  onSignal(signal: "SIGINT" | "SIGTERM", listener: () => void): void;
-  offSignal(signal: "SIGINT" | "SIGTERM", listener: () => void): void;
+  onSignal(signal: "SIGINT" | "SIGTERM" | "SIGHUP", listener: () => void): void;
+  offSignal(
+    signal: "SIGINT" | "SIGTERM" | "SIGHUP",
+    listener: () => void,
+  ): void;
   writeError(line: string): void;
 }
 
@@ -91,6 +94,7 @@ export async function runProductionDaemon(
 
   let lifecycle: DaemonLifecycleControl | undefined;
   let stopPromise: Promise<void> | undefined;
+  let reloadPromise: Promise<void> | undefined;
   let resolveSignal: (() => void) | undefined;
   const signalReceived = new Promise<void>((resolve) => {
     resolveSignal = resolve;
@@ -102,6 +106,21 @@ export async function runProductionDaemon(
       void stopPromise.catch(() => undefined);
     }
   };
+  const handleReload = (): void => {
+    const currentLifecycle = lifecycle;
+    if (currentLifecycle?.reload === undefined) return;
+    reloadPromise = (reloadPromise ?? Promise.resolve())
+      .then(async () => {
+        const nextConfiguration =
+          await dependencies.readConfiguration(configurationPath);
+        await currentLifecycle.reload?.(nextConfiguration);
+      })
+      .catch(() => {
+        dependencies.writeError(
+          JSON.stringify({ code: "daemon_reload_failed" }),
+        );
+      });
+  };
   const waitOrSignal = <T>(operation: Promise<T>) =>
     Promise.race([
       operation.then((value) => ({ kind: "completed", value }) as const),
@@ -109,6 +128,7 @@ export async function runProductionDaemon(
     ]);
   dependencies.onSignal("SIGINT", handleSignal);
   dependencies.onSignal("SIGTERM", handleSignal);
+  dependencies.onSignal("SIGHUP", handleReload);
 
   try {
     const configurationResult = await waitOrSignal(
@@ -139,6 +159,7 @@ export async function runProductionDaemon(
   } finally {
     dependencies.offSignal("SIGINT", handleSignal);
     dependencies.offSignal("SIGTERM", handleSignal);
+    dependencies.offSignal("SIGHUP", handleReload);
   }
 }
 

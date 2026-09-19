@@ -36,6 +36,8 @@ export interface ControlledRuntimeAdmissionConfiguration {
   registry: RegistryConfiguration;
   cursorSecret: string;
   storage: DurableAdmissionStoreOptions;
+  /** Production keeps this closed until a verified Runtime readiness contract exists. */
+  canAdmitTasks?: () => boolean;
   launcher: {
     socketPath: string;
     workerIngressDirectory: string;
@@ -55,6 +57,8 @@ export interface ControlledRuntimeAdmissionComposition {
   >;
   /** Internal scheduler seam; no MCP caller can select a Reference or profile. */
   dispatch(taskId: string): ReturnType<ControlledRuntimeDispatcher["dispatch"]>;
+  /** Replaces only the validated Agent/Principal/Caller registry revision. */
+  reloadRegistry?(configuration: RegistryConfiguration): Promise<void>;
   /** Must complete before admission or dispatch is opened. */
   initializeAfterRestart(): Promise<void>;
   /** Synchronous lifecycle fence: later dispatch attempts cannot claim or launch. */
@@ -269,30 +273,69 @@ export async function prepareControlledRuntimeAdmission(
       ingressFactory,
       { isOpen: () => dispatchOpen },
     );
-    const mcpHandler = createDurableAdmissionMcpHandler(service);
+    const activeDispatches = new Set<
+      ReturnType<ControlledRuntimeDispatcher["dispatch"]>
+    >();
+    const pendingDispatches = new Map<
+      string,
+      ReturnType<ControlledRuntimeDispatcher["dispatch"]>
+    >();
+    let registryConfiguration = configuration.registry;
+    const canAdmitTasks = (): boolean => {
+      try {
+        return configuration.canAdmitTasks?.() !== false;
+      } catch {
+        return false;
+      }
+    };
+    const dispatchTask = (
+      taskId: string,
+    ): ReturnType<ControlledRuntimeDispatcher["dispatch"]> => {
+      const existing = pendingDispatches.get(taskId);
+      if (existing !== undefined) return existing;
+      if (!dispatchOpen || !canAdmitTasks()) {
+        return Promise.resolve({ kind: "unavailable" });
+      }
+      const pending = dispatcher.dispatch(taskId);
+      pendingDispatches.set(taskId, pending);
+      activeDispatches.add(pending);
+      void pending.then(
+        () => {
+          pendingDispatches.delete(taskId);
+          activeDispatches.delete(pending);
+        },
+        () => {
+          pendingDispatches.delete(taskId);
+          activeDispatches.delete(pending);
+        },
+      );
+      return pending;
+    };
+    const mcpHandler = createDurableAdmissionMcpHandler(service, {
+      dispatch: dispatchTask,
+      canSubmitTask: canAdmitTasks,
+      canDispatchTask: canAdmitTasks,
+    });
     let initialized = false;
     let shutdownRequested = false;
     let recovery: DeploymentReadinessObservation["recovery"] = "unknown";
     let initializePromise: Promise<void> | undefined;
     let shutdownPromise: Promise<DaemonShutdownResult> | undefined;
     let closePromise: Promise<void> | undefined;
-    const activeDispatches = new Set<
-      ReturnType<ControlledRuntimeDispatcher["dispatch"]>
-    >();
     return {
       registry,
       service,
       mcpHandler,
       auditRecorder: store,
       dispatch: (taskId) => {
-        if (!dispatchOpen) return Promise.resolve({ kind: "unavailable" });
-        const pending = dispatcher.dispatch(taskId);
-        activeDispatches.add(pending);
-        void pending.then(
-          () => activeDispatches.delete(pending),
-          () => activeDispatches.delete(pending),
-        );
-        return pending;
+        return dispatchTask(taskId);
+      },
+      reloadRegistry: async (nextConfiguration) => {
+        if (shutdownRequested || closePromise !== undefined) {
+          throw new Error("daemon registry reload is unavailable");
+        }
+        await registry.replace(nextConfiguration);
+        registryConfiguration = nextConfiguration;
       },
       initializeAfterRestart: () => {
         initializePromise ??= (async () => {
@@ -366,12 +409,12 @@ export async function prepareControlledRuntimeAdmission(
           capabilities: {
             service: "unavailable",
             agents:
-              configuration.registry.agents.length === 0
-                ? "none"
-                : "configured",
+              registryConfiguration.agents.length === 0 ? "none" : "configured",
             launcher: topology === "valid" ? "ready" : "unavailable",
             runtime: "unverified",
-            callerProvisioning: "absent",
+            callerProvisioning: registry.hasActiveCallerCredentials()
+              ? "present"
+              : "absent",
             protectedTopology: topology,
           },
           recovery,

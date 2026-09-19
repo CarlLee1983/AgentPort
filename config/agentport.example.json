@@ -1,5 +1,7 @@
 {
   "schemaVersion": 1,
+  "registryRevision": 1,
+  "workspaceRoot": "/var/agentport/workspaces",
   "mcp": {
     "port": 3333
   },
@@ -15,5 +17,6 @@
   },
   "adminSocket": { "groupId": 10004 },
   "agents": [],
-  "principals": []
+  "principals": [],
+  "callers": []
 }

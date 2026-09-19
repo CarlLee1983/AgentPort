@@ -4855,6 +4855,44 @@ parentPort?.on("message", (message: Request) => {
       ) {
         throw new Error("invalid Registry revision fence");
       }
+      if (p.persist === true) {
+        const fingerprint = p.fingerprint;
+        if (
+          typeof fingerprint !== "string" ||
+          !/^sha256:v1:[0-9a-f]{64}$/u.test(fingerprint)
+        ) {
+          throw new Error("invalid Registry fingerprint");
+        }
+        const stored = db
+          .prepare("SELECT key,value FROM store_metadata WHERE key IN (?,?)")
+          .all("registry_revision", "registry_fingerprint") as {
+          key: string;
+          value: string;
+        }[];
+        const metadata = new Map(
+          stored.map(({ key, value }) => [key, value] as const),
+        );
+        const storedRevision = Number(metadata.get("registry_revision") ?? 0);
+        const storedFingerprint = metadata.get("registry_fingerprint");
+        if (
+          !Number.isSafeInteger(storedRevision) ||
+          storedRevision < 0 ||
+          revision < storedRevision ||
+          (revision === storedRevision &&
+            storedRevision > 0 &&
+            storedFingerprint !== fingerprint)
+        ) {
+          throw new Error("Registry revision candidate is stale");
+        }
+        db.transaction(() => {
+          db.prepare(
+            "INSERT INTO store_metadata(key,value) VALUES(?,?) ON CONFLICT(key) DO UPDATE SET value=excluded.value",
+          ).run("registry_revision", String(revision));
+          db.prepare(
+            "INSERT INTO store_metadata(key,value) VALUES(?,?) ON CONFLICT(key) DO UPDATE SET value=excluded.value",
+          ).run("registry_fingerprint", fingerprint);
+        })();
+      }
       result = undefined;
     } else if (message.command === "transitionTasks") {
       transitionTasks(p);

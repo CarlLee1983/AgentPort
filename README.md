@@ -63,16 +63,16 @@ It models the host's coding capability as **Logical Agents** with explicit bindi
 
 ## Core Domain Concepts
 
-| Term | Definition |
-| :--- | :--- |
-| **Caller** | The external entity (or AI agent) invoking AgentPort's MCP tools. |
-| **Access Scope** | Security perimeter grouping callers and agents. Authorizations and queries are strictly scoped. |
-| **Logical Agent** | An authorized persona mapped by the host administrator to a specific workspace and runtime policy. |
-| **Workspace** | Canonical directory path on the host where an agent operates. |
-| **Task** | A tracked unit of work with durable state, revision, and terminal outcomes. |
-| **Execution** | An actual execution attempt of a task, governed by an **Execution Generation** and **Execution Unit**. |
-| **Context** | An unbroken sequence of tasks and clarifications sharing logical flow and workspace continuity. |
-| **Clarification Reply** | Caller answer to a question raised by the coding agent (`AskUserQuestion`), keeping the task running. |
+| Term                    | Definition                                                                                             |
+| :---------------------- | :----------------------------------------------------------------------------------------------------- |
+| **Caller**              | The external entity (or AI agent) invoking AgentPort's MCP tools.                                      |
+| **Access Scope**        | Security perimeter grouping callers and agents. Authorizations and queries are strictly scoped.        |
+| **Logical Agent**       | An authorized persona mapped by the host administrator to a specific workspace and runtime policy.     |
+| **Workspace**           | Canonical directory path on the host where an agent operates.                                          |
+| **Task**                | A tracked unit of work with durable state, revision, and terminal outcomes.                            |
+| **Execution**           | An actual execution attempt of a task, governed by an **Execution Generation** and **Execution Unit**. |
+| **Context**             | An unbroken sequence of tasks and clarifications sharing logical flow and workspace continuity.        |
+| **Clarification Reply** | Caller answer to a question raised by the coding agent (`AskUserQuestion`), keeping the task running.  |
 
 ---
 
@@ -81,17 +81,20 @@ It models the host's coding capability as **Logical Agents** with explicit bindi
 AgentPort registers **10 standard application tools** over MCP (`legacy: reject`, structured JSON content):
 
 ### 1. Task Lifecycle & Admission
-- **`agentport_submit_task`**: Durably admits a new queued task and context (idempotent with `operationId`).
+
+- **`agentport_submit_task`**: When the host reports `execution-ready`, durably admits a new queued task and context (idempotent with `operationId`); otherwise returns a stable non-ready error without creating a Task.
 - **`agentport_edit_task`**: Modifies a never-started task using compare-and-swap on `expectedRevision`.
 - **`agentport_cancel_task`**: Durably cancels queued work or records cancellation intent for active executions.
 
 ### 2. Observation & Query
+
 - **`agentport_get_task`**: Reads the committed task snapshot, current state, active question, and outcomes without blocking.
 - **`agentport_list_tasks`**: Lists task summaries in the caller's scope with **capacity-safe pagination** (guaranteed under 8 MiB response payload limits).
 - **`agentport_get_events`**: Fetches committed lifecycle events with opaque cursors.
 - **`agentport_list_agents`**: Lists configured logical agents available to the authenticated principal.
 
 ### 3. Interactive Clarification & Context Management
+
 - **`agentport_reply`**: Durably records an answer to a pending question, waking up the paused execution.
 - **`agentport_resume_context`**: Resumes a paused/blocked context using either `preserve` (resumable native session) or `fresh_session` (caller-provided summary).
 - **`agentport_acknowledge_interruption`**: Cleanly acknowledges an interrupted or recovery-unknown task after verified stop evidence.
@@ -169,6 +172,8 @@ pnpm run test:linux
   - SQLite storage maintains reserved byte quotas to ensure cancellation and terminal receipts can always be recorded even under storage pressure.
 
 For comprehensive operational practices, storage recovery, and Linux deployment topologies, see:
+
+- [Deployment and downstream MCP guide](docs/deployment-guide.md)
 - [Technical Design](docs/technical-design.md)
 - [Durable Admission Operations](docs/durable-admission-operations.md)
 - [Domain Glossary (CONTEXT.md)](CONTEXT.md)

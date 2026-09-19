@@ -1,4 +1,4 @@
-import { mkdtemp, mkdir, rm } from "node:fs/promises";
+import { chmod, mkdtemp, mkdir, realpath, rm } from "node:fs/promises";
 import { tmpdir } from "node:os";
 import { join } from "node:path";
 
@@ -126,6 +126,64 @@ describe("AgentRegistry", () => {
       "Agent A",
     );
     expect(authorization?.registryRevision).toBeUndefined();
+  });
+
+  it("rejects a lower or conflicting persisted Registry revision", async () => {
+    const workspacePath = await workspace();
+    const config = configuration(workspacePath);
+    const installed: number[] = [];
+    const registry = await AgentRegistry.create(
+      { ...config, registryRevision: 4 },
+      {
+        installRegistryRevision: (revision) => {
+          installed.push(revision);
+          return Promise.resolve();
+        },
+      },
+    );
+
+    await expect(
+      registry.replace({ ...config, registryRevision: 3 }),
+    ).rejects.toThrow("Registry revision is stale");
+    await expect(
+      registry.replace({
+        ...config,
+        registryRevision: 4,
+        agents: config.agents.map((agent) => ({
+          ...agent,
+          description: "different same-revision candidate",
+        })),
+      }),
+    ).rejects.toThrow("Registry revision is stale");
+    await registry.replace({ ...config, registryRevision: 4 });
+    expect(installed).toEqual([4]);
+    expect(registry.authorize("principal-a")?.registryRevision).toBe(4);
+  });
+
+  it("revalidates Workspace metadata before a same-revision reload no-op", async () => {
+    const temporaryRoot = await realpath(
+      await mkdtemp(join(tmpdir(), "agentport-registry-workspace-")),
+    );
+    const workspaceRoot = join(temporaryRoot, "workspaces");
+    const workspacePath = join(workspaceRoot, "project");
+    await mkdir(workspaceRoot, { mode: 0o700 });
+    await mkdir(workspacePath, { mode: 0o700 });
+    try {
+      const config = {
+        ...configuration(workspacePath),
+        registryRevision: 4,
+        workspaceRoot,
+      };
+      const registry = await AgentRegistry.create(config, {
+        installRegistryRevision: () => Promise.resolve(),
+      });
+      await chmod(workspacePath, 0o770);
+      await expect(registry.replace(config)).rejects.toThrow(
+        "workspace_invalid",
+      );
+    } finally {
+      await rm(temporaryRoot, { force: true, recursive: true });
+    }
   });
 
   it("separates credential identity from current membership and allowlist", async () => {

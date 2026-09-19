@@ -39,6 +39,7 @@ function fixture(options: { stopUnknown?: number } = {}) {
   const events: string[] = [];
   let shutdownBegan = false;
   let dispatchOpen = false;
+  const reloadRegistry = vi.fn(() => Promise.resolve());
   const composition: ControlledRuntimeAdmissionComposition = {
     registry: {
       authenticate: () => undefined,
@@ -53,6 +54,7 @@ function fixture(options: { stopUnknown?: number } = {}) {
       Promise.resolve(
         dispatchOpen ? { kind: "started" } : { kind: "unavailable" },
       ),
+    reloadRegistry,
     initializeAfterRestart: () => {
       events.push("initialize");
       dispatchOpen = true;
@@ -156,6 +158,7 @@ function fixture(options: { stopUnknown?: number } = {}) {
     lifecycle,
     events,
     composition,
+    reloadRegistry,
     listener,
     admin,
     readiness: () => readiness,
@@ -181,6 +184,30 @@ describe("production daemon lifecycle", () => {
       level: "service-ready",
       reason: "no-agents-configured",
       capabilities: { service: "available", protectedTopology: "valid" },
+    });
+    await lifecycle.stop();
+  });
+
+  it("reloads only the Agent, Principal and Caller registry", async () => {
+    const { lifecycle, reloadRegistry } = fixture();
+    await lifecycle.start();
+    const next = {
+      ...configuration,
+      callers: [
+        {
+          callerId: "hub-mcp",
+          principalId: "hub-operator",
+          tokenHash: "sha256:v1:" + "a".repeat(64),
+          active: true,
+        },
+      ],
+    };
+    await lifecycle.reload(next);
+    expect(reloadRegistry).toHaveBeenCalledWith({
+      credentials: {},
+      callers: next.callers,
+      agents: next.agents,
+      principals: next.principals,
     });
     await lifecycle.stop();
   });

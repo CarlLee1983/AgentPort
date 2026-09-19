@@ -24,6 +24,7 @@ export interface DaemonLifecycleControl {
   readonly state: DaemonLifecycleState;
   start(): Promise<void>;
   stop(): Promise<void>;
+  reload?(configuration: DaemonConfiguration): Promise<void>;
 }
 
 export class DaemonLifecycleError extends Error {
@@ -122,6 +123,38 @@ export class ProductionDaemonLifecycle implements DaemonLifecycleControl {
 
   get url(): URL | undefined {
     return this.#listener?.url;
+  }
+
+  async reload(configuration: DaemonConfiguration): Promise<void> {
+    if (this.#state !== "running" || this.#composition === undefined) {
+      throw new DaemonLifecycleError(DAEMON_STARTUP_FAILED);
+    }
+    if (
+      configuration.mcp.port !== this.configuration.mcp.port ||
+      JSON.stringify(configuration.storage) !==
+        JSON.stringify(this.configuration.storage) ||
+      JSON.stringify(configuration.launcher) !==
+        JSON.stringify(this.configuration.launcher) ||
+      configuration.adminSocket.groupId !==
+        this.configuration.adminSocket.groupId
+    ) {
+      throw new DaemonLifecycleError(DAEMON_STARTUP_FAILED);
+    }
+    if (this.#composition.reloadRegistry === undefined) {
+      throw new DaemonLifecycleError(DAEMON_STARTUP_FAILED);
+    }
+    await this.#composition.reloadRegistry({
+      credentials: {},
+      ...(configuration.registryRevision === undefined
+        ? {}
+        : { registryRevision: configuration.registryRevision }),
+      ...(configuration.workspaceRoot === undefined
+        ? {}
+        : { workspaceRoot: configuration.workspaceRoot }),
+      callers: configuration.callers ?? [],
+      agents: configuration.agents,
+      principals: configuration.principals,
+    });
   }
 
   #isStopRequested(): boolean {

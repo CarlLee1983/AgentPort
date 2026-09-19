@@ -741,11 +741,23 @@ export class SqliteDurableAdmissionStore {
       StoredTask | undefined
     >;
   }
-  async installRegistryRevision(revision: number): Promise<void> {
+  async installRegistryRevision(
+    revision: number,
+    persist = false,
+    fingerprint?: string,
+  ): Promise<void> {
     if (!Number.isSafeInteger(revision) || revision < 1) {
       throw new TypeError("Registry revision must be a positive safe integer");
     }
+    if (
+      persist &&
+      (fingerprint === undefined ||
+        !/^sha256:v1:[0-9a-f]{64}$/u.test(fingerprint))
+    ) {
+      throw new TypeError("Registry fingerprint is required for persistence");
+    }
     await this.#acquireRegistryCommitFence();
+    const previous = Atomics.load(this.#registryRevisionFence, 0);
     try {
       const current = Atomics.load(this.#registryRevisionFence, 0);
       if (revision < current) {
@@ -756,7 +768,16 @@ export class SqliteDurableAdmissionStore {
       Atomics.store(this.#registryRevisionFence, 1, 0);
       Atomics.notify(this.#registryRevisionFence, 1);
     }
-    await this.#request("installRegistryRevision", { revision });
+    try {
+      await this.#request("installRegistryRevision", {
+        revision,
+        persist,
+        ...(fingerprint === undefined ? {} : { fingerprint }),
+      });
+    } catch (error) {
+      Atomics.store(this.#registryRevisionFence, 0, previous);
+      throw error;
+    }
   }
   async submit(
     request: SubmitStoredTaskRequest,

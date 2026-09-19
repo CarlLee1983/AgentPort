@@ -4,7 +4,7 @@ import {
   Client,
   StreamableHTTPClientTransport,
 } from "@modelcontextprotocol/client";
-import { afterEach, describe, expect, it } from "vitest";
+import { afterEach, describe, expect, it, vi } from "vitest";
 
 import { DurableAgentExecutionService } from "../../src/core/agent-execution-service.js";
 import { AgentRegistry } from "../../src/bootstrap/registry.js";
@@ -163,6 +163,87 @@ describe("AP-002 durable admission through the official MCP Client", () => {
         }),
       ]),
     );
+  });
+
+  it("schedules a queued Task only after the durable admission succeeds", async () => {
+    const fixture = track(await createDurableAdmissionFixture());
+    const dispatch = vi.fn(() => Promise.resolve({ kind: "started" }));
+    const endpoint = track(
+      await startDurableAdmissionMcpEndpoint(fixture, { dispatch }),
+    );
+    const client = track(
+      await connectDurableAdmissionClient(endpoint.url, SCOPE_A_TOKEN),
+    );
+    const submitted = await client.callTool({
+      name: "agentport_submit_task",
+      arguments: {
+        operationId: "ap002-dispatch-after-admission",
+        agentId: "agent-a",
+        instruction: "schedule after commit",
+      },
+    });
+    const task = structured(submitted).task as Record<string, unknown>;
+    await vi.waitFor(() => {
+      expect(dispatch).toHaveBeenCalledWith(task.taskId);
+    });
+  });
+
+  it("does not dispatch a resumed Task while Runtime dispatch is fenced", async () => {
+    const fixture = track(await createDurableAdmissionFixture());
+    const dispatch = vi.fn(() => Promise.resolve({ kind: "started" }));
+    const endpoint = track(
+      await startDurableAdmissionMcpEndpoint(fixture, {
+        dispatch,
+        canDispatchTask: () => false,
+      }),
+    );
+    const client = track(
+      await connectDurableAdmissionClient(endpoint.url, SCOPE_A_TOKEN),
+    );
+    const predecessor = await fixture.service.submitTask(
+      { principalId: "principal-a" },
+      {
+        operationId: "ap002-fenced-resume-predecessor",
+        agentId: "agent-a",
+        instruction: "cancel before the follow-up",
+      },
+    );
+    const successor = await fixture.service.submitTask(
+      { principalId: "principal-a" },
+      {
+        operationId: "ap002-fenced-resume-successor",
+        agentId: "agent-a",
+        contextId: predecessor.task.contextId,
+        instruction: "resume only after readiness",
+      },
+    );
+    await fixture.service.cancelTask(
+      { principalId: "principal-a" },
+      {
+        operationId: "ap002-fenced-resume-cancel",
+        taskId: predecessor.task.taskId,
+      },
+    );
+    const blocked = await fixture.service.getTask(
+      { principalId: "principal-a" },
+      { taskId: successor.task.taskId },
+    );
+    const resumed = await client.callTool({
+      name: "agentport_resume_context",
+      arguments: {
+        operationId: "ap002-fenced-resume",
+        contextId: predecessor.task.contextId,
+        expectedRevision: blocked.contextRevision,
+        continuationMode: "fresh_session",
+        contextSummary: "resume after the canceled predecessor",
+      },
+    });
+    expect(structured(resumed)).toMatchObject({
+      ok: true,
+      task: { taskId: successor.task.taskId, state: "queued" },
+    });
+    await new Promise((resolve) => setImmediate(resolve));
+    expect(dispatch).not.toHaveBeenCalled();
   });
 
   it("recovers the original Task after a transport response is discarded", async () => {

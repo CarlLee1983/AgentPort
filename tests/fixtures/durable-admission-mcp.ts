@@ -65,9 +65,14 @@ async function requestEntry(
 
 export async function startDurableAdmissionMcpEndpoint(
   fixture: DurableAdmissionFixture,
+  options: {
+    dispatch?: (taskId: string) => Promise<unknown>;
+    canSubmitTask?: () => boolean;
+    canDispatchTask?: () => boolean;
+  } = {},
 ): Promise<DurableAdmissionMcpEndpoint> {
   const transcript: McpTranscriptEntry[] = [];
-  const handler = createDurableAdmissionMcpHandler(fixture.service);
+  const handler = createDurableAdmissionMcpHandler(fixture.service, options);
   const tracedHandler: McpHttpHandler = {
     ...handler,
     fetch: async (

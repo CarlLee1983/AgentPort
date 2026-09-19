@@ -1,12 +1,14 @@
-# Production daemon bootstrap (AP-022)
+# Production daemon bootstrap (AP-022/AP-024)
 
-AP-022 supplies a production daemon entrypoint and the examples in
+AP-022 supplies a production daemon entrypoint and AP-024 adds protected
+Agent/Principal/Caller administration. The examples in
 `config/systemd/agentport-daemon.service` and
 `config/agentport.example.json`. They document the expected Ubuntu 24.04
 amd64/systemd/cgroup-v2 deployment contract. This Story does **not** install
 the unit, create accounts or groups, create paths, generate credentials,
-reload systemd, enable a service, or start a service. Keep the warning in
-`docs/deployment-guide.md` in force; it is not a deployment procedure.
+reload systemd, enable a service, or start a service. See
+`docs/deployment-guide.md` for the current source-checkout procedure and its
+explicit readiness limits.
 
 The expected built command is:
 
@@ -58,13 +60,19 @@ ownership or modes. SQLite and its control reserve belong under the daemon-only
 
 Copy the shape in `config/agentport.example.json` to the protected path only
 after the administrator has created the supported host layout. It is schema
-version 1 and intentionally has no Caller bearer token, principal, anonymous
-identity, or test switch. `agents: []` is valid: it starts only a zero-Agent
-service skeleton.
+version 1 and contains no raw Caller bearer token, anonymous identity, or test
+switch. `agents: []` is valid: it starts only a zero-Agent service skeleton.
+Administrators add Agents, Principals and hashed Callers with the `agentport`
+management commands documented in the deployment guide.
 
 The daemon validates the configuration before opening SQLite or composing the
-service. Its strict top-level schema is `schemaVersion`, `mcp`, `storage`,
-`launcher`, `adminSocket`, `agents`, and `principals`. `storage.databasePath`,
+service. Its strict top-level schema is `schemaVersion`, `registryRevision`,
+`workspaceRoot`, `mcp`, `storage`, `launcher`, `adminSocket`, `agents`,
+`principals`, and `callers`. `registryRevision` is a positive monotonic
+candidate number; a valid but lower or conflicting same-revision candidate is
+rejected during reload and against the durable SQLite high-water marker across
+daemon restart.
+`storage.databasePath`,
 `launcher.socketPath`, and `launcher.workerIngressDirectory` are normalized
 absolute paths. The launcher declares three distinct numeric group IDs:
 `socketGroupId` is the numeric GID of the root-owned `launcher.sock`, while
@@ -73,10 +81,12 @@ absolute paths. The launcher declares three distinct numeric group IDs:
 numbers in the example are placeholders; a missing, duplicate, or incorrect
 socket GID makes daemon startup and live readiness fail closed.
 Existing numeric storage limits and `recoveryOnly` remain administrator
-configuration options. Unknown fields, unsupported schema versions, unsafe
-file metadata, or invalid values fail closed. The production registry fixes
-credentials to an empty map and rejects `credentials`, tokens, and
-`continuationEncryptionKey` in configuration. The protected configuration
+configuration options. A Caller record contains only `callerId`, `principalId`,
+`active` and a versioned `sha256:v1:` token hash. Unknown fields, unsupported
+schema versions, unsafe file metadata, or invalid values fail closed. The
+production registry maps active Caller hashes to Principals and rejects
+clear-token `credentials`, raw tokens, and `continuationEncryptionKey` in
+configuration. The protected configuration
 contract is `root:agentport-daemon` mode `0640`; its ancestors must be
 protected.
 
@@ -110,7 +120,8 @@ stop remains recoverable/quarantined and exits with a sanitized failure; a
 stopped listener or worker is not Stop Evidence.
 
 The CLI writes one JSON object containing only a stable reason code to stderr
-and exits non-zero on failure:
+and exits non-zero on failure. A rejected `SIGHUP` candidate is projected as
+`daemon_reload_failed`; the previous Registry revision remains active:
 
 | Reason code                     | Meaning                                                        |
 | ------------------------------- | -------------------------------------------------------------- |
@@ -121,6 +132,7 @@ and exits non-zero on failure:
 | `loopback_listener_bind_failed` | the fixed loopback endpoint could not be bound                 |
 | `daemon_startup_failed`         | another sanitized startup or reconciliation failure occurred   |
 | `daemon_shutdown_failed`        | bounded shutdown could not confirm or finish every stop        |
+| `daemon_reload_failed`          | protected candidate rejected or Registry replacement failed    |
 
 Raw causes, protected paths, configuration payloads and secret values are not
 included in this projection.
@@ -132,12 +144,14 @@ and systemd credential loading, startup reconciliation, and bounded shutdown.
 Restart reconciliation pauses queued work, quarantines unknown Executions, and
 does not replay Tasks, accepted answers, or Runtime commands automatically.
 
-AP-024 is still required for Caller add/list/revoke, token
-hashing, positive production Caller provisioning, and Registry hot reload.
-Until those capabilities exist, this daemon must reject production submission:
-it creates no Task or Workspace claim and sends no launcher request. Therefore
-do not infer `execution-ready` from this unit being active, a loopback port
-being open, an empty Agent listing, or a successful process start.
+AP-024 supplies Caller add/list/revoke, token hashing, Agent allowlists and
+validated `SIGHUP` Registry replacement. This candidate deliberately keeps the
+Runtime capability `unverified`; production `agentport_submit_task` therefore
+returns the stable `execution_not_ready` result and creates no Task, Workspace
+claim or launcher request. ForgePilot `GATE-058` tracks the decision for a
+follow-on Runtime readiness verification contract. Do not infer
+`execution-ready` from this unit being active, a loopback port being open, an
+empty Agent listing, or a successful process start.
 
 This document does not add a Runtime authorization route. Per ADR-0010,
 Claude Runtime authorization remains the administrator's subscription OAuth in

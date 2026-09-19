@@ -58,6 +58,8 @@ describe("production daemon configuration", () => {
   it("defaults to the fixed loopback port and keeps credentials out of production configuration", () => {
     const parsed = parseDaemonConfiguration(configuration);
     expect(parsed.mcp.port).toBe(3333);
+    expect(parsed.registryRevision).toBe(1);
+    expect(parsed.workspaceRoot).toBe("/var/agentport/workspaces");
     expect(parsed.agents).toEqual(configuration.agents);
     expect(parsed.principals).toEqual(configuration.principals);
     expect(Object.isFrozen(parsed)).toBe(true);
@@ -65,6 +67,11 @@ describe("production daemon configuration", () => {
 
   it.each([
     ["unsupported schema", { ...configuration, schemaVersion: 2 }],
+    ["invalid Registry revision", { ...configuration, registryRevision: 0 }],
+    [
+      "fractional Registry revision",
+      { ...configuration, registryRevision: 1.5 },
+    ],
     [
       "raw credential map",
       { ...configuration, credentials: { token: "operator" } },

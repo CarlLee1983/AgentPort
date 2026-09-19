@@ -7,8 +7,10 @@ import type { DaemonCredentials } from "./credentials.js";
 
 /**
  * Maps the secret-free production file plus systemd credentials into the
- * already-approved controlled Runtime composition. Production Caller
- * credentials intentionally remain empty until AP-024 supplies a verifier.
+ * already-approved controlled Runtime composition. Caller credentials are
+ * loaded from the protected registry, but Task admission remains fail-closed
+ * until a verified Runtime readiness contract is supplied by a follow-on
+ * deployment boundary.
  */
 export function prepareProductionDaemonComposition(
   configuration: DaemonConfiguration,
@@ -17,6 +19,13 @@ export function prepareProductionDaemonComposition(
   return prepareControlledRuntimeAdmission({
     registry: {
       credentials: {},
+      callers: configuration.callers ?? [],
+      ...(configuration.registryRevision === undefined
+        ? {}
+        : { registryRevision: configuration.registryRevision }),
+      ...(configuration.workspaceRoot === undefined
+        ? {}
+        : { workspaceRoot: configuration.workspaceRoot }),
       agents: configuration.agents,
       principals: configuration.principals,
     },
@@ -25,6 +34,7 @@ export function prepareProductionDaemonComposition(
       ...configuration.storage,
       continuationEncryptionKey: credentials.continuationEncryptionKey,
     },
+    canAdmitTasks: () => false,
     launcher: configuration.launcher,
   });
 }

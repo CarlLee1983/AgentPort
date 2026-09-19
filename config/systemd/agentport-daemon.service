@@ -13,6 +13,7 @@ Group=agentport-daemon
 SupplementaryGroups=agentport-launcher agentport-ingress agentport-runtime agentport-admin
 WorkingDirectory=/opt/agentport/current
 ExecStart=/usr/bin/node /opt/agentport/current/dist/src/daemon/main.js --config /etc/agentport/agentport.json
+ExecReload=/bin/kill -HUP $MAINPID
 LoadCredential=cursorSecret:/etc/agentport/credentials/cursorSecret
 LoadCredential=continuationEncryptionKey:/etc/agentport/credentials/continuationEncryptionKey
 Restart=on-failure

@@ -294,6 +294,7 @@ export const applicationErrorSchema = z
       .object({
         code: z.enum([
           "access_denied",
+          "execution_not_ready",
           "not_found",
           "result_expired",
           "cursor_expired",

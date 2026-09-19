@@ -24,7 +24,11 @@ import type {
 import type { ExecutionReference, RuntimeQuestionIdentity } from "./types.js";
 
 export interface DurableAdmissionStore {
-  installRegistryRevision(revision: number): Promise<void>;
+  installRegistryRevision(
+    revision: number,
+    persist?: boolean,
+    fingerprint?: string,
+  ): Promise<void>;
   lookupReceipt(
     request: LookupStoredReceiptRequest,
   ): Promise<StoredTask | undefined>;
