@@ -29,6 +29,7 @@ Created: 2026-09-20
 
 <!-- 一票一行：[票名](issues/NN-slug.md) — 一句話 gist -->
 - [Research：Claude Code 無頭執行面](issues/01-research-claude-headless.md) — launchd 下 Keychain 憑證可用但需 `USER` env；純 `-p` 不會停下來問（AskUserQuestion 不存在、權限直接 denied）；`session_id` 可 `--resume` 但權限模式每次重帶；訂閱憑證供第三方服務用是政策灰區。
+- [Research：MCP SDK Streamable HTTP 與長輪詢](issues/03-research-mcp-sdk-http.md) — 用 SDK 2.0.0 `server`+`node`，stateless、`task_id` 當 handle；long-poll 上限 < 60 s（Codex 預設 60 s），建議 25–45 s；bearer 走前置 middleware 靜態表；stdio 與 HTTP 共用 factory；Claude Desktop 遠端只能 OAuth Connector。
 - [Research：codex exec --json 執行面](issues/02-research-codex-exec.md) — approval 在 exec 模式永遠 never（不阻塞）；auth.json 在 launchd 下可用；thread_id 可 resume；file_change 不完整需靠 git diff；stdin 必須 ignore。
 
 ## Not yet specified
