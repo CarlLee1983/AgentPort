@@ -28,6 +28,7 @@ Created: 2026-09-20
 ## Decisions so far
 
 <!-- 一票一行：[票名](issues/NN-slug.md) — 一句話 gist -->
+- [Research：codex exec --json 執行面](issues/02-research-codex-exec.md) — approval 在 exec 模式永遠 never（不阻塞）；auth.json 在 launchd 下可用；thread_id 可 resume；file_change 不完整需靠 git diff；stdin 必須 ignore。
 
 ## Not yet specified
 
