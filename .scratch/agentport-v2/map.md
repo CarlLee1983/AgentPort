@@ -28,6 +28,7 @@ Created: 2026-09-20
 ## Decisions so far
 
 <!-- 一票一行：[票名](issues/NN-slug.md) — 一句話 gist -->
+- [Research：Claude Code 無頭執行面](issues/01-research-claude-headless.md) — launchd 下 Keychain 憑證可用但需 `USER` env；純 `-p` 不會停下來問（AskUserQuestion 不存在、權限直接 denied）；`session_id` 可 `--resume` 但權限模式每次重帶；訂閱憑證供第三方服務用是政策灰區。
 - [Research：codex exec --json 執行面](issues/02-research-codex-exec.md) — approval 在 exec 模式永遠 never（不阻塞）；auth.json 在 launchd 下可用；thread_id 可 resume；file_change 不完整需靠 git diff；stdin 必須 ignore。
 
 ## Not yet specified
