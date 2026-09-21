@@ -1,0 +1,197 @@
+---
+title: AgentPort v2 — 裝好就能用的 MCP 派工服務
+labels: [ready-for-agent]
+status: draft
+source_map: ../.scratch/agentport-v2/map.md
+created: 2026-09-21
+---
+
+# AgentPort v2 — 裝好就能用的 MCP 派工服務
+
+詞彙依 `CONTEXT.md`：Caller、Logical Agent、Workspace、Runtime、Runtime Driver、Task、Turn、Follow-up Task、Context、Runtime Session。v2 沒有 Execution 系列、Deployment Readiness、Clarification Reply、`needs_input`。
+
+地圖上仍有四張票未結案，本 spec 對應處以 **【假設】** 標示並給預設值：MCP tool 表面（票 07）、部署與憑證 ADR（票 08）、單輪 prototype（票 09）、取消與逾時（票 10）。實作時若票結案結果不同，以票為準並回改本文。
+
+## Problem Statement
+
+主機管理者在自己的電腦上已經登入了 `claude` 和 `codex`，手上有幾個專案資料夾。他希望遠端的人或 AI agent 能「把工作派給某個資料夾上的某個 runtime」，追蹤它做到哪、在同一段脈絡裡追加要求，然後拿回結果與改了什麼的摘要。v1 為了多操作者、特權邊界、精確一次執行堆了 launcher、principal、receipt、fencing、recovery 等機制，導致裝不起來也改不動。單操作者、單主機的場景不需要這些。
+
+## Solution
+
+一個 TypeScript 寫的 MCP 服務。管理者寫一份 TOML 宣告「agent 名稱 ↔ 資料夾 ↔ runtime ↔ 權限等級」與 caller 的 token，用 launchd 或 systemd 以自己的 OS 使用者身分把服務跑起來。Caller 透過 Streamable HTTP（bearer）或本機 stdio 呼叫六個 tool：列出 agent、提交 Task、long-poll 取結果、在同一 Context 追加、取消、列出歷史。每個 Task 恰好跑一個 Turn：服務以子程序啟動 CLI、收齊事件、Turn 結束後跑 `git diff --stat` 與 commit 清單，把最終文字與摘要存進 SQLite 回給 caller。Runtime 從不停下來等人，提問只會是最終文字，回答提問就是再提交一個 Follow-up Task。
+
+## User Stories
+
+### 安裝與設定（主機管理者）
+
+1. As a 主機管理者, I want 只要在主機上登入過 `claude` / `codex`、寫一份 TOML、啟動服務就能用, so that 不用另外申請 API key 或設定特權帳號。
+2. As a 主機管理者, I want 設定檔用 `--config`、`$AGENTPORT_CONFIG` 或 XDG 預設路徑找到, so that launchd / systemd 單元只需一行。
+3. As a 主機管理者, I want 每個 agent 宣告 name、description、workspace、runtime、policy、extra_args, so that 遠端 caller 只能在我允許的資料夾與權限下工作。
+4. As a 主機管理者, I want policy 只有 `read-only` / `workspace-write` / `full` 三級且必填, so that 授權意圖一眼可讀，而且不會因為漏寫而默默拿到寫入權。
+5. As a 主機管理者, I want `extra_args` 能把任意旗標原樣附加到 CLI, so that 不用等 AgentPort 改版就能指定 model 或其他選項。
+6. As a 主機管理者, I want caller token 只從環境變數讀（`token_env`）, so that 設定檔可以放進 dotfiles 或貼給別人看而不洩漏。
+7. As a 主機管理者, I want 啟動時一次列出設定檔所有錯誤再退出, so that 不用改一個錯跑一次。
+8. As a 主機管理者, I want 同一個 workspace 只能綁一個 agent, so that 不會有兩個 runtime 同時改同一個資料夾。
+9. As a 主機管理者, I want 能用 `[runtimes.<name>].command` 指定 CLI 路徑, so that launchd 的 `PATH` 沒含 `~/.local/bin` 也能啟動。
+10. As a 主機管理者, I want 路徑裡的 `~` 會展開、相對路徑相對於設定檔, so that 服務管理器 cwd 是 `/` 也不會找錯目錄。
+11. As a 主機管理者, I want 改了設定檔重啟就生效, so that 不需要理解熱重載的邊界情況。
+12. As a 主機管理者, I want 服務尊重我個人的 CLI 設定（hooks、model、`~/.codex/config.toml`）, so that 派工跑出來的行為和我自己在終端機跑的一致。
+13. As a 主機管理者, I want 服務預設只綁 loopback, so that 我沒明確開放前不會暴露到網路。
+14. As a 主機管理者, I want 原始 JSONL 事件存在磁碟並從 Task 記錄找得到, so that 出問題時能看 runtime 到底吐了什麼。
+15. As a 主機管理者, I want 服務在 Mac 與 Linux 都能跑, so that 家裡的 Mac 和機房的 Linux 用同一套。
+
+### 派工（Caller）
+
+16. As a caller, I want 列出可用 agent 與各自的 description、runtime、policy, so that 我知道該把工作派給誰。
+17. As a caller, I want 提交 Task 後立刻拿到 `task_id` 與 `context_id`, so that 我不用等它跑完就能繼續做別的事。
+18. As a caller, I want `get_task` 能 long-poll 等到狀態改變, so that 我不用自己 sleep 輪詢。
+19. As a caller, I want long-poll 的等待上限低於我這邊 MCP client 的 tool 逾時, so that 呼叫不會被 client 端砍掉。
+20. As a caller, I want 拿回最終文字回覆、`git diff --stat`、commit 清單與 token usage, so that 我知道它做了什麼、改了哪些檔案。
+21. As a caller, I want 在同一個 Context 追加要求, so that runtime 記得前面的對話。
+22. As a caller, I want runtime 提問時我以 Follow-up Task 回答, so that 沒有第二套「澄清」協定要學。
+23. As a caller, I want 看到 Claude 被拒絕的工具呼叫（`permission_denied` hints）, so that 我知道它是做不到而不是不想做。
+24. As a caller, I want 對同一 agent 的多個 Task 依序執行、不同 agent 並行, so that 同一個 repo 不會被兩輪同時改，而不同專案不用互等。
+25. As a caller, I want 取消還在排隊或執行中的 Task, so that 派錯了不用等它跑完。
+26. As a caller, I want 列出歷史 Task 並分頁, so that 重連後找得回之前派的工作。
+27. As a caller, I want Context 延續失敗時明確得到 `session_unresumable`, so that 我不會拿到一個失憶的 agent 卻以為它記得。
+28. As a caller, I want 服務重啟後我的 `task_id` 還查得到、中斷的 Task 標為 `interrupted`, so that 我可以決定要不要在同一 Context 續派。
+29. As a caller, I want 用 bearer token 認證並被記錄為哪個 caller, so that 管理者知道哪個 bot 派了什麼。
+30. As a caller, I want 從本機 stdio 也能用同一套 tool, so that 我在主機上用 Claude Code 也能派給另一個 agent。
+31. As a caller, I want 工作目錄不是 git repo 時 Task 仍成功、只是沒有 diff 摘要, so that 非 git 的資料夾也能派工。
+32. As an AI caller, I want tool 有 output schema 與 `structuredContent`, so that 我不必解析自由文字。
+
+### 維運
+
+33. As a 主機管理者, I want Task 永久保留在單一 SQLite 檔, so that 備份就是複製一個檔案。
+34. As a 主機管理者, I want 服務重啟後排隊中的 Task 自動繼續跑, so that 更新版本不用逐一重派。
+35. As a 主機管理者, I want 有一張 ADR 說明為何用我自己的訂閱憑證跑服務, so that 之後的人知道這是有意的取捨與其政策風險。
+
+## Implementation Decisions
+
+### 架構與模組
+
+- TypeScript、Node ≥ 20、`@modelcontextprotocol/server` + `node` 2.0.0、zod 4、better-sqlite3。Mac 與 Linux 為執行目標。
+- 模組：設定檔載入、Agent Registry（設定檔的記憶體投影）、Task Store（SQLite）、Scheduler（每 agent 一條 FIFO worker）、Runtime Driver（claude、codex 各一）、Git 摘要、MCP server factory、兩個進入點（`agentport serve` HTTP、`agentport stdio`）。
+- 一份 server factory 同時餵 `serveStdio` 與 `createMcpHandler`；HTTP 為 stateless，`task_id` 是唯一 handle，不用 MCP session。
+- v1 可搬：`loopback-server.ts` 的 `toNodeHandler` + Host/Origin 驗證 + bearer → `AuthInfo`、兩個 CLI 的 JSONL 解析。v1 的 launcher、principal、receipt、fencing、recovery、supervisor 不搬。
+
+### 設定檔（票 06 定案）
+
+TOML，尋找順序 `--config` → `$AGENTPORT_CONFIG` → `~/.config/agentport/agentport.toml`。無 `schema_version`。
+
+```toml
+[server]
+listen = "127.0.0.1:3333"
+long_poll_max_seconds = 30       # 上限 55
+
+[storage]
+db_path = "~/.local/state/agentport/agentport.sqlite"
+log_dir = "~/.local/state/agentport/logs"
+
+[runtimes.claude]
+command = "~/.local/bin/claude"  # 可選，預設 PATH
+
+[[agents]]
+name = "stationhub"              # [a-z0-9-]+ 唯一
+description = "StationHub 後端"  # 可選
+workspace = "~/Dev/CMG/StationHub"
+runtime = "claude"               # claude | codex
+policy = "workspace-write"       # 必填：read-only | workspace-write | full
+extra_args = ["--model", "opus"]
+
+[[callers]]
+name = "grok"
+token_env = "AGENTPORT_TOKEN_GROK"
+```
+
+驗證：agent name 唯一合格式；workspace 存在且為目錄（不要求 git）；同一 realpath 只綁一個 agent；runtime、policy 為列舉值；caller name 唯一、`token_env` 變數非空、token 值唯一；`long_poll_max_seconds ≤ 55`；runtime 可執行檔存在；`agents[]` 非空；HTTP 模式 `callers[]` 非空。全部錯誤一次列出。`~` 展開、相對路徑相對於設定檔目錄。stdio 模式 caller 記為 `local`。不做 `instructions` 欄位、不做 runtime 層 `extra_args`。
+
+### Runtime Driver（票 04 定案）
+
+- 操作：`start(workspace, prompt, policy, extra_args) → events`、`resume(runtime_session_id, workspace, prompt, policy, extra_args) → events`、`kill()`。
+- 事件：`started{runtime_session_id}`、`message{text}`、`activity{kind: command|file_change|tool, summary}`、`permission_denied{tool, input}`（僅 Claude）、`completed{final_text, usage}`、`failed{error}`。
+- Claude：`claude -p --output-format stream-json --verbose --permission-mode <對應> --permission-prompts none`，續接 `--resume <session_id>`；policy 對應 `plan` / `acceptEdits` / `bypassPermissions`。失敗判定看 `result.is_error` / `subtype`，exit code 不可靠（未登入也 exit 0）。
+- Codex：`codex exec --json --sandbox <對應> --skip-git-repo-check`，續接 `codex exec resume <thread_id>`；policy 對應 `read-only` / `workspace-write` / `danger-full-access`。失敗看 `turn.failed` / exit code。
+- 子程序 `stdio: ['ignore', 'pipe', 'pipe']`（Codex 讀 stdin 到 EOF 才開始）；環境變數繼承服務程序的環境並確保 `USER` 存在（Claude 的 Keychain 查詢依賴它）。不加 `--ignore-user-config`、不加 `--setting-sources`。
+- 不宣告 Runtime Capability。原始 JSONL 寫到 `log_dir`，路徑記在 Task 上，不進 SQLite。
+- `acceptEdits` 仍會拒部分 Bash 的不對稱寫進文件，不抹平。
+
+### Task 狀態模型（票 05 定案）
+
+`queued → running → completed | failed | cancelled`，沒有 `needs_input`。
+
+| 從 | 到 | 觸發 |
+|---|---|---|
+| — | queued | `submit_task` / `follow_up` |
+| queued | running | 該 agent 的 worker 取出 |
+| queued | cancelled | `cancel_task` |
+| running | completed | Driver `completed`，之後服務層跑 git 摘要；摘要失敗仍 completed，`diff_stat` / `commits` 為 null 並附 `hints.git` |
+| running | failed | Driver `failed`；resume 失敗 `error.code = session_unresumable`；服務重啟時全部 running → `failed{interrupted}` |
+| running | cancelled | 【假設，票 10】見下 |
+
+- Context：服務發 ULID，`submit_task` 時建立並回傳，綁定一個 agent；`runtime_session_id` 存於 Context，第一個 Task `started` 事件後回填。Context 內嚴格線性：前一個 Task 未完成的 follow-up 排在同 agent 佇列後。前一個 failed / cancelled 仍可 follow-up，有 session id 就 resume，否則起新 session。
+- 佇列：每 agent 一條 FIFO，不同 agent 並行，無上限。重啟後 queued 自動續跑（偏離 v1 ADR-0002 第二段，隨票 08 修訂）。中斷的 Task 不從 JSONL 回填 partial。
+- 持久化：Task 表 `task_id`、`context_id`、`agent`、`caller`、`prompt`、`state`、`created_at` / `started_at` / `finished_at`、`final_text`、`diff_stat`、`commits[]`、`usage`、`hints`、`error{code, message}`、`raw_log_path`。Context 表 `context_id`、`agent`、`runtime_session_id`、`created_at`。永久保留；不做 submit 去重。
+- `hints` 非權威：`permission_denied[]` 原樣轉交 Claude 的 `permission_denials`；`git` 記摘要失敗原因。不做問句 heuristic。
+
+### Git 摘要
+
+Turn 結束後服務層在 workspace 執行 `git diff --stat`（含 untracked 以 `git status --porcelain` 補）與 Turn 期間新增的 commit 清單（記 Turn 開始時的 HEAD，結束後 `git log <start>..HEAD --oneline`）。非 git 目錄或 git 出錯 → null + `hints.git`。
+
+### MCP tool 表面【假設，票 07 未結案】
+
+沿地圖定案的六個 tool，輸入輸出 zod schema 並回 `structuredContent` + 同內容 `content[text]`。以下為預設形狀，票 07 結案後以票為準：
+
+- `list_agents()` → `{ agents: [{ name, description, runtime, policy }] }`
+- `submit_task({ agent, prompt })` → `{ task_id, context_id, state: "queued" }`
+- `follow_up({ context_id, prompt })` → 同上；Context 不存在 → `not_found`
+- `get_task({ task_id, wait_seconds? })` → Task 完整記錄；`wait_seconds` 為 0 即時回，否則等到狀態改變或 `min(wait_seconds, long_poll_max_seconds)`
+- `cancel_task({ task_id })` → `{ task_id, state }`
+- `list_tasks({ agent?, context_id?, state?, limit?, cursor? })` → `{ tasks: [摘要], next_cursor }`，摘要不含 `final_text`；整個 JSON-RPC 回應體受 ADR-0005 的 8 MiB 上限約束，超過則縮頁並給 cursor。
+- `final_text` 容量：單一 Task 回應同受 8 MiB 約束；超過時截斷尾端並附 `hints.truncated`，完整內容在 `raw_log_path`。
+- 錯誤碼（tool 層）：`not_found`、`invalid_state`（對終態 Task 取消）、`unknown_agent`。Task 層 `error.code`：`session_unresumable`、`interrupted`、`runtime_failed`、`cancelled`、`timeout`。
+- Caller 身分：HTTP 由 bearer 對照 `callers[]`，stdio 為 `local`；只記錄，不做 Task 可見範圍隔離（ADR-0009）。
+
+### 取消與逾時【假設，票 10 未結案】
+
+- `cancel_task` 對 running Task：對子程序 process group 送 SIGTERM，5 秒後 SIGKILL；Task → `cancelled`，保留已收到的 `message` 文字為 `final_text`、仍跑 git 摘要。
+- Runtime Session 被殺後是否可 resume 由票 09 / 10 實測決定；預設視為可 resume（Claude session 檔在磁碟、Codex thread 在 `~/.codex`），resume 失敗走 `session_unresumable`。
+- Turn 最長時間：設定檔 `[server] turn_timeout_seconds`，預設 3600；逾時視同取消但 `error.code = timeout`。
+
+### 部署與憑證【假設，票 08 未結案】
+
+- 服務以已登入 CLI 的 OS 使用者身分常駐：Mac 用 LaunchAgent（`gui/<uid>`），Linux 用 `systemd --user`。環境至少帶 `HOME`、`USER`、`PATH`。
+- `token_env` 變數由 plist `EnvironmentVariables` 或 systemd `EnvironmentFile=` 餵入；預設路徑 `~/.config/agentport/agentport.env`（mode 0600）。
+- 遠端進入預設 SSH tunnel 到 loopback；直連 HTTP 需管理者明確改 `listen`。
+- ADR：接受同使用者訂閱憑證模型，偏離 v1 ADR-0006 / 0007 / 0010；記錄官方政策灰區（第三方不得在產品中提供 claude.ai 登入或額度）；同一張 ADR 修訂 ADR-0002 的重啟語意。
+
+### 保留的 v1 ADR
+
+0001 外部觀測與控制、0002 task 跨重啟存活（修訂第二段）、0003 本地交易式 task store、0005 回應容量上限、0009 單操作者不隔離。
+
+## Testing Decisions
+
+- 好的測試只看外部行為：caller 透過 MCP tool 看到的狀態、結果、錯誤碼，以及磁碟上的 SQLite 與 JSONL。不測 Driver 內部的 parser 分支、不測 Scheduler 的私有佇列結構。
+- **主 seam：MCP tool 邊界**。透過 server factory 與 `@modelcontextprotocol/client` 的 in-memory transport 直接呼叫 tool。注入一個依腳本吐事件的假 Driver（可指定延遲、失敗、resume 失敗），SQLite 與 workspace 用暫存真檔（workspace 以 `git init` 建立，可切非 git 情境）。在此層驗證：狀態機每條轉移、Context 線性與 follow-up、同 agent 序列 / 跨 agent 並行、long-poll 等待與上限、取消 queued / running、git 摘要與非 git、`hints`、`list_tasks` 分頁與容量、重啟後 running → interrupted 且 queued 續跑、caller 記錄。
+- **Driver 契約 seam**：每個 Driver 對真實 CLI 跑單輪與續接，僅當本機有 `claude` / `codex` 且已登入時執行（沿 v1 `test:claude` 閘門）。JSONL 解析用錄下的 fixture 回放，不依賴 CLI。
+- **設定檔載入**：`loadConfig(path, env)` 純函式，每條驗證規則一個案例，並驗證錯誤一次全列。
+- HTTP 層（bearer、Host / Origin 驗證、stateless handler）沿 v1 `loopback-server` 的測試搬遷，不另開 seam。
+- Prior art：v1 `tests/unit/daemon-configuration.test.ts`（設定驗證）、`tests/mcp-compatibility.test.ts`（in-process MCP client）、`tests/integration/s4-context-queue.test.ts`（Context 佇列）、`tests/claude-capabilities.test.ts`（真 CLI 閘門）。
+- 覆蓋目標 80%+；TDD（先寫失敗測試）。
+
+## Out of Scope
+
+- 透過 MCP 安裝、登入或設定 runtime CLI；憑證只在主機端由管理者處理。
+- Caller 自行指定路徑或登記 agent。
+- Agent 之間的機密隔離、cgroup 監督、非 root launcher 特權邊界。
+- v1 程式碼整體搬遷；PraxisBound / ForgePilot 流程。
+- 設定檔熱重載、每 agent 佇列上限、submit `idempotency_key`、Task 保留期限清理。
+- 多主機、完整 diff / 檔案內容取回、token 輪替與撤銷、第三個 runtime、Windows、Artifact 判定（留在地圖 fog，v2 之後）。
+- Runtime 互動式提問協定（stdin 控制、`--permission-prompt-tool`）。
+
+## Further Notes
+
+- 本 spec 由地圖 `.scratch/agentport-v2/map.md` 合成；票 01–06 已結案，票 07–10 未結案。建議先跑票 09 的 prototype，它會給票 10（被殺後能否 resume）與票 07（diff 摘要實際形狀）實測依據，再回頭修本文的三個【假設】區段。
+- 憑證模型是官方政策灰區，ADR 必須明寫；若日後官方收緊，逃生口是 `CODEX_API_KEY` 與 Claude 的 API key 模式，不需改架構。
+- 本機事實（2026-09-21）：`claude` 2.1.278、`codex` 0.155.0 於 `~/.local/bin`；Claude Code 憑證在 macOS login Keychain（`Claude Code-credentials`，查詢依賴 `USER`），Linux 在 `~/.claude/.credentials.json`；Codex 憑證在 `~/.codex/auth.json`。
+- Claude Code、Codex、Cursor 都能從設定送自訂 header；Claude Desktop 遠端只走 OAuth Connector，不在 v2 支援清單。

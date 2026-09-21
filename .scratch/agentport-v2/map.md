@@ -31,16 +31,19 @@ Created: 2026-09-20
 - [Research：Claude Code 無頭執行面](issues/01-research-claude-headless.md) — launchd 下 Keychain 憑證可用但需 `USER` env；純 `-p` 不會停下來問（AskUserQuestion 不存在、權限直接 denied）；`session_id` 可 `--resume` 但權限模式每次重帶；訂閱憑證供第三方服務用是政策灰區。
 - [Research：MCP SDK Streamable HTTP 與長輪詢](issues/03-research-mcp-sdk-http.md) — 用 SDK 2.0.0 `server`+`node`，stateless、`task_id` 當 handle；long-poll 上限 < 60 s（Codex 預設 60 s），建議 25–45 s；bearer 走前置 middleware 靜態表；stdio 與 HTTP 共用 factory；Claude Desktop 遠端只能 OAuth Connector。
 - [Driver 介面：兩個 CLI 的統一事件模型](issues/04-grilling-driver-interface.md) — Claude 單向 `-p --permission-prompts none`，一次執行 = 一個 Turn、永不等待；六種事件；抽象三級 policy + extra_args；尊重主機 CLI 設定；不宣告 capability；詞彙引入 Turn、刪 Execution 系列。
+- [Task 狀態模型與 follow-up 語意](issues/05-grilling-task-model.md) — 五態無 `needs_input`，提問即 `final_text`、回答即 follow-up；Context 由服務發 id 綁 agent、內部線性，resume 失敗明確 `session_unresumable`；重啟 running→`failed{interrupted}`、queued 自動續跑（偏離 ADR-0002，隨票 08 修訂）；存 prompt 原文、永久保留、不去重。
+- [設定檔 schema（TOML）](issues/06-grilling-config-schema.md) — `--config`/`$AGENTPORT_CONFIG`/XDG 路徑；`[server]`/`[storage]`/`[runtimes.*].command`/`[[agents]]`（name、description、workspace、runtime、必填 policy、extra_args）/`[[callers]]`（name、`token_env`）；token 不進檔案；一 workspace 一 agent；stdio caller 記 `local`；啟動一次列出所有驗證錯誤。
 - [Research：codex exec --json 執行面](issues/02-research-codex-exec.md) — approval 在 exec 模式永遠 never（不阻塞）；auth.json 在 launchd 下可用；thread_id 可 resume；file_change 不完整需靠 git diff；stdin 必須 ignore。
 
 ## Not yet specified
 
-- 設定檔熱重載（SIGHUP / 檔案監看）——等設定檔 schema 定案後再看是否值得。
+- 設定檔熱重載（SIGHUP / 檔案監看）——schema 已定（票 06），改了重啟是定案；有痛點再開。
 - 多主機：caller 端要不要能選主機，或每台主機各自一個 MCP endpoint 由 client 端組合。
 - 完整 diff / 檔案內容的取回方式（受 ADR-0005 容量上限約束）。
 - Token 輪替與撤銷。
 - 第三個 runtime（Cursor Agent 等）與 Windows。
 - Runtime 產出的 Artifact 判定（哪些檔案可回給 caller）。
+- 每 agent 佇列上限、`submit_task` 的 `idempotency_key`、Task 保留期限清理——票 05 先不做，有痛點再開。
 
 ## Out of scope
 

@@ -37,13 +37,11 @@ Runtime Session 內的一次「prompt → 最終回覆」。一個 Task 恰好�
 _Avoid_: 用 Execution 或 Process 指稱 Turn；v2 沒有「同一 Task 的多次嘗試」。
 
 **Follow-up Task（追加任務）**：
-沿用既有 Context 的新工作單位，與前項 Task 有各自的狀態及結果；澄清問題的回答不屬於追加任務。
-
-**Clarification Reply（澄清回答）**：
-針對某項 Task 所提出問題的回覆，屬於該 Task 的互動內容，不是另一項 Task。
+沿用既有 Context 的新工作單位，與前項 Task 有各自的狀態及結果。前一個 Task 的最終回覆若是提問，回答它的方式就是提交 Follow-up Task；v2 沒有獨立的「澄清回答」互動。
+_Avoid_: Clarification Reply、needs_input——這些是 v1 詞彙，v2 的 Runtime 從不停下來等回答。
 
 **Context**：
-將相關工作組織為同一段互動脈絡的邏輯識別。Context 並不保證任何 Runtime 都能延續先前的內部對話。
+由 AgentPort 在第一個 Task 提交時發出的邏輯識別，把一串 Task 組織為同一段互動脈絡；一個 Context 綁定一個 Logical Agent，不可換。Context 不保證 Runtime 能延續先前對話：延續失敗以 Task 明確失敗呈現，不會靜默改以無記憶的新對話執行。
 
 **Runtime Session**：
 特定 Runtime 所持有的對話或執行脈絡，可否延續取決於該 Runtime 的能力。它不是 Task、Context 或程序識別碼的別名。
