@@ -216,7 +216,7 @@ function runServe(args: string[]): number {
   return 0;
 }
 
-export function main(argv: string[]): number {
+export async function main(argv: string[]): Promise<number> {
   const [command, ...rest] = argv;
 
   if (command === "check-config") {
@@ -239,4 +239,11 @@ export function main(argv: string[]): number {
   return 2;
 }
 
-process.exitCode = main(process.argv.slice(2));
+void main(process.argv.slice(2))
+  .then((exitCode) => {
+    process.exitCode = exitCode;
+  })
+  .catch((error: unknown) => {
+    console.error(error instanceof Error ? error.message : String(error));
+    process.exitCode = 1;
+  });

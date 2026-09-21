@@ -113,6 +113,9 @@ related: agentport-v2.md（部署與憑證）
 
 `service` 模組對外只有一個入口：依子命令與選項執行，回傳結束碼並透過注入的輸出寫訊息。可注入：平台、HOME、USER、uid、node 路徑、目前程式根目錄、環境變數、系統指令執行器（launchctl / systemctl / journalctl / loginctl）、埠探測、隨機 token 產生器。正式路徑由 CLI 以真實值組裝。
 
+- 票 02 實作時定案：程式目錄複製、移動、清理、服務定義寫入、時鐘與等待也由入口注入；前四者讓 `app.new` 複製、換名、舊版清理或 plist 寫入失敗可保證復原既有服務，後兩者讓 10 秒監聽逾時可在測試中無等待驗證。
+- 票 02 review 時定案：新服務成功載入後若清理 `.old` 失敗，可能已有部分舊檔被刪；保留已驗證的新 app/service 與殘留 `.old`，不冒險回復可能不完整的舊版；印出明確錯誤並以非零結束。
+
 ### 文件
 
 - README 部署章節改寫為：`pnpm service:install`、設定檔骨架與填寫、token 取得方式、`agentport service status | restart | uninstall`、遠端連入與 client 設定（沿用）、Linux 尚未實機驗收的標示。刪除 sed 手動流程。

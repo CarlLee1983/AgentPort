@@ -44,7 +44,7 @@ describe("agentport service 子命令", () => {
       code: 2,
       stdout: "",
       stderr: expect.stringContaining(
-        "usage: agentport service install --dry-run [--config <path>]",
+        "usage: agentport service install [--dry-run] [--config <path>]",
       ) as unknown,
     });
   });

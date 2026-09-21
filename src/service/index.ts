@@ -1,13 +1,27 @@
-import { randomBytes } from "node:crypto";
 import { spawnSync } from "node:child_process";
+import { randomBytes } from "node:crypto";
+import { existsSync } from "node:fs";
+import {
+  cp,
+  mkdir,
+  readFile,
+  rename,
+  rm,
+  writeFile as writeFileOnDisk,
+} from "node:fs/promises";
+import { createConnection } from "node:net";
 import { dirname, join, resolve } from "node:path";
 
 import { loadConfig } from "../config/load.js";
 import { resolveConfigPath, type Env } from "../config/paths.js";
+import { parseListen } from "../http/listen.js";
 
 const SERVICE_USAGE =
-  "usage: agentport service install --dry-run [--config <path>]";
+  "usage: agentport service install [--dry-run] [--config <path>]";
 const LAUNCH_AGENT_LABEL = "com.agentport.serve";
+const READY_TIMEOUT_MS = 10_000;
+const READY_RETRY_MS = 100;
+const ERROR_LOG_TAIL_LINES = 20;
 
 export interface CommandResult {
   exitCode: number;
@@ -24,8 +38,15 @@ export interface ServiceDependencies {
   nodePath: string;
   programRoot: string;
   env: Env;
-  runCommand: (command: string, args: string[]) => CommandResult;
-  probePort: (listen: string) => boolean;
+  runCommand: (command: string, args: string[]) => Promise<CommandResult>;
+  probePort: (listen: string) => Promise<boolean>;
+  /** 票 02 的失敗 seam：拷貝完成前絕不停止既有服務。 */
+  copyDirectory: (source: string, destination: string) => Promise<void>;
+  writeFile: (path: string, contents: string) => Promise<void>;
+  moveDirectory: (source: string, destination: string) => Promise<void>;
+  removeDirectory: (path: string) => Promise<void>;
+  now: () => number;
+  sleep: (milliseconds: number) => Promise<void>;
   generateToken: () => string;
   writeStdout: (line: string) => void;
   writeStderr: (line: string) => void;
@@ -39,17 +60,27 @@ export function createProcessServiceDependencies(): ServiceDependencies {
     user: process.env.USER ?? "",
     uid: typeof process.getuid === "function" ? process.getuid() : -1,
     nodePath: process.execPath,
-    programRoot: dirname(resolve(process.argv[1] ?? process.cwd())),
+    programRoot: dirname(dirname(resolve(process.argv[1] ?? process.cwd()))),
     env: process.env,
     runCommand: (command, args) => {
       const result = spawnSync(command, args, { encoding: "utf8" });
-      return {
+      return Promise.resolve({
         exitCode: result.status ?? 1,
         stdout: result.stdout,
         stderr: result.stderr,
-      };
+      });
     },
-    probePort: () => false,
+    probePort: probeTcpPort,
+    copyDirectory: (source, destination) =>
+      cp(source, destination, { recursive: true, force: true }),
+    writeFile: (path, contents) => writeFileOnDisk(path, contents, "utf8"),
+    moveDirectory: (source, destination) => rename(source, destination),
+    removeDirectory: (path) => rm(path, { recursive: true, force: true }),
+    now: () => Date.now(),
+    sleep: (milliseconds) =>
+      new Promise((resolveSleep) => {
+        setTimeout(resolveSleep, milliseconds);
+      }),
     generateToken: () => randomBytes(32).toString("hex"),
     writeStdout: (line) => {
       console.log(line);
@@ -61,13 +92,13 @@ export function createProcessServiceDependencies(): ServiceDependencies {
 }
 
 /**
- * 執行 service 子命令。票 01 先落地唯一無副作用的 install dry-run；依賴介面
- * 已涵蓋後續票要用的服務管理器、TCP 探測與 token 來源，避免再開第二個測試 seam。
+ * 執行 service 子命令。安裝透過同一個 seam 注入 OS 命令、程式複製與 TCP 探測，
+ * 讓檔案系統仍是暫存真檔、而失敗與時間可在測試中確定控制。
  */
-export function runService(
+export async function runService(
   args: string[],
   dependencies: ServiceDependencies,
-): number {
+): Promise<number> {
   const [command, ...rest] = args;
   if (command !== "install") {
     dependencies.writeStderr(SERVICE_USAGE);
@@ -106,7 +137,7 @@ export function runService(
   const configDirectory = dirname(configPath);
   const envPath = join(configDirectory, "agentport.env");
   const installDirectory = join(
-    dependencies.env.XDG_DATA_HOME ??
+    dependencies.env.XDG_DATA_HOME ||
       join(dependencies.home, ".local", "share"),
     "agentport",
     "app",
@@ -120,15 +151,25 @@ export function runService(
     envPath,
   });
 
-  dependencies.writeStdout(plist);
-  dependencies.writeStdout(
-    `launchctl bootstrap gui/${String(dependencies.uid)} ${plistPath}`,
-  );
-  return 0;
+  if (parsed.dryRun) {
+    dependencies.writeStdout(plist);
+    dependencies.writeStdout(
+      `launchctl bootstrap gui/${String(dependencies.uid)} ${plistPath}`,
+    );
+    return 0;
+  }
+
+  return installMacos({
+    dependencies,
+    installDirectory,
+    plistPath,
+    plist,
+    listen: result.config.server.listen,
+  });
 }
 
 type ParsedInstallArgs =
-  { ok: true; configPath: string | undefined } | { ok: false };
+  { ok: true; configPath: string | undefined; dryRun: boolean } | { ok: false };
 
 function parseInstallArgs(args: string[]): ParsedInstallArgs {
   let configPath: string | undefined;
@@ -150,7 +191,260 @@ function parseInstallArgs(args: string[]): ParsedInstallArgs {
     }
     return { ok: false };
   }
-  return dryRun ? { ok: true, configPath } : { ok: false };
+  return { ok: true, configPath, dryRun };
+}
+
+interface MacosInstallInput {
+  dependencies: ServiceDependencies;
+  installDirectory: string;
+  plistPath: string;
+  plist: string;
+  listen: string;
+}
+
+async function installMacos(input: MacosInstallInput): Promise<number> {
+  const { dependencies, installDirectory, plistPath, plist, listen } = input;
+  const newDirectory = `${installDirectory}.new`;
+  const logsDirectory = join(dependencies.home, "Library", "Logs", "agentport");
+  const hadPreviousPlist = existsSync(plistPath);
+  let previousPlist: string | undefined;
+  if (hadPreviousPlist) {
+    try {
+      previousPlist = await readFile(plistPath, "utf8");
+    } catch (error) {
+      dependencies.writeStderr(`無法讀取既有 plist：${describeError(error)}`);
+      return 1;
+    }
+  }
+
+  try {
+    await rm(newDirectory, { recursive: true, force: true });
+    await mkdir(dirname(installDirectory), { recursive: true });
+    await dependencies.copyDirectory(dependencies.programRoot, newDirectory);
+  } catch (error) {
+    dependencies.writeStderr(
+      `無法複製程式到 ${newDirectory}：${describeError(error)}`,
+    );
+    return 1;
+  }
+
+  let wasLoaded = false;
+  if (hadPreviousPlist) {
+    const bootout = await dependencies.runCommand("launchctl", [
+      "bootout",
+      `gui/${String(dependencies.uid)}`,
+      plistPath,
+    ]);
+    if (bootout.exitCode === 0) {
+      wasLoaded = true;
+    } else if (bootout.exitCode !== 3) {
+      dependencies.writeStderr(
+        `launchctl bootout 失敗：${bootout.stderr || bootout.stdout}`,
+      );
+      return 1;
+    }
+  }
+
+  let replacement: DirectoryReplacement | undefined;
+  try {
+    replacement = await replaceInstalledDirectory(
+      installDirectory,
+      newDirectory,
+      dependencies,
+    );
+    await mkdir(dirname(plistPath), { recursive: true });
+    await mkdir(logsDirectory, { recursive: true });
+    await dependencies.writeFile(plistPath, plist);
+  } catch (error) {
+    await rollbackInstallation({
+      dependencies,
+      installDirectory,
+      plistPath,
+      previousPlist,
+      wasLoaded,
+      replacement,
+    });
+    dependencies.writeStderr(`無法完成安裝：${describeError(error)}`);
+    return 1;
+  }
+
+  const bootstrap = await dependencies.runCommand("launchctl", [
+    "bootstrap",
+    `gui/${String(dependencies.uid)}`,
+    plistPath,
+  ]);
+  if (bootstrap.exitCode !== 0) {
+    await rollbackInstallation({
+      dependencies,
+      installDirectory,
+      plistPath,
+      previousPlist,
+      wasLoaded,
+      replacement,
+    });
+    dependencies.writeStderr(
+      `launchctl bootstrap 失敗：${bootstrap.stderr || bootstrap.stdout}`,
+    );
+    return 1;
+  }
+
+  try {
+    await discardPreviousDirectory(replacement, dependencies);
+  } catch (error) {
+    dependencies.writeStderr(
+      `無法清理舊版程式，保留新版本與殘留舊檔：${describeError(error)}`,
+    );
+    return 1;
+  }
+
+  if (await waitForListening(listen, dependencies)) {
+    dependencies.writeStdout(`服務正在監聽 ${listen}`);
+    return 0;
+  }
+
+  dependencies.writeStderr(`服務未在 10 秒內開始監聽 ${listen}`);
+  const tail = await readErrorLogTail(join(logsDirectory, "agentport.err.log"));
+  if (tail) {
+    dependencies.writeStderr(tail);
+  }
+  return 1;
+}
+
+interface DirectoryReplacement {
+  oldDirectory: string | undefined;
+}
+
+async function replaceInstalledDirectory(
+  installDirectory: string,
+  newDirectory: string,
+  dependencies: ServiceDependencies,
+): Promise<DirectoryReplacement> {
+  if (!existsSync(installDirectory)) {
+    await dependencies.moveDirectory(newDirectory, installDirectory);
+    return { oldDirectory: undefined };
+  }
+
+  const oldDirectory = `${installDirectory}.old`;
+  await rm(oldDirectory, { recursive: true, force: true });
+  await dependencies.moveDirectory(installDirectory, oldDirectory);
+  try {
+    await dependencies.moveDirectory(newDirectory, installDirectory);
+  } catch (error) {
+    await rename(oldDirectory, installDirectory);
+    throw error;
+  }
+  return { oldDirectory };
+}
+
+async function discardPreviousDirectory(
+  replacement: DirectoryReplacement,
+  dependencies: ServiceDependencies,
+): Promise<void> {
+  if (replacement.oldDirectory !== undefined) {
+    await dependencies.removeDirectory(replacement.oldDirectory);
+  }
+}
+
+interface RollbackInput {
+  dependencies: ServiceDependencies;
+  installDirectory: string;
+  plistPath: string;
+  previousPlist: string | undefined;
+  wasLoaded: boolean;
+  replacement: DirectoryReplacement | undefined;
+}
+
+async function rollbackInstallation(input: RollbackInput): Promise<void> {
+  const {
+    dependencies,
+    installDirectory,
+    plistPath,
+    previousPlist,
+    wasLoaded,
+    replacement,
+  } = input;
+  try {
+    if (replacement !== undefined) {
+      await rm(installDirectory, { recursive: true, force: true });
+      if (replacement.oldDirectory !== undefined) {
+        await rename(replacement.oldDirectory, installDirectory);
+      }
+    }
+    if (previousPlist === undefined) {
+      await rm(plistPath, { force: true });
+    } else {
+      await writeFileOnDisk(plistPath, previousPlist, "utf8");
+    }
+    if (wasLoaded) {
+      const restored = await dependencies.runCommand("launchctl", [
+        "bootstrap",
+        `gui/${String(dependencies.uid)}`,
+        plistPath,
+      ]);
+      if (restored.exitCode !== 0) {
+        dependencies.writeStderr(
+          `復原既有服務重新載入失敗：${restored.stderr || restored.stdout}`,
+        );
+      }
+    }
+  } catch (error) {
+    dependencies.writeStderr(`復原既有服務失敗：${describeError(error)}`);
+  }
+}
+
+async function waitForListening(
+  listen: string,
+  dependencies: ServiceDependencies,
+): Promise<boolean> {
+  const deadline = dependencies.now() + READY_TIMEOUT_MS;
+  for (;;) {
+    if (await dependencies.probePort(listen)) {
+      return true;
+    }
+    const remaining = deadline - dependencies.now();
+    if (remaining <= 0) {
+      return false;
+    }
+    await dependencies.sleep(Math.min(READY_RETRY_MS, remaining));
+  }
+}
+
+async function readErrorLogTail(path: string): Promise<string> {
+  try {
+    const lines = (await readFile(path, "utf8")).trimEnd().split(/\r?\n/);
+    return lines.slice(-ERROR_LOG_TAIL_LINES).join("\n");
+  } catch {
+    return "";
+  }
+}
+
+function probeTcpPort(listen: string): Promise<boolean> {
+  const { host, port } = parseListen(listen);
+  const connectHost = host === "[::1]" ? "::1" : host;
+  return new Promise((resolveProbe) => {
+    const socket = createConnection({ host: connectHost, port });
+    let settled = false;
+    const finish = (connected: boolean): void => {
+      if (settled) return;
+      settled = true;
+      clearTimeout(timeout);
+      socket.destroy();
+      resolveProbe(connected);
+    };
+    const timeout = setTimeout(() => {
+      finish(false);
+    }, READY_RETRY_MS);
+    socket.once("connect", () => {
+      finish(true);
+    });
+    socket.once("error", () => {
+      finish(false);
+    });
+  });
+}
+
+function describeError(error: unknown): string {
+  return error instanceof Error ? error.message : String(error);
 }
 
 export interface MacosLaunchAgentOptions {
