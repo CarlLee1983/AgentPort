@@ -157,6 +157,14 @@ Turn 開始時記下 HEAD（unborn 視為空樹）；Turn `completed` 後在 wor
 - 錯誤碼（tool 層）：`not_found`、`invalid_state`（對終態 Task 取消）、`unknown_agent`。Task 層 `error.code`：`session_unresumable`、`interrupted`、`runtime_failed`、`cancelled`、`timeout`。
 - Caller 身分：HTTP 由 bearer 對照 `callers[]`，stdio 為 `local`；只記錄，不做 Task 可見範圍隔離（ADR-0009）。
 
+票 06–09 實作時定案：
+- `get_task.wait_seconds`（≥ 0，預設 0）；等待以 notifier 的 per-task revision 為準，避免 notify-before-wait 漏事件；逾時回當前狀態不算錯。
+- Scheduler 每 agent 一條 FIFO；`started` 事件只在 Context 尚無 `runtime_session_id` 時回填。
+- `submit_task` 與 `follow_up` 共用建立+入列；`follow_up` 對 Context 綁定的 agent 已不在設定檔時回 `unknown_agent`。
+- `list_tasks` 摘要只含 `task_id`、`context_id`、`agent`、`caller`、`state`、時間、`error`、`hints`、`raw_log_path`（不含 prompt / final_text / diff_stat / commits / usage）；`limit` 預設 50、超過 100 夾到 100；cursor 為不透明的 `task_id` 下界，未知 cursor 回空頁；排序為 `task_id` 遞減（ulid monotonic）；容量不足時單頁至少回一筆。`final_text` 截尾上限為回應體上限的一半減 64 KiB。容量政策由 `createApp` 注入，測試可覆寫。
+- HTTP：`[server] allowed_hosts[]`，`listen` 非 loopback 時必填（啟動驗證），Host / Origin 只放行清單內主機；loopback 用 SDK 內建驗證。401 帶 `WWW-Authenticate: Bearer`，Host/Origin 不合回 403。`AuthInfo.token` 不保存原始 token。caller 名稱經 `AuthInfo.clientId` 進 server factory。
+- ADR-0005 已複製到 `docs/adr/`。
+
 ### 取消與逾時【假設，票 10 未結案】
 
 - `cancel_task` 對 running Task：對子程序 process group 送 SIGTERM，5 秒後 SIGKILL；Task → `cancelled`，保留已收到的 `message` 文字為 `final_text`、仍跑 git 摘要。

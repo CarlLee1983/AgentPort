@@ -4,9 +4,9 @@
 
 **Blocked by:** 02
 
-**Status:** ready-for-agent
+**Status:** done
 
-- [ ] `wait_seconds` 為 0 立即回；否則等到狀態改變或 `min(wait_seconds, long_poll_max_seconds)`，逾時回當前狀態
-- [ ] 每 agent 一條 FIFO worker；同 agent 的第二個 Task 在第一個結束前保持 queued
-- [ ] 不同 agent 的 Task 並行執行（測試以假 Driver 的延遲證明重疊）
-- [ ] 無佇列上限
+- [x] `wait_seconds` 為 0 立即回；否則等到狀態改變或 `min(wait_seconds, long_poll_max_seconds)`，逾時回當前狀態
+- [x] 每 agent 一條 FIFO worker；同 agent 的第二個 Task 在第一個結束前保持 queued
+- [x] 不同 agent 的 Task 並行執行（測試以假 Driver 的延遲證明重疊）
+- [x] 無佇列上限
