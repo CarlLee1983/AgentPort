@@ -6,11 +6,15 @@
   "bin": {
     "agentport": "dist/cli.js"
   },
+  "files": [
+    "dist"
+  ],
   "engines": {
     "node": ">=24"
   },
   "scripts": {
     "build": "tsc -p tsconfig.build.json",
+    "service:install": "pnpm install --frozen-lockfile && node scripts/service-install.mjs",
     "typecheck": "tsc --noEmit",
     "lint": "eslint .",
     "format": "prettier --write 'src/**/*.ts' 'tests/**/*.ts' '*.json' 'README.md'",

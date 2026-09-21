@@ -193,7 +193,7 @@ Turn 開始時記下 HEAD（unborn 視為空樹）；Turn `completed` 後在 wor
 
 建置票 12 實作時定案：
 - token 一律放在 `~/.config/agentport/agentport.env`（mode 0600，`KEY=VALUE`），不進 plist / unit / TOML。launchd 沒有 env file 支援，macOS 改用 Node 內建 `node --env-file=<path> dist/cli.js serve`（檔案不存在時 node 直接以非零碼結束）；Linux 用 systemd `EnvironmentFile=`。原假設的 plist `EnvironmentVariables` 只用來帶 `HOME` / `USER` / `PATH`，不放 token。
-- 範本在 `deploy/macos/com.agentport.serve.plist`、`deploy/linux/agentport.service`、`deploy/agentport.env.example`，以 sed 替換佔位符安裝；PATH 補 `~/.local/bin`，CLI 裝在其他位置時用 `[runtimes.*].command` 絕對路徑。
+- 服務定義由 [`src/service/index.ts`](../src/service/index.ts) 的渲染模組產生；主機管理者在 repo 執行 `pnpm service:install`，首次依骨架填好 agent 後重跑。PATH 補 `~/.local/bin`，CLI 裝在其他位置時用 `[runtimes.*].command` 絕對路徑。
 - macOS LaunchAgent 屬 `gui/<uid>`，重開機後需使用者登入才會啟動（Keychain 同樣需登入解鎖）；無人值守需自動登入。Linux 以 `loginctl enable-linger` 開機即起。
 - `serve` 常駐時本機 `stdio` 需另一份設定檔指向不同 `db_path`（單實例鎖，建置票 11）。
 - 憑證 ADR 為 `docs/adr/0011-same-user-subscription-credentials.md`，同一張修訂 ADR-0002 第二段；v1 的 0001 / 0002 / 0003 / 0005 / 0009 已複製到 `docs/adr/` 並註明來源與 v2 適用範圍。

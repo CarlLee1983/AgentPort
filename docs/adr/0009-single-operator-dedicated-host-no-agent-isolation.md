@@ -28,4 +28,4 @@ inherited_from: ../../../AgentPort/docs/adr/0009-single-operator-dedicated-host-
 
 （以上為 v1 原文，含 v1 專有的一鍵安裝器／服務帳號／Ubuntu-only 判準，保留供對照；v2 適用範圍見上方繼承注記。）
 
-**Falsified if（v2 版）：** `src/driver/registry.ts` 改為依 Agent 分別建立 Driver 的 `env` / `command`（例如每個 Agent 各自的 Runtime HOME 或帳號），不再是所有 Agent 共用同一份 `config.runtimes.*` 與服務程序自己的環境；或 `deploy/macos/com.agentport.serve.plist` / `deploy/linux/agentport.service` 改以每個 Agent 各自的服務帳號執行；或產品文件宣稱同主機 Agent 之間具機密隔離。
+**Falsified if（v2 版）：** `src/driver/registry.ts` 改為依 Agent 分別建立 Driver 的 `env` / `command`（例如每個 Agent 各自的 Runtime HOME 或帳號），不再是所有 Agent 共用同一份 `config.runtimes.*` 與服務程序自己的環境；或 `src/service/index.ts` 的服務定義渲染模組改以每個 Agent 各自的服務帳號執行；或產品文件宣稱同主機 Agent 之間具機密隔離。

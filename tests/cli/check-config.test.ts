@@ -1,4 +1,6 @@
 import { execFile } from "node:child_process";
+import { writeFile } from "node:fs/promises";
+import { join } from "node:path";
 import { fileURLToPath } from "node:url";
 import { promisify } from "node:util";
 
@@ -35,6 +37,29 @@ describe("agentport check-config 子命令", () => {
     expect(stdout).toContain("stationhub");
     expect(stdout).toContain("claude");
     expect(stdout).toContain("workspace-write");
+  });
+
+  it("從設定檔相鄰的 service env 讀取 caller token", async () => {
+    const dir = await makeTempDir();
+    await makeWorkspace(dir, "workspace");
+    await makeFakeExecutable(dir, "claude");
+    const configPath = await writeConfigFile(
+      dir,
+      `${agentToml()}\n[[callers]]\nname = "default"\ntoken_env = "AGENTPORT_TOKEN_DEFAULT"\n`,
+    );
+    await writeFile(
+      join(dir, "agentport.env"),
+      "AGENTPORT_TOKEN_DEFAULT=from-service-env\n",
+      "utf8",
+    );
+
+    const { stdout } = await execFileAsync(
+      process.execPath,
+      [CLI_PATH, "check-config", "--config", configPath],
+      { env: baseEnv({ HOME: dir, PATH: dir }) },
+    );
+
+    expect(stdout).toContain("callers: 1");
   });
 
   it("設定有錯誤時每行輸出一個 path: message 到 stderr 並以 exit code 1 結束", async () => {

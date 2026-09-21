@@ -4,20 +4,24 @@ AgentPort 將目標主機上的 AI Coding Runtime（Claude Code、Codex）以 Lo
 
 詳細詞彙定義見 `CONTEXT.md`，架構與決策見 `specs/agentport-v2.md`。
 
-## 安裝
+## 安裝與部署
 
-需要 Node.js（版本見 `package.json` 的 `engines.node`）與已經在本機登入過的 `claude` / `codex` CLI。
+需要 Node.js（版本見 `package.json` 的 `engines.node`）與已經在本機登入過的 `claude` / `codex` CLI。在 repo 根目錄執行：
 
 ```sh
 pnpm install
-pnpm build
+pnpm service:install
 ```
 
-`pnpm build` 產出 `dist/cli.js`，部署範本（見「啟動」一節）都指向這個檔案的絕對路徑，不是 `pnpm` 指令本身。
+這個指令會 build、把僅含正式依賴與建置產物的程式打包到暫存目錄，再由那份程式安裝服務；常駐服務不會執行 repo 內的檔案。首次執行會在 `${XDG_CONFIG_HOME:-$HOME/.config}/agentport/agentport.toml` 產生骨架並停止。填入至少一個 agent 後重跑同一個指令。
 
-## 設定檔
+骨架中的設定檔尋找順序是 `--config <path>` → `$AGENTPORT_CONFIG` → `${XDG_CONFIG_HOME:-$HOME/.config}/agentport/agentport.toml`。可用非預設位置：
 
-尋找順序：`--config <path>` → `$AGENTPORT_CONFIG` → `${XDG_CONFIG_HOME:-$HOME/.config}/agentport/agentport.toml`。
+```sh
+pnpm service:install -- --config /path/to/agentport.toml
+```
+
+骨架保留一個 `default` caller；填入 agent 時可依下列範例修改：
 
 ```toml
 [server]
@@ -47,73 +51,20 @@ token_env = "AGENTPORT_TOKEN_GROK"  # token 只從環境變數讀，不寫進設
 
 `~` 會展開為 `$HOME`，相對路徑相對於設定檔所在目錄。未知欄位視為錯誤。
 
-## 驗證設定檔
+`service install` 會建立相鄰的 `agentport.env`（mode 0600），補齊每個 caller 缺少的 token，並且只在當下印出新 token 一次。把該值安全地交給 MCP client；不要把 token 寫進 TOML 或 log。若設定檔已存在，安裝不會改寫它或既有 token。
+
+安裝成功後，`~/.local/bin/agentport` 會指向安裝目錄的固定版本；日常操作不需要回到 repo：
 
 ```sh
-agentport check-config [--config <path>]
+agentport check-config
+agentport service status
+agentport service restart
+agentport service uninstall
 ```
 
-設定有效時印出 agent 清單（name、runtime、policy、workspace）與 caller 數，exit code 0；設定有誤時把所有錯誤一次列到 stderr（每行 `path: message`），exit code 1。
+`restart` 適用於修改 TOML 或 env 後。`uninstall` 只移除服務定義、安裝目錄與 AgentPort 建立的包裝指令；設定、env、SQLite 與 log 會保留。`--dry-run` 可先檢視服務定義與系統指令：`pnpm service:install -- --dry-run`。
 
-## 設定：caller token
-
-延續上面「設定檔」一節：`callers[].token_env` 只是變數名稱，實際值要另外從環境變數餵進來，`agentport.toml` 本身不放 token。用一份獨立的 env 檔（`KEY=VALUE`，一行一個 `token_env`）：
-
-```sh
-install -d -m 700 ~/.config/agentport
-install -m 600 deploy/agentport.env.example ~/.config/agentport/agentport.env
-# 編輯 ~/.config/agentport/agentport.env，把 change-me 換成真實 token
-```
-
-兩個平台餵法不同，但都指向同一份 `~/.config/agentport/agentport.env`：macOS 的 LaunchAgent 沒有原生的 env-file 機制，所以 plist 用 Node 24+ 內建的 [`--env-file`](https://nodejs.org/api/cli.html#--env-fileconfig)（支援 `#` 註解與加引號的值；指到的檔案不存在時 Node 會直接失敗結束，不是靜默略過）；Linux 的 systemd unit 用原生的 `EnvironmentFile=`（見下方 unit 範本），不假手 Node。
-
-## 啟動
-
-部署範本在 `deploy/`，兩邊都是佔位符範本，不能直接放進服務管理器的目錄，要先把 `__NODE__`、`__AGENTPORT_DIR__`、`__HOME__`、`__USER__` 換成實際值再 render 出去。
-
-### macOS（LaunchAgent）
-
-```sh
-NODE=$(command -v node)
-AGENTPORT_DIR=/path/to/AgentPortV2   # 這個 repo 的絕對路徑
-sed -e "s#__NODE__#$NODE#g" \
-    -e "s#__AGENTPORT_DIR__#$AGENTPORT_DIR#g" \
-    -e "s#__HOME__#$HOME#g" \
-    -e "s#__USER__#$USER#g" \
-    deploy/macos/com.agentport.serve.plist > ~/Library/LaunchAgents/com.agentport.serve.plist
-
-mkdir -p ~/Library/Logs/agentport
-plutil -lint ~/Library/LaunchAgents/com.agentport.serve.plist   # 確認 render 沒壞
-
-launchctl bootstrap gui/$(id -u) ~/Library/LaunchAgents/com.agentport.serve.plist
-launchctl kickstart -k gui/$(id -u)/com.agentport.serve
-```
-
-停止：`launchctl bootout gui/$(id -u)/com.agentport.serve`。log 在 `~/Library/Logs/agentport/serve.out.log` 與 `serve.err.log`。改了 `agentport.toml` 或 `agentport.env` 之後用 `launchctl kickstart -k` 重啟生效。
-
-Claude Code 的 login Keychain 查詢依賴 `USER` 環境變數（見 `.scratch/agentport-v2/issues/01-research-claude-headless.md`），plist 的 `EnvironmentVariables` 已經帶了 `HOME`/`USER`/`PATH`，不要從 `EnvironmentVariables` 拿掉。
-
-`gui/<uid>` 的 LaunchAgent 掛在使用者的 GUI session 下：重開機後要等這個使用者登入（不必開啟任何 App，登入畫面過去即可）才會啟動，Keychain 本身也要登入解鎖後才能被查詢。要無人值守重開機也自動起服務，得在「系統設定 → 使用者與群組」開這個帳號的自動登入。
-
-### Linux（systemd --user）
-
-```sh
-NODE=$(command -v node)
-AGENTPORT_DIR=/path/to/AgentPortV2
-mkdir -p ~/.config/systemd/user
-sed -e "s#__NODE__#$NODE#g" \
-    -e "s#__AGENTPORT_DIR__#$AGENTPORT_DIR#g" \
-    deploy/linux/agentport.service > ~/.config/systemd/user/agentport.service
-
-systemctl --user daemon-reload
-systemctl --user enable --now agentport
-```
-
-沒有登入 session 時要開機自動起（不是登入後才起），另外跑一次 `loginctl enable-linger $USER`。停止：`systemctl --user stop agentport`。log：`journalctl --user -u agentport`。Codex 的 ChatGPT 登入憑證在 Linux 是純檔案 `~/.codex/auth.json`（見 `.scratch/agentport-v2/issues/02-research-codex-exec.md`），Claude 訂閱憑證則是 `~/.claude/.credentials.json`，兩者都跟著 `HOME` 找，不需要額外設定。改了 `agentport.toml` 或 `agentport.env` 之後 `systemctl --user restart agentport`。
-
-Unit 用 `Restart=always`（不是 `on-failure`），跟 macOS 範本的 `KeepAlive=true`（任何結束都重啟，包含乾淨的 0 結束）一致，兩邊行為對齊，不用分別記兩種重啟語意。
-
-`PATH` 只補了 `~/.local/bin` 與常見系統路徑；如果 `claude` / `codex` 是用 nvm 或其他版本管理工具裝的、不在這幾條路徑下，不要在這裡加更多 PATH 猜測，改用設定檔 `[runtimes.claude]` / `[runtimes.codex]` 的 `command` 指定絕對路徑（`command -v claude` 查出來的那條），這樣不管 `PATH` 有沒有找到都能啟動。
+macOS 以登入使用者的 LaunchAgent 執行，因此重開機後要等該使用者登入且 Keychain 解鎖。Linux 採 systemd user unit；**Linux 路徑尚未經實機驗收**，未登入時要在自行確認影響後執行 `loginctl enable-linger $USER`。
 
 ## 遠端連入
 

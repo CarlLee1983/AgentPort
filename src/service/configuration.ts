@@ -48,6 +48,16 @@ export type PrepareConfigurationResult =
       envPermissionTightened: boolean;
     };
 
+/** Load a service config with the caller tokens kept in its sibling env file. */
+export async function loadServiceConfig(
+  configPath: string,
+  env: Env,
+): Promise<ReturnType<typeof loadConfig>> {
+  const envPath = join(dirname(configPath), ENV_FILE_NAME);
+  const serviceEnv = await readEnvironmentFile(envPath);
+  return loadConfig(configPath, { ...env, ...serviceEnv.values });
+}
+
 /**
  * 將 service install 所需的設定準備成可驗證狀態。此模組不輸出任何訊息，讓
  * CLI 決定如何顯示骨架路徑、驗證錯誤與只顯示一次的新 token。

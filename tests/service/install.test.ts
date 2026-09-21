@@ -6,6 +6,7 @@ import {
   mkdir,
   readdir,
   readFile,
+  readlink,
   rename,
   rm,
   stat,
@@ -17,6 +18,7 @@ import { dirname, join, relative } from "node:path";
 import { afterEach, describe, expect, it } from "vitest";
 
 import {
+  createProcessServiceDependencies,
   runService,
   type ServiceDependencies,
 } from "../../src/service/index.js";
@@ -255,6 +257,80 @@ describe("service install --dry-run (macOS)", () => {
       expect(output.join("\n")).toContain("usage: agentport service install");
     },
   );
+});
+
+describe("installed program copy", () => {
+  it("會解開 package 內的 symlink，使安裝目錄不依賴暫存 package", async () => {
+    const home = await makeTempDir();
+    const configPath = await validConfig(home);
+    const source = await makeProgramRoot(home, "current");
+    const externalTarget = join(home, "external.txt");
+    await writeFile(externalTarget, "external", "utf8");
+    await symlink(
+      join(source, "nested", "kept.txt"),
+      join(source, "linked.txt"),
+    );
+    await symlink(
+      join(source, "nested", "kept.txt"),
+      join(source, "nested", "absolute-link.txt"),
+    );
+    await symlink("kept.txt", join(source, "nested", "relative-link.txt"));
+    await symlink(externalTarget, join(source, "external-link.txt"));
+    const processDependencies = createProcessServiceDependencies();
+
+    const exitCode = await runService(["install", "--config", configPath], {
+      ...processDependencies,
+      platform: "darwin",
+      home,
+      user: "agentport-test",
+      uid: 501,
+      nodePath: process.execPath,
+      programRoot: source,
+      env: baseEnv({ HOME: home, PATH: home }),
+      runCommand: () =>
+        Promise.resolve({ exitCode: 0, stdout: "", stderr: "" }),
+      probePort: () => Promise.resolve(true),
+      writeStdout: () => {},
+      writeStderr: () => {},
+    });
+
+    expect(exitCode).toBe(0);
+    expect(
+      await readlink(join(home, ".local/share/agentport/app/linked.txt")),
+    ).toBe("nested/kept.txt");
+    expect(
+      await readlink(
+        join(home, ".local/share/agentport/app/nested/absolute-link.txt"),
+      ),
+    ).toBe("kept.txt");
+    expect(
+      await readlink(
+        join(home, ".local/share/agentport/app/external-link.txt"),
+      ),
+    ).toBe(externalTarget);
+    await rm(source, { recursive: true, force: true });
+    await expect(
+      readFile(join(home, ".local/share/agentport/app/linked.txt"), "utf8"),
+    ).resolves.toBe("kept");
+    await expect(
+      readFile(
+        join(home, ".local/share/agentport/app/nested/absolute-link.txt"),
+        "utf8",
+      ),
+    ).resolves.toBe("kept");
+    await expect(
+      readFile(
+        join(home, ".local/share/agentport/app/nested/relative-link.txt"),
+        "utf8",
+      ),
+    ).resolves.toBe("kept");
+    await expect(
+      readFile(
+        join(home, ".local/share/agentport/app/external-link.txt"),
+        "utf8",
+      ),
+    ).resolves.toBe("external");
+  });
 });
 
 describe("service install (macOS)", () => {
@@ -958,6 +1034,40 @@ describe("service status、restart 與 uninstall（macOS）", () => {
       join(home, ".local/share/agentport/app"),
     );
     expect(output.join("\n")).toContain(process.execPath);
+  });
+
+  it("status 從服務的 env 檔讀 caller token，而不要求操作者 shell 另行設定", async () => {
+    const home = await makeTempDir();
+    const source = await makeProgramRoot(home, "v1");
+    const configPath = await validConfigWithCallers(
+      home,
+      '[[callers]]\nname = "default"\ntoken_env = "AGENTPORT_TOKEN_DEFAULT"\n',
+    );
+    await runService(
+      ["install", "--config", configPath],
+      serviceDependencies(home, {
+        programRoot: source,
+        nodePath: process.execPath,
+      }),
+    );
+
+    const output: string[] = [];
+    const exitCode = await runService(
+      ["status"],
+      serviceDependencies(home, {
+        runCommand: () =>
+          Promise.resolve({
+            exitCode: 0,
+            stdout: "state = running\npid = 4321",
+            stderr: "",
+          }),
+        writeStdout: (line) => output.push(line),
+        writeStderr: (line) => output.push(line),
+      }),
+    );
+
+    expect(exitCode, output.join("\n")).toBe(0);
+    expect(output.join("\n")).toContain("127.0.0.1:3333（可連）");
   });
 
   it("status 的 node 已失效時提示重跑 install、附上 err log 尾端並以非零結束", async () => {

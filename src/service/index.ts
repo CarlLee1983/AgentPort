@@ -5,18 +5,21 @@ import {
   cp,
   lstat,
   mkdir,
+  readdir,
   readFile,
+  readlink,
   rename,
   rm,
+  symlink,
+  unlink,
   writeFile as writeFileOnDisk,
 } from "node:fs/promises";
 import { createConnection } from "node:net";
-import { dirname, join, relative, resolve } from "node:path";
+import { dirname, isAbsolute, join, relative, resolve } from "node:path";
 
-import { loadConfig } from "../config/load.js";
 import { resolveConfigPath, type Env } from "../config/paths.js";
 import { parseListen } from "../http/listen.js";
-import { prepareConfiguration } from "./configuration.js";
+import { loadServiceConfig, prepareConfiguration } from "./configuration.js";
 import {
   assertWrapperCanBeInstalled,
   installWrapper,
@@ -81,8 +84,7 @@ export function createProcessServiceDependencies(): ServiceDependencies {
       });
     },
     probePort: probeTcpPort,
-    copyDirectory: (source, destination) =>
-      cp(source, destination, { recursive: true, force: true }),
+    copyDirectory: copyProgramDirectory,
     writeFile: (path, contents) => writeFileOnDisk(path, contents, "utf8"),
     moveDirectory: (source, destination) => rename(source, destination),
     removeDirectory: (path) => rm(path, { recursive: true, force: true }),
@@ -99,6 +101,55 @@ export function createProcessServiceDependencies(): ServiceDependencies {
       console.error(line);
     },
   };
+}
+
+/**
+ * pnpm deploy 的 node_modules 以指向 package 內 `.pnpm` 的絕對 symlink 組成。
+ * 程式安裝會把 package 從暫存目錄複製到固定路徑；保留那些舊絕對路徑會在暫存
+ * 清理後失效。因此只把目標仍在 source 目錄裡的 symlink 改指向新副本，外部連結
+ * 則維持原樣，避免擴張服務安裝器的複製範圍。
+ */
+async function copyProgramDirectory(
+  source: string,
+  destination: string,
+): Promise<void> {
+  await cp(source, destination, { recursive: true, force: true });
+  await rebaseInternalSymlinks(resolve(source), resolve(destination));
+}
+
+async function rebaseInternalSymlinks(
+  source: string,
+  destination: string,
+  rootDestination = destination,
+): Promise<void> {
+  const entries = await readdir(destination, { withFileTypes: true });
+  for (const entry of entries) {
+    const destinationPath = join(destination, entry.name);
+    if (entry.isDirectory()) {
+      await rebaseInternalSymlinks(source, destinationPath, rootDestination);
+      continue;
+    }
+    if (!entry.isSymbolicLink()) continue;
+
+    const target = await readlink(destinationPath);
+    const resolvedTarget = isAbsolute(target)
+      ? target
+      : resolve(dirname(destinationPath), target);
+    const sourceRelative = relative(source, resolvedTarget);
+    if (
+      sourceRelative === "" ||
+      sourceRelative.startsWith("..") ||
+      isAbsolute(sourceRelative)
+    ) {
+      continue;
+    }
+
+    await unlink(destinationPath);
+    await symlink(
+      relative(dirname(destinationPath), join(rootDestination, sourceRelative)),
+      destinationPath,
+    );
+  }
 }
 
 /**
@@ -566,7 +617,7 @@ async function runLinuxServiceCommand(
     return uninstallLinuxService({ dependencies, unitPath, installed });
   }
   const configPath = resolve(suppliedConfigPath ?? installed.configPath);
-  const loaded = loadConfig(configPath, dependencies.env);
+  const loaded = await loadServiceConfig(configPath, dependencies.env);
   if (command === "restart") {
     if (!loaded.ok) {
       reportConfigErrors(loaded.errors, dependencies);
@@ -817,7 +868,7 @@ async function runMacosServiceCommand(
   }
 
   const configPath = resolve(suppliedConfigPath ?? installed.configPath);
-  const loaded = loadConfig(configPath, dependencies.env);
+  const loaded = await loadServiceConfig(configPath, dependencies.env);
 
   if (command === "restart") {
     if (!loaded.ok) {

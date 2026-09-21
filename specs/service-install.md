@@ -81,6 +81,7 @@ related: agentport-v2.md（部署與憑證）
 - 新增 CLI 子命令群 `service`：`install`、`uninstall`、`status`、`restart`。`install` 支援 `--dry-run` 與既有的 `--config`。其他平台（非 darwin / linux）一律報錯、結束碼非零。
 - 打包不在子命令內：repo 提供 package 腳本 `service:install`，依序 build → `pnpm deploy --legacy --prod` 到暫存目錄 → 以打包出的那份程式執行 `service install`。子命令本身不依賴 pnpm 或 repo，只負責「把目前執行中的這份程式裝成服務」。
 - package manifest 補上只發佈建置產物的檔案清單；實測發現缺這一項時 `pnpm deploy` 只帶到 bin 指向的單一檔案（建置產物被 gitignore 排除），打包出的程式無法執行。實測 `pnpm deploy --legacy --prod` 產出約 47 MB，better-sqlite3 native 模組可在新位置載入。`--legacy` 是 pnpm 10 起對非 injected workspace 的要求。
+- 建置票 07 實作時定案：`pnpm service:install` 先以 frozen lockfile 補齊 repo 的建置依賴，再 build、deploy、執行打包 CLI；這讓 pnpm 將前一次 production deploy 留下的 production-only `node_modules` 還原為可建置狀態。`pnpm deploy` 在 node_modules 內使用絕對 symlink 指回暫存 package；服務安裝器複製程式時會把 source 內部的 symlink 改為新安裝目錄內的相對連結，避免暫存目錄清理後相依失效，同時不跟隨外部連結。
 
 ### 安裝目錄與更新
 

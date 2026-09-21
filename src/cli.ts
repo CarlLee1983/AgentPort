@@ -13,6 +13,7 @@ import {
   createProcessServiceDependencies,
   runService,
 } from "./service/index.js";
+import { loadServiceConfig } from "./service/configuration.js";
 
 const USAGE = "usage: agentport check-config [--config <path>]";
 const STDIO_USAGE = "usage: agentport stdio [--config <path>]";
@@ -95,13 +96,22 @@ function createAppOrReport(
   }
 }
 
-function runCheckConfig(args: string[]): number {
-  const outcome = loadConfigOrReport(args, USAGE);
-  if (!outcome.ok) {
-    return outcome.exitCode;
+async function runCheckConfig(args: string[]): Promise<number> {
+  const parsedArgs = parseConfigArgs(args);
+  if (!parsedArgs.ok) {
+    console.error(USAGE);
+    return 2;
+  }
+  const configPath = resolveConfigPath(parsedArgs.configPath, process.env);
+  const result = await loadServiceConfig(configPath, process.env);
+  if (!result.ok) {
+    for (const error of result.errors) {
+      console.error(`${error.path}: ${error.message}`);
+    }
+    return 1;
   }
 
-  const { agents, callers } = outcome.config;
+  const { agents, callers } = result.config;
   console.log("name\truntime\tpolicy\tworkspace");
   for (const agent of agents) {
     console.log(
@@ -220,7 +230,7 @@ export async function main(argv: string[]): Promise<number> {
   const [command, ...rest] = argv;
 
   if (command === "check-config") {
-    return runCheckConfig(rest);
+    return await runCheckConfig(rest);
   }
 
   if (command === "stdio") {

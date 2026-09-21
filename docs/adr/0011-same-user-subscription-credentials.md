@@ -25,4 +25,4 @@ Anthropic 條款（v1 於 2026-09-17 核對，見 ADR-0007 / 0010）將訂閱 OA
 - 服務行為與管理者自己在終端機跑 CLI 一致（hooks、model、`~/.codex/config.toml` 都生效），這是刻意的（spec User Story 12）。
 - 憑證失效（登出、token 過期）表現為 Task `failed{runtime_failed}`，修復方式是管理者在主機上重新登入 CLI，服務不需重啟。
 
-**Falsified if:** Anthropic 條款明確禁止或明確允許以本人訂閱服務本人自有 bot 的部署型態；或 `src/driver/claude/driver.ts` 不再讓子程序繼承服務環境（例如改為清空環境或拒絕 ANTHROPIC_API_KEY）；或 `deploy/macos/com.agentport.serve.plist` / `deploy/linux/agentport.service` 改以專用服務帳號執行；或 `src/app.ts` 的重啟掃描不再把 running 收斂為 interrupted、或 `src/store/sqlite.ts` 不再持有單實例獨佔鎖。
+**Falsified if:** Anthropic 條款明確禁止或明確允許以本人訂閱服務本人自有 bot 的部署型態；或 `src/driver/claude/driver.ts` 不再讓子程序繼承服務環境（例如改為清空環境或拒絕 ANTHROPIC_API_KEY）；或 `src/service/index.ts` 的服務定義渲染模組改以專用服務帳號執行；或 `src/app.ts` 的重啟掃描不再把 running 收斂為 interrupted、或 `src/store/sqlite.ts` 不再持有單實例獨佔鎖。
