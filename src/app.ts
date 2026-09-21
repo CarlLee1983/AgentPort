@@ -14,6 +14,8 @@ export interface CreateAppOptions {
   caller: string;
   /** 僅供測試：覆寫 ADR-0005 容量政策的上限，不必真的塞出 8 MiB payload。 */
   capacity?: CapacityPolicy;
+  /** 僅供測試：覆寫 `config.server.turn_timeout_seconds` 換算出的毫秒數。 */
+  turnTimeoutMs?: number;
 }
 
 export interface App {
@@ -32,6 +34,9 @@ export function createApp(options: CreateAppOptions): App {
     drivers: options.drivers,
     config: options.config,
     notifier,
+    ...(options.turnTimeoutMs !== undefined
+      ? { turnTimeoutMs: options.turnTimeoutMs }
+      : {}),
   });
   const serverFactory = createServerFactory({
     config: options.config,
@@ -46,6 +51,8 @@ export function createApp(options: CreateAppOptions): App {
     serverFactory,
     store,
     close() {
+      // 先把還在跑的 Turn 都 kill 掉，避免留下孤兒子程序，再關 DB 連線。
+      scheduler.shutdown();
       store.close();
     },
   };

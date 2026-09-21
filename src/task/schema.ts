@@ -78,3 +78,18 @@ export type GitCommit = z.infer<typeof GitCommitSchema>;
 export type Hints = z.infer<typeof HintsSchema>;
 export type TaskRecord = z.infer<typeof TaskRecordSchema>;
 export type TaskSummary = z.infer<typeof TaskSummarySchema>;
+
+const TERMINAL_TASK_STATES: ReadonlySet<TaskState> = new Set([
+  "completed",
+  "failed",
+  "cancelled",
+]);
+
+/**
+ * `completed` / `failed` / `cancelled` 是終態，`queued` / `running` 不是。
+ * `get_task` 的長輪詢、`cancel_task` 的終態判斷、scheduler 的 `cancel()` 都
+ * 共用這個判斷，避免各處各自維護一份 state 集合。
+ */
+export function isTerminalState(state: TaskState): boolean {
+  return TERMINAL_TASK_STATES.has(state);
+}

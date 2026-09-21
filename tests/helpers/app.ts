@@ -36,7 +36,11 @@ export interface TestApp {
  */
 export async function createTestApp(
   drivers: DriverRegistry,
-  options: { extraToml?: string; capacity?: CapacityPolicy } = {},
+  options: {
+    extraToml?: string;
+    capacity?: CapacityPolicy;
+    turnTimeoutMs?: number;
+  } = {},
 ): Promise<TestApp> {
   const dir = await makeTempDir();
   const workspace = await makeWorkspace(dir, "workspace");
@@ -59,6 +63,7 @@ export async function createTestApp(
     drivers,
     { dir, dbPath, logDir, workspace },
     options.capacity,
+    options.turnTimeoutMs,
   );
 }
 
@@ -108,12 +113,14 @@ async function createTestAppFromConfig(
   drivers: DriverRegistry,
   paths: TestAppPaths,
   capacity?: CapacityPolicy,
+  turnTimeoutMs?: number,
 ): Promise<TestApp> {
   const app = createApp({
     config,
     drivers,
     caller: "local",
     ...(capacity ? { capacity } : {}),
+    ...(turnTimeoutMs !== undefined ? { turnTimeoutMs } : {}),
   });
 
   const [clientTransport, serverTransport] =

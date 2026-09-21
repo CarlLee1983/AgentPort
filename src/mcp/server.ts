@@ -5,6 +5,7 @@ import type { Scheduler } from "../scheduler.js";
 import type { TaskStore } from "../store/sqlite.js";
 import type { TaskNotifier } from "../task/notifier.js";
 import type { CapacityPolicy } from "./capacity.js";
+import { registerCancelTask } from "./tools/cancel-task.js";
 import { registerFollowUp } from "./tools/follow-up.js";
 import { registerGetTask } from "./tools/get-task.js";
 import { registerListAgents } from "./tools/list-agents.js";
@@ -44,6 +45,12 @@ export function createServerFactory(
       capacity: deps.capacity,
     });
     registerListTasks(server, { store: deps.store, capacity: deps.capacity });
+    registerCancelTask(server, {
+      store: deps.store,
+      scheduler: deps.scheduler,
+      notifier: deps.notifier,
+      config: deps.config,
+    });
     return server;
   };
 }

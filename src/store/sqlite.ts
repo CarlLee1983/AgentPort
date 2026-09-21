@@ -42,6 +42,21 @@ export interface MarkFailedInput {
   hints?: Record<string, unknown> | undefined;
 }
 
+export interface CancelQueuedInput {
+  code: TaskErrorCode;
+  message: string;
+}
+
+export interface MarkCancelledInput {
+  final_text: string;
+  usage: Record<string, number> | null;
+  diff_stat?: string | null | undefined;
+  commits?: GitCommit[] | null | undefined;
+  hints?: Record<string, unknown> | undefined;
+  code: "cancelled" | "timeout";
+  message: string;
+}
+
 export interface ListTasksInput {
   agent?: string | undefined;
   context_id?: string | undefined;
@@ -68,6 +83,10 @@ export interface TaskStore {
   setRuntimeSession(contextId: string, runtimeSessionId: string): void;
   markCompleted(taskId: string, input: MarkCompletedInput): void;
   markFailed(taskId: string, input: MarkFailedInput): void;
+  /** 只在 Task 還是 `queued` 時才生效（防跟 worker 取出的競速），回傳是否真的取消了。 */
+  cancelQueued(taskId: string, input: CancelQueuedInput): boolean;
+  /** 把一個 `running` Task 標成 `cancelled`：保留已收到的文字與 git 摘要。 */
+  markCancelled(taskId: string, input: MarkCancelledInput): void;
   close(): void;
 }
 
@@ -164,6 +183,15 @@ export function openTaskStore(dbPath: string): TaskStore {
   );
   const updateMarkFailed = db.prepare(
     `UPDATE tasks SET state = 'failed', finished_at = @finished_at, error_code = @error_code, error_message = @error_message, hints = @hints WHERE task_id = @task_id`,
+  );
+  const updateCancelQueued = db.prepare(
+    `UPDATE tasks SET state = 'cancelled', finished_at = @finished_at, error_code = @error_code, error_message = @error_message WHERE task_id = @task_id AND state = 'queued'`,
+  );
+  // `AND state = 'running'` 是守衛，不是流程控制：呼叫端已經先確認過 Task
+  // 是 running 才會走到這裡，這裡只是防止萬一狀態剛好被別的路徑搶先改掉時
+  // 誤把已經是別種終態的 Task 蓋回 cancelled。
+  const updateMarkCancelled = db.prepare(
+    `UPDATE tasks SET state = 'cancelled', finished_at = @finished_at, final_text = @final_text, diff_stat = @diff_stat, commits = @commits, usage = @usage, hints = @hints, error_code = @error_code, error_message = @error_message WHERE task_id = @task_id AND state = 'running'`,
   );
 
   function rowToTask(row: TaskRow): TaskRecord {
@@ -349,6 +377,30 @@ export function openTaskStore(dbPath: string): TaskStore {
         error_code: input.code,
         error_message: input.message,
         hints: input.hints ? JSON.stringify(input.hints) : null,
+      });
+    },
+
+    cancelQueued(taskId, input) {
+      const info = updateCancelQueued.run({
+        task_id: taskId,
+        finished_at: new Date().toISOString(),
+        error_code: input.code,
+        error_message: input.message,
+      });
+      return info.changes === 1;
+    },
+
+    markCancelled(taskId, input) {
+      updateMarkCancelled.run({
+        task_id: taskId,
+        finished_at: new Date().toISOString(),
+        final_text: input.final_text,
+        diff_stat: input.diff_stat ?? null,
+        commits: input.commits ? JSON.stringify(input.commits) : null,
+        usage: input.usage ? JSON.stringify(input.usage) : null,
+        hints: input.hints ? JSON.stringify(input.hints) : null,
+        error_code: input.code,
+        error_message: input.message,
       });
     },
 

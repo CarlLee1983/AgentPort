@@ -12,6 +12,7 @@ AgentPort 將目標主機上的 AI Coding Runtime（Claude Code、Codex）以 Lo
 [server]
 listen = "127.0.0.1:3333"
 long_poll_max_seconds = 30       # 上限 55
+turn_timeout_seconds = 3600      # 單一 Turn 最長秒數，逾時視同取消（error.code = timeout）
 
 [storage]
 db_path = "~/.local/state/agentport/agentport.sqlite"

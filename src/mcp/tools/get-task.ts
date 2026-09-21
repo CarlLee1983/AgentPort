@@ -4,11 +4,9 @@ import { z } from "zod";
 import type { Config } from "../../config/schema.js";
 import type { TaskStore } from "../../store/sqlite.js";
 import type { TaskNotifier } from "../../task/notifier.js";
-import { TaskRecordSchema } from "../../task/schema.js";
+import { isTerminalState, TaskRecordSchema } from "../../task/schema.js";
 import type { CapacityPolicy } from "../capacity.js";
 import { result, toolError } from "../result.js";
-
-const TERMINAL_STATES = new Set(["completed", "failed", "cancelled"]);
 
 const InputSchema = z.object({
   task_id: z.string(),
@@ -47,7 +45,7 @@ export function registerGetTask(server: McpServer, deps: GetTaskDeps): void {
         return toolError("not_found", `找不到 Task：${task_id}`);
       }
 
-      if (!wait_seconds || TERMINAL_STATES.has(task.state)) {
+      if (!wait_seconds || isTerminalState(task.state)) {
         return result(deps.capacity.truncateFinalText(task));
       }
 

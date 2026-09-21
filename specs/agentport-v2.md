@@ -83,6 +83,7 @@ TOML，尋找順序 `--config` → `$AGENTPORT_CONFIG` → `~/.config/agentport/
 [server]
 listen = "127.0.0.1:3333"
 long_poll_max_seconds = 30       # 上限 55
+turn_timeout_seconds = 3600      # 單一 Turn 最長秒數
 
 [storage]
 db_path = "~/.local/state/agentport/agentport.sqlite"
@@ -130,7 +131,7 @@ token_env = "AGENTPORT_TOKEN_GROK"
 | queued | cancelled | `cancel_task` |
 | running | completed | Driver `completed`，之後服務層跑 git 摘要；摘要失敗仍 completed，`diff_stat` / `commits` 為 null 並附 `hints.git` |
 | running | failed | Driver `failed`；resume 失敗 `error.code = session_unresumable`；服務重啟時全部 running → `failed{interrupted}` |
-| running | cancelled | 【假設，票 10】見下 |
+| running | cancelled | `cancel_task` 或 Turn 逾時；見「取消與逾時」 |
 
 - Context：服務發 ULID，`submit_task` 時建立並回傳，綁定一個 agent；`runtime_session_id` 存於 Context，第一個 Task `started` 事件後回填。Context 內嚴格線性：前一個 Task 未完成的 follow-up 排在同 agent 佇列後。前一個 failed / cancelled 仍可 follow-up，有 session id 就 resume，否則起新 session。
 - 佇列：每 agent 一條 FIFO，不同 agent 並行，無上限。重啟後 queued 自動續跑（偏離 v1 ADR-0002 第二段，隨票 08 修訂）。中斷的 Task 不從 JSONL 回填 partial。
@@ -165,11 +166,19 @@ Turn 開始時記下 HEAD（unborn 視為空樹）；Turn `completed` 後在 wor
 - HTTP：`[server] allowed_hosts[]`，`listen` 非 loopback 時必填（啟動驗證），Host / Origin 只放行清單內主機；loopback 用 SDK 內建驗證。401 帶 `WWW-Authenticate: Bearer`，Host/Origin 不合回 403。`AuthInfo.token` 不保存原始 token。caller 名稱經 `AuthInfo.clientId` 進 server factory。
 - ADR-0005 已複製到 `docs/adr/`。
 
-### 取消與逾時【假設，票 10 未結案】
+### 取消與逾時【假設，地圖票 10 未結案；建置票 10 已依此實作】
 
 - `cancel_task` 對 running Task：對子程序 process group 送 SIGTERM，5 秒後 SIGKILL；Task → `cancelled`，保留已收到的 `message` 文字為 `final_text`、仍跑 git 摘要。
 - Runtime Session 被殺後是否可 resume 由票 09 / 10 實測決定；預設視為可 resume（Claude session 檔在磁碟、Codex thread 在 `~/.codex`），resume 失敗走 `session_unresumable`。
 - Turn 最長時間：設定檔 `[server] turn_timeout_seconds`，預設 3600；逾時視同取消但 `error.code = timeout`。
+
+建置票 10 實作時定案：
+- 子程序以 `detached: true` 啟動成為自己的 process group leader，取消時對 `-pid` 送訊號；寬限 5 秒為常數，不進設定檔。子程序關閉後不再送 SIGKILL（避免 pgid 被重用）。副作用是服務收到 SIGINT 時子程序不會連帶收到，因此 `app.close()` 會先對所有執行中 Turn 呼叫 kill；DB 狀態留給重啟掃描（建置票 11）處理。
+- `cancelled` 的 Task 一律帶 `error`：caller 取消為 `{ code: "cancelled" }`，逾時為 `{ code: "timeout" }`。queued 取消以 `WHERE state = 'queued'` 條件更新，立即生效、worker 不會再取出。
+- 取消 / 逾時一旦對 running Task 被接受，終態就是 `cancelled`，即使 runtime 之後送出 `completed` 或 `failed`、或取消落在 git 摘要收尾期間。`final_text` 取 `completed.final_text`（若已收到），否則為已收到的 `message` 文字以空行串接；`usage` 同理。
+- `cancel_task` 對 running Task 會等到終態或 `long_poll_max_seconds` 為止，回傳當下 state（通常為 `cancelled`，kill 尚未完成時可能仍是 `running`，不算錯）。對 `completed` / `failed` / `cancelled` 回 `invalid_state`。state 為 running 但服務內沒有對應 Turn（前次服務異常結束的殘留）時直接標為 `cancelled`。
+- 逾時從 Task 進入 running 起算（含記錄 HEAD 的時間）。`turn_timeout_seconds` 為 ≥ 1 的整數。
+- 取消後 follow-up 實測（2026-09-21，`policy = full`，Turn 中執行 `sleep 60` 時取消）：Claude 取消約 0.7 秒完成，follow-up `--resume` 成功且記得取消前的內容（2/2 次）。Codex 取消約 5 毫秒完成，follow-up 結果不穩定：3 次中 2 次 `completed` 但不記得、1 次 `failed{session_unresumable}`，沒有一次記得。推測 Codex 在 Turn 結束前未把該輪寫進 thread rollout（未驗證）。服務層不抹平此差異；真 CLI 測試 `tests/mcp/cancel-real-cli.test.ts` 對 Codex 接受兩種結果。
 
 ### 部署與憑證【假設，票 08 未結案】
 
