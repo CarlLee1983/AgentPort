@@ -7,6 +7,7 @@ import type { TaskNotifier } from "../task/notifier.js";
 import { registerFollowUp } from "./tools/follow-up.js";
 import { registerGetTask } from "./tools/get-task.js";
 import { registerListAgents } from "./tools/list-agents.js";
+import { registerListTasks } from "./tools/list-tasks.js";
 import { registerSubmitTask } from "./tools/submit-task.js";
 
 export interface ServerFactoryDeps {
@@ -32,6 +33,7 @@ export function createServerFactory(deps: ServerFactoryDeps): () => McpServer {
       notifier: deps.notifier,
       config: deps.config,
     });
+    registerListTasks(server, { store: deps.store });
     return server;
   };
 }

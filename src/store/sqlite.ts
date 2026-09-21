@@ -9,6 +9,7 @@ import type {
   TaskErrorCode,
   TaskRecord,
   TaskState,
+  TaskSummary,
 } from "../task/schema.js";
 
 export type { TaskRecord, TaskState } from "../task/schema.js";
@@ -41,11 +42,28 @@ export interface MarkFailedInput {
   hints?: Record<string, unknown> | undefined;
 }
 
+export interface ListTasksInput {
+  agent?: string | undefined;
+  context_id?: string | undefined;
+  state?: TaskState | undefined;
+  limit?: number | undefined;
+  cursor?: string | undefined;
+}
+
+export interface ListTasksResult {
+  tasks: TaskSummary[];
+  next_cursor: string | null;
+}
+
+const LIST_TASKS_DEFAULT_LIMIT = 50;
+const LIST_TASKS_MAX_LIMIT = 100;
+
 export interface TaskStore {
   createContext(agent: string): ContextRecord;
   createTask(input: CreateTaskInput): TaskRecord;
   getTask(taskId: string): TaskRecord | undefined;
   getContext(contextId: string): ContextRecord | undefined;
+  listTasks(input: ListTasksInput): ListTasksResult;
   markRunning(taskId: string, rawLogPath: string): void;
   setRuntimeSession(contextId: string, runtimeSessionId: string): void;
   markCompleted(taskId: string, input: MarkCompletedInput): void;
@@ -174,6 +192,31 @@ export function openTaskStore(dbPath: string): TaskStore {
     };
   }
 
+  /** `list_tasks` 摘要：不含 `prompt`、`final_text`、`diff_stat`、`commits`、`usage`。 */
+  function rowToSummary(row: TaskRow): TaskSummary {
+    return {
+      task_id: row.task_id,
+      context_id: row.context_id,
+      agent: row.agent,
+      caller: row.caller,
+      state: row.state,
+      created_at: row.created_at,
+      started_at: row.started_at,
+      finished_at: row.finished_at,
+      hints: row.hints
+        ? (JSON.parse(row.hints) as Record<string, unknown>)
+        : null,
+      error:
+        row.error_code !== null
+          ? {
+              code: row.error_code as TaskErrorCode,
+              message: row.error_message ?? "",
+            }
+          : null,
+      raw_log_path: row.raw_log_path,
+    };
+  }
+
   function rowToContext(row: ContextRow): ContextRecord {
     return {
       context_id: row.context_id,
@@ -223,6 +266,45 @@ export function openTaskStore(dbPath: string): TaskStore {
     getContext(contextId) {
       const row = selectContext.get(contextId) as ContextRow | undefined;
       return row ? rowToContext(row) : undefined;
+    },
+
+    listTasks(input) {
+      const limit = Math.min(
+        input.limit ?? LIST_TASKS_DEFAULT_LIMIT,
+        LIST_TASKS_MAX_LIMIT,
+      );
+      const clauses: string[] = [];
+      const params: Record<string, unknown> = {};
+      if (input.agent !== undefined) {
+        clauses.push("agent = @agent");
+        params.agent = input.agent;
+      }
+      if (input.context_id !== undefined) {
+        clauses.push("context_id = @context_id");
+        params.context_id = input.context_id;
+      }
+      if (input.state !== undefined) {
+        clauses.push("state = @state");
+        params.state = input.state;
+      }
+      if (input.cursor !== undefined) {
+        clauses.push("task_id < @cursor");
+        params.cursor = input.cursor;
+      }
+      const where = clauses.length > 0 ? `WHERE ${clauses.join(" AND ")}` : "";
+      // 多拿一筆判斷是否還有下一頁，取回後丟掉。
+      const rows = db
+        .prepare(
+          `SELECT * FROM tasks ${where} ORDER BY task_id DESC LIMIT @limit`,
+        )
+        .all({ ...params, limit: limit + 1 }) as TaskRow[];
+      const hasMore = rows.length > limit;
+      const page = hasMore ? rows.slice(0, limit) : rows;
+      const lastRow: TaskRow | undefined = page[page.length - 1];
+      return {
+        tasks: page.map(rowToSummary),
+        next_cursor: hasMore && lastRow ? lastRow.task_id : null,
+      };
     },
 
     markRunning(taskId, rawLogPath) {

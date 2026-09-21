@@ -5,6 +5,7 @@ import type { Config } from "../../config/schema.js";
 import type { TaskStore } from "../../store/sqlite.js";
 import type { TaskNotifier } from "../../task/notifier.js";
 import { TaskRecordSchema } from "../../task/schema.js";
+import { truncateFinalText } from "../capacity.js";
 import { result, toolError } from "../result.js";
 
 const TERMINAL_STATES = new Set(["completed", "failed", "cancelled"]);
@@ -43,7 +44,7 @@ export function registerGetTask(server: McpServer, deps: GetTaskDeps): void {
       }
 
       if (!wait_seconds || TERMINAL_STATES.has(task.state)) {
-        return result(task);
+        return result(truncateFinalText(task));
       }
 
       const timeoutMs =
@@ -54,7 +55,7 @@ export function registerGetTask(server: McpServer, deps: GetTaskDeps): void {
       if (!latest) {
         return toolError("not_found", `找不到 Task：${task_id}`);
       }
-      return result(latest);
+      return result(truncateFinalText(latest));
     },
   );
 }
