@@ -4,9 +4,9 @@
 
 **Blocked by:** None (can start immediately)
 
-**Status:** ready-for-agent
+**Status:** done
 
-- [ ] `loadConfig(path, env)` 純函式：尋找順序 `--config` → `$AGENTPORT_CONFIG` → XDG 預設路徑；`~` 展開；相對路徑相對於設定檔目錄
-- [ ] spec 列出的每條驗證規則各有測試：agent name 格式與唯一、workspace 存在且為目錄、同 realpath 只綁一個 agent、runtime / policy 列舉、policy 必填、caller name 唯一、`token_env` 非空且 token 值唯一、`long_poll_max_seconds ≤ 55`、runtime 可執行檔存在（含 `[runtimes.*].command` 覆寫）、`agents[]` 非空
-- [ ] 多個錯誤同時存在時一次全部列出，exit code 非 0
-- [ ] `agentport check-config` 子命令可用；`pnpm check`（format、lint、typecheck、build、test）全綠
+- [x] `loadConfig(path, env)` 純函式：尋找順序 `--config` → `$AGENTPORT_CONFIG` → XDG 預設路徑；`~` 展開；相對路徑相對於設定檔目錄
+- [x] spec 列出的每條驗證規則各有測試：agent name 格式與唯一、workspace 存在且為目錄、同 realpath 只綁一個 agent、runtime / policy 列舉、policy 必填、caller name 唯一、`token_env` 非空且 token 值唯一、`long_poll_max_seconds ≤ 55`、runtime 可執行檔存在（含 `[runtimes.*].command` 覆寫）、`agents[]` 非空
+- [x] 多個錯誤同時存在時一次全部列出，exit code 非 0
+- [x] `agentport check-config` 子命令可用；`pnpm check`（format、lint、typecheck、build、test）全綠

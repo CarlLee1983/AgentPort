@@ -104,6 +104,8 @@ name = "grok"
 token_env = "AGENTPORT_TOKEN_GROK"
 ```
 
+尋找順序的預設路徑尊重 `$XDG_CONFIG_HOME`（未設則 `~/.config`）。未知欄位視為錯誤。`long_poll_max_seconds` 為 1..55 的整數。runtime 可執行檔只檢查有 agent 用到的 runtime；`command` 為裸名（不含 `/`）時走 `PATH` 查找。`HOME` 未設而設定值含 `~` 視為錯誤。（以上四點為票 01 實作時定案）
+
 驗證：agent name 唯一合格式；workspace 存在且為目錄（不要求 git）；同一 realpath 只綁一個 agent；runtime、policy 為列舉值；caller name 唯一、`token_env` 變數非空、token 值唯一；`long_poll_max_seconds ≤ 55`；runtime 可執行檔存在；`agents[]` 非空；HTTP 模式 `callers[]` 非空。全部錯誤一次列出。`~` 展開、相對路徑相對於設定檔目錄。stdio 模式 caller 記為 `local`。不做 `instructions` 欄位、不做 runtime 層 `extra_args`。
 
 ### Runtime Driver（票 04 定案）
