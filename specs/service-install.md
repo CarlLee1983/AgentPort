@@ -85,6 +85,7 @@ related: agentport-v2.md（部署與憑證）
 ### 安裝目錄與更新
 
 - 安裝目錄固定為 `${XDG_DATA_HOME:-~/.local/share}/agentport/app`。install 先把目前程式完整複製到同層的 `app.new`，再停服務、以換名取代 `app`（舊的先移到暫存名再刪除）、載入服務。不保留舊版。
+- 建置票 05 安全定案：安裝目錄一律正規化為絕對路徑（相對 `XDG_DATA_HOME` 視為相對於 `HOME`）。uninstall 只會自動刪除 `HOME` 內與目前預期路徑相同、且從 `HOME` 到 `app` 均不經過 symbolic link 的目錄；任一條件不成立便在 `bootout` 前以非零碼中止，保留所有檔案，避免依受竄改 plist 或路徑重導刪除使用者資料。
 - node 路徑於安裝當下固定為執行 install 的 node 可執行檔絕對路徑，寫進服務定義與包裝指令。不複製 node 本體（會與 native 模組的 ABI 綁死）。
 - 包裝指令為 `~/.local/bin/agentport` 的 POSIX shell 腳本：以固定的 node 路徑執行安裝目錄的 CLI 並轉傳所有參數；內含可辨識的標記行，install / uninstall 只覆寫或刪除帶有此標記的檔案，否則報錯。
 

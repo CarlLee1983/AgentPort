@@ -9,9 +9,10 @@ import {
   rename,
   rm,
   stat,
+  symlink,
   writeFile,
 } from "node:fs/promises";
-import { join, relative } from "node:path";
+import { dirname, join, relative } from "node:path";
 
 import { afterEach, describe, expect, it } from "vitest";
 
@@ -912,5 +913,328 @@ describe("service install (macOS)", () => {
     expect(exitCode).toBe(0);
     expect(await readFile(path, "utf8")).toContain("'/new node'");
     expect(await readFile(path, "utf8")).not.toContain("/old/node");
+  });
+});
+
+describe("service status、restart 與 uninstall（macOS）", () => {
+  async function installForServiceCommand(
+    home: string,
+    nodePath = process.execPath,
+  ): Promise<{ configPath: string; source: string }> {
+    const source = await makeProgramRoot(home, "v1");
+    const configPath = await validConfig(home);
+    await runService(
+      ["install", "--config", configPath],
+      serviceDependencies(home, { programRoot: source, nodePath }),
+    );
+    return { configPath, source };
+  }
+
+  it("status 回報 launchctl 的 running/pid、可連監聽位址、安裝目錄與 node 路徑", async () => {
+    const home = await makeTempDir();
+    await installForServiceCommand(home);
+    const output: string[] = [];
+
+    const exitCode = await runService(
+      ["status"],
+      serviceDependencies(home, {
+        runCommand: (_command, args) => {
+          expect(args).toEqual(["print", "gui/501/com.agentport.serve"]);
+          return Promise.resolve({
+            exitCode: 0,
+            stdout: `gui/501/com.agentport.serve = {\n\tactive count = 1\n\tstate = running\n\tpid = 4321\n}`,
+            stderr: "",
+          });
+        },
+        writeStdout: (line) => output.push(line),
+      }),
+    );
+
+    expect(exitCode).toBe(0);
+    expect(output.join("\n")).toContain("running");
+    expect(output.join("\n")).toContain("4321");
+    expect(output.join("\n")).toContain("127.0.0.1:3333（可連）");
+    expect(output.join("\n")).toContain(
+      join(home, ".local/share/agentport/app"),
+    );
+    expect(output.join("\n")).toContain(process.execPath);
+  });
+
+  it("status 的 node 已失效時提示重跑 install、附上 err log 尾端並以非零結束", async () => {
+    const home = await makeTempDir();
+    await installForServiceCommand(home, "/missing/node");
+    const errLog = join(home, "Library/Logs/agentport/agentport.err.log");
+    await writeFile(errLog, "old line\nlast error\n", "utf8");
+    const output: string[] = [];
+
+    const exitCode = await runService(
+      ["status"],
+      serviceDependencies(home, {
+        runCommand: () =>
+          Promise.resolve({
+            exitCode: 0,
+            stdout: "state = running\npid = 4321",
+            stderr: "",
+          }),
+        writeStdout: (line) => output.push(line),
+        writeStderr: (line) => output.push(line),
+      }),
+    );
+
+    expect(exitCode).toBe(1);
+    expect(output.join("\n")).toContain("node 路徑已失效，請重跑 install");
+    expect(output.join("\n")).toContain("last error");
+  });
+
+  it("status 在設定檔失效時仍回報服務狀態、node 與錯誤 log", async () => {
+    const home = await makeTempDir();
+    const { configPath } = await installForServiceCommand(home);
+    await writeFile(configPath, "[[agents]]\nname = 'bad name'\n", "utf8");
+    const errLog = join(home, "Library/Logs/agentport/agentport.err.log");
+    await writeFile(errLog, "configuration failed\n", "utf8");
+    const output: string[] = [];
+
+    const exitCode = await runService(
+      ["status"],
+      serviceDependencies(home, {
+        runCommand: () =>
+          Promise.resolve({
+            exitCode: 0,
+            stdout: "state = running\npid = 4321",
+            stderr: "",
+          }),
+        writeStdout: (line) => output.push(line),
+        writeStderr: (line) => output.push(line),
+      }),
+    );
+
+    expect(exitCode).toBe(1);
+    expect(output.join("\n")).toContain("服務狀態：running");
+    expect(output.join("\n")).toContain(process.execPath);
+    expect(output.join("\n")).toContain("configuration failed");
+  });
+
+  it("restart 先驗證設定，成功才 kickstart 並等待監聽", async () => {
+    const home = await makeTempDir();
+    await installForServiceCommand(home);
+    const commands: { command: string; args: string[] }[] = [];
+
+    const exitCode = await runService(
+      ["restart"],
+      serviceDependencies(home, {
+        runCommand: (command, args) => {
+          commands.push({ command, args });
+          return Promise.resolve({ exitCode: 0, stdout: "", stderr: "" });
+        },
+      }),
+    );
+
+    expect(exitCode).toBe(0);
+    expect(commands).toEqual([
+      {
+        command: "launchctl",
+        args: ["kickstart", "-k", "gui/501/com.agentport.serve"],
+      },
+    ]);
+  });
+
+  it("restart 驗證失敗時不送出 launchctl", async () => {
+    const home = await makeTempDir();
+    const { configPath } = await installForServiceCommand(home);
+    await writeFile(configPath, "[[agents]]\nname = 'bad name'\n", "utf8");
+    const commands: string[] = [];
+
+    const exitCode = await runService(
+      ["restart"],
+      serviceDependencies(home, {
+        runCommand: (command, args) => {
+          commands.push(`${command} ${args.join(" ")}`);
+          return Promise.resolve({ exitCode: 0, stdout: "", stderr: "" });
+        },
+      }),
+    );
+
+    expect(exitCode).toBe(1);
+    expect(commands).toEqual([]);
+  });
+
+  it("uninstall 移除服務物件但保留設定、env、SQLite 與 log", async () => {
+    const home = await makeTempDir();
+    const { configPath } = await installForServiceCommand(home);
+    const envPath = join(home, "agentport.env");
+    const dbPath = join(home, "agentport.sqlite");
+    const logPath = join(home, "Library/Logs/agentport/agentport.err.log");
+    await Promise.all([
+      writeFile(envPath, "TOKEN=value\n", "utf8"),
+      writeFile(dbPath, "sqlite", "utf8"),
+      writeFile(logPath, "log", "utf8"),
+    ]);
+    const commands: { command: string; args: string[] }[] = [];
+
+    const exitCode = await runService(
+      ["uninstall", "--config", configPath],
+      serviceDependencies(home, {
+        runCommand: (command, args) => {
+          commands.push({ command, args });
+          return Promise.resolve({ exitCode: 0, stdout: "", stderr: "" });
+        },
+      }),
+    );
+
+    expect(exitCode).toBe(0);
+    expect(commands).toEqual([
+      {
+        command: "launchctl",
+        args: [
+          "bootout",
+          "gui/501",
+          join(home, "Library/LaunchAgents/com.agentport.serve.plist"),
+        ],
+      },
+    ]);
+    expect(
+      existsSync(join(home, "Library/LaunchAgents/com.agentport.serve.plist")),
+    ).toBe(false);
+    expect(existsSync(join(home, ".local/share/agentport/app"))).toBe(false);
+    expect(existsSync(wrapperPath(home))).toBe(false);
+    expect(await readFile(configPath, "utf8")).toContain("stationhub");
+    expect(await readFile(envPath, "utf8")).toContain("TOKEN=value");
+    expect(await readFile(dbPath, "utf8")).toBe("sqlite");
+    expect(await readFile(logPath, "utf8")).toBe("log");
+  });
+
+  it("未安裝時 status 與 uninstall 成功回報未安裝，而 restart 失敗", async () => {
+    const home = await makeTempDir();
+    const output: string[] = [];
+
+    await expect(
+      runService(
+        ["status"],
+        serviceDependencies(home, { writeStdout: (line) => output.push(line) }),
+      ),
+    ).resolves.toBe(0);
+    await expect(
+      runService(
+        ["uninstall"],
+        serviceDependencies(home, { writeStdout: (line) => output.push(line) }),
+      ),
+    ).resolves.toBe(0);
+    await expect(
+      runService(
+        ["restart"],
+        serviceDependencies(home, { writeStderr: (line) => output.push(line) }),
+      ),
+    ).resolves.toBe(1);
+    expect(output.join("\n")).toContain("未安裝");
+  });
+
+  it("uninstall 不刪除沒有標記的同名包裝指令並提示", async () => {
+    const home = await makeTempDir();
+    const { configPath } = await installForServiceCommand(home);
+    const path = wrapperPath(home);
+    const contents = "#!/bin/sh\necho mine\n";
+    await writeFile(path, contents, "utf8");
+    const output: string[] = [];
+
+    const exitCode = await runService(
+      ["uninstall", "--config", configPath],
+      serviceDependencies(home, { writeStdout: (line) => output.push(line) }),
+    );
+
+    expect(exitCode).toBe(0);
+    expect(await readFile(path, "utf8")).toBe(contents);
+    expect(output.join("\n")).toContain("不刪除");
+  });
+
+  it("uninstall 拒絕依被竄改的 plist 刪除非預期目錄", async () => {
+    const home = await makeTempDir();
+    const { configPath } = await installForServiceCommand(home);
+    const foreignDirectory = join(home, "foreign-app");
+    const foreignCli = join(foreignDirectory, "dist", "cli.js");
+    const plistPath = join(
+      home,
+      "Library/LaunchAgents/com.agentport.serve.plist",
+    );
+    await mkdir(join(foreignDirectory, "dist"), { recursive: true });
+    await writeFile(foreignCli, "do not delete", "utf8");
+    const plist = await readFile(plistPath, "utf8");
+    await writeFile(
+      plistPath,
+      plist.replace(
+        join(home, ".local/share/agentport/app/dist/cli.js"),
+        foreignCli,
+      ),
+      "utf8",
+    );
+    const commands: string[] = [];
+
+    const exitCode = await runService(
+      ["uninstall", "--config", configPath],
+      serviceDependencies(home, {
+        runCommand: (command, args) => {
+          commands.push(`${command} ${args.join(" ")}`);
+          return Promise.resolve({ exitCode: 0, stdout: "", stderr: "" });
+        },
+      }),
+    );
+
+    expect(exitCode).toBe(1);
+    expect(commands).toEqual([]);
+    expect(await readFile(foreignCli, "utf8")).toBe("do not delete");
+    expect(existsSync(plistPath)).toBe(true);
+  });
+
+  it("uninstall 拒絕穿過 AgentPort 安裝根目錄的 symbolic link", async () => {
+    const home = await makeTempDir();
+    const { configPath } = await installForServiceCommand(home);
+    const agentportDirectory = join(home, ".local/share/agentport");
+    const foreignDirectory = join(home, "foreign-agentport");
+    const foreignApp = join(foreignDirectory, "app", "keep.txt");
+    await mkdir(join(foreignDirectory, "app"), { recursive: true });
+    await writeFile(foreignApp, "do not delete", "utf8");
+    await rm(agentportDirectory, { recursive: true, force: true });
+    await symlink(foreignDirectory, agentportDirectory);
+    const commands: string[] = [];
+
+    const exitCode = await runService(
+      ["uninstall", "--config", configPath],
+      serviceDependencies(home, {
+        runCommand: (command, args) => {
+          commands.push(`${command} ${args.join(" ")}`);
+          return Promise.resolve({ exitCode: 0, stdout: "", stderr: "" });
+        },
+      }),
+    );
+
+    expect(exitCode).toBe(1);
+    expect(commands).toEqual([]);
+    expect(await readFile(foreignApp, "utf8")).toBe("do not delete");
+  });
+
+  it("uninstall 拒絕穿過 XDG data home 內較早的 symbolic link", async () => {
+    const home = await makeTempDir();
+    const { configPath } = await installForServiceCommand(home);
+    const dataHome = join(home, ".local/share");
+    const foreignDataHome = join(home, "foreign-data-home");
+    const foreignApp = join(foreignDataHome, "agentport", "app", "keep.txt");
+    await mkdir(dirname(foreignApp), { recursive: true });
+    await writeFile(foreignApp, "do not delete", "utf8");
+    await rm(dataHome, { recursive: true, force: true });
+    await symlink(foreignDataHome, dataHome);
+    const commands: string[] = [];
+
+    const exitCode = await runService(
+      ["uninstall", "--config", configPath],
+      serviceDependencies(home, {
+        runCommand: (command, args) => {
+          commands.push(`${command} ${args.join(" ")}`);
+          return Promise.resolve({ exitCode: 0, stdout: "", stderr: "" });
+        },
+      }),
+    );
+
+    expect(exitCode).toBe(1);
+    expect(commands).toEqual([]);
+    expect(await readFile(foreignApp, "utf8")).toBe("do not delete");
   });
 });

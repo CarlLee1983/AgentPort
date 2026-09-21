@@ -3,6 +3,7 @@ import { randomBytes } from "node:crypto";
 import { existsSync } from "node:fs";
 import {
   cp,
+  lstat,
   mkdir,
   readFile,
   rename,
@@ -10,19 +11,23 @@ import {
   writeFile as writeFileOnDisk,
 } from "node:fs/promises";
 import { createConnection } from "node:net";
-import { dirname, join, resolve } from "node:path";
+import { dirname, join, relative, resolve } from "node:path";
 
+import { loadConfig } from "../config/load.js";
 import { resolveConfigPath, type Env } from "../config/paths.js";
 import { parseListen } from "../http/listen.js";
 import { prepareConfiguration } from "./configuration.js";
 import {
   assertWrapperCanBeInstalled,
   installWrapper,
+  isAgentPortWrapper,
   renderWrapper,
+  wrapperPath,
 } from "./wrapper.js";
 
 const SERVICE_USAGE =
-  "usage: agentport service install [--dry-run] [--config <path>]";
+  "usage: agentport service install [--dry-run] [--config <path>]\n" +
+  "       agentport service status|restart|uninstall [--config <path>]";
 const LAUNCH_AGENT_LABEL = "com.agentport.serve";
 const READY_TIMEOUT_MS = 10_000;
 const READY_RETRY_MS = 100;
@@ -105,13 +110,12 @@ export async function runService(
   dependencies: ServiceDependencies,
 ): Promise<number> {
   const [command, ...rest] = args;
-  if (command !== "install") {
-    dependencies.writeStderr(SERVICE_USAGE);
-    return 2;
-  }
-
-  const parsed = parseInstallArgs(rest);
-  if (!parsed.ok) {
+  if (
+    command !== "install" &&
+    command !== "status" &&
+    command !== "restart" &&
+    command !== "uninstall"
+  ) {
     dependencies.writeStderr(SERVICE_USAGE);
     return 2;
   }
@@ -119,6 +123,21 @@ export async function runService(
   if (dependencies.platform !== "darwin") {
     dependencies.writeStderr(`不支援的平台：${dependencies.platform}`);
     return 1;
+  }
+
+  if (command !== "install") {
+    const parsed = parseConfigArgs(rest);
+    if (!parsed.ok) {
+      dependencies.writeStderr(SERVICE_USAGE);
+      return 2;
+    }
+    return runMacosServiceCommand(command, parsed.configPath, dependencies);
+  }
+
+  const parsed = parseInstallArgs(rest);
+  if (!parsed.ok) {
+    dependencies.writeStderr(SERVICE_USAGE);
+    return 2;
   }
 
   // launchd 不會繼承呼叫 install 的 cwd；服務定義中的兩條路徑必須固定為絕對路徑。
@@ -131,12 +150,7 @@ export async function runService(
     "LaunchAgents",
     `${LAUNCH_AGENT_LABEL}.plist`,
   );
-  const installDirectory = join(
-    dependencies.env.XDG_DATA_HOME ||
-      join(dependencies.home, ".local", "share"),
-    "agentport",
-    "app",
-  );
+  const installDirectory = serviceInstallDirectory(dependencies);
   const cliPath = join(installDirectory, "dist", "cli.js");
   const envPath = join(dirname(configPath), "agentport.env");
   const plist = renderMacosLaunchAgent({
@@ -230,6 +244,332 @@ export async function runService(
   } catch (error) {
     dependencies.writeStderr(`無法寫入包裝指令：${describeError(error)}`);
     return 1;
+  }
+}
+
+type ParsedConfigArgs =
+  { ok: true; configPath: string | undefined } | { ok: false };
+
+function parseConfigArgs(args: string[]): ParsedConfigArgs {
+  if (args.length === 0) {
+    return { ok: true, configPath: undefined };
+  }
+  if (args.length === 2 && args[0] === "--config" && args[1] !== undefined) {
+    return { ok: true, configPath: args[1] };
+  }
+  return { ok: false };
+}
+
+async function runMacosServiceCommand(
+  command: "status" | "restart" | "uninstall",
+  suppliedConfigPath: string | undefined,
+  dependencies: ServiceDependencies,
+): Promise<number> {
+  const plistPath = join(
+    dependencies.home,
+    "Library",
+    "LaunchAgents",
+    `${LAUNCH_AGENT_LABEL}.plist`,
+  );
+  if (!existsSync(plistPath)) {
+    const message = "AgentPort 服務未安裝";
+    if (command === "restart") {
+      dependencies.writeStderr(message);
+      return 1;
+    }
+    dependencies.writeStdout(message);
+    return 0;
+  }
+
+  const installed = await readInstalledService(plistPath);
+  if (installed === undefined) {
+    dependencies.writeStderr(`無法讀取已安裝的服務定義：${plistPath}`);
+    return 1;
+  }
+
+  if (command === "uninstall") {
+    return uninstallMacosService({
+      dependencies,
+      plistPath,
+      installed,
+      expectedInstallDirectory: serviceInstallDirectory(dependencies),
+    });
+  }
+
+  const configPath = resolve(suppliedConfigPath ?? installed.configPath);
+  const loaded = loadConfig(configPath, dependencies.env);
+
+  if (command === "restart") {
+    if (!loaded.ok) {
+      reportConfigErrors(loaded.errors, dependencies);
+      return 1;
+    }
+    return restartMacosService({
+      dependencies,
+      listen: loaded.config.server.listen,
+    });
+  }
+  if (!loaded.ok) {
+    reportConfigErrors(loaded.errors, dependencies);
+  }
+  return statusMacosService({
+    dependencies,
+    installed,
+    listen: loaded.ok ? loaded.config.server.listen : undefined,
+  });
+}
+
+function serviceInstallDirectory(
+  dependencies: Pick<ServiceDependencies, "home" | "env">,
+): string {
+  const dataHome =
+    dependencies.env.XDG_DATA_HOME ||
+    join(dependencies.home, ".local", "share");
+  return resolve(dependencies.home, dataHome, "agentport", "app");
+}
+
+async function assertSafeInstalledDirectory(
+  installDirectory: string,
+  home: string,
+): Promise<void> {
+  const resolvedHome = resolve(home);
+  const relativeDirectory = relative(resolvedHome, installDirectory);
+  if (
+    relativeDirectory === "" ||
+    relativeDirectory === ".." ||
+    relativeDirectory.startsWith("../")
+  ) {
+    throw new Error(`拒絕移除 HOME 外的安裝目錄：${installDirectory}`);
+  }
+  let current = resolvedHome;
+  for (const component of relativeDirectory.split("/")) {
+    current = join(current, component);
+    try {
+      if ((await lstat(current)).isSymbolicLink()) {
+        throw new Error(`拒絕經由 symbolic link 移除安裝目錄：${current}`);
+      }
+    } catch (error) {
+      if (isMissingFile(error)) {
+        continue;
+      }
+      throw error;
+    }
+  }
+}
+
+function isMissingFile(error: unknown): boolean {
+  return (
+    typeof error === "object" &&
+    error !== null &&
+    "code" in error &&
+    error.code === "ENOENT"
+  );
+}
+
+interface InstalledService {
+  nodePath: string;
+  installDirectory: string;
+  configPath: string;
+}
+
+async function readInstalledService(
+  plistPath: string,
+): Promise<InstalledService | undefined> {
+  try {
+    const plist = await readFile(plistPath, "utf8");
+    const argumentsMatch =
+      /<key>ProgramArguments<\/key>\s*<array>([\s\S]*?)<\/array>/.exec(plist);
+    if (argumentsMatch?.[1] === undefined) {
+      return undefined;
+    }
+    const argumentsList = Array.from(
+      argumentsMatch[1].matchAll(/<string>([\s\S]*?)<\/string>/g),
+      (match) => unescapeXml(match[1] ?? ""),
+    );
+    const [nodePath, , cliPath] = argumentsList;
+    const configFlagIndex = argumentsList.indexOf("--config");
+    const configPath = argumentsList[configFlagIndex + 1];
+    if (
+      nodePath === undefined ||
+      cliPath === undefined ||
+      configFlagIndex === -1 ||
+      configPath === undefined
+    ) {
+      return undefined;
+    }
+    return {
+      nodePath,
+      installDirectory: dirname(dirname(cliPath)),
+      configPath,
+    };
+  } catch {
+    return undefined;
+  }
+}
+
+interface StatusMacosInput {
+  dependencies: ServiceDependencies;
+  installed: InstalledService;
+  listen: string | undefined;
+}
+
+async function statusMacosService(input: StatusMacosInput): Promise<number> {
+  const { dependencies, installed, listen } = input;
+  const result = await dependencies.runCommand("launchctl", [
+    "print",
+    `gui/${String(dependencies.uid)}/${LAUNCH_AGENT_LABEL}`,
+  ]);
+  const running = /\bstate = running\b/.test(result.stdout);
+  const pid = /\bpid = (\d+)\b/.exec(result.stdout)?.[1];
+  const reachable =
+    listen === undefined ? false : await dependencies.probePort(listen);
+  const nodeExists = existsSync(installed.nodePath);
+
+  dependencies.writeStdout(`服務狀態：${running ? "running" : "stopped"}`);
+  if (pid !== undefined) {
+    dependencies.writeStdout(`pid：${pid}`);
+  }
+  dependencies.writeStdout(
+    listen === undefined
+      ? "監聽位址：無法從無效設定檔判定"
+      : `監聽位址：${listen}${reachable ? "（可連）" : "（無法連線）"}`,
+  );
+  dependencies.writeStdout(`安裝目錄：${installed.installDirectory}`);
+  dependencies.writeStdout(`node 路徑：${installed.nodePath}`);
+  if (!nodeExists) {
+    dependencies.writeStderr("node 路徑已失效，請重跑 install");
+  }
+  const tail = await readErrorLogTail(
+    join(
+      dependencies.home,
+      "Library",
+      "Logs",
+      "agentport",
+      "agentport.err.log",
+    ),
+  );
+  if (tail) {
+    dependencies.writeStdout(`最近錯誤 log：\n${tail}`);
+  }
+  return result.exitCode === 0 &&
+    running &&
+    pid !== undefined &&
+    reachable &&
+    nodeExists
+    ? 0
+    : 1;
+}
+
+interface RestartMacosInput {
+  dependencies: ServiceDependencies;
+  listen: string;
+}
+
+async function restartMacosService(input: RestartMacosInput): Promise<number> {
+  const { dependencies, listen } = input;
+  const restarted = await dependencies.runCommand("launchctl", [
+    "kickstart",
+    "-k",
+    `gui/${String(dependencies.uid)}/${LAUNCH_AGENT_LABEL}`,
+  ]);
+  if (restarted.exitCode !== 0) {
+    dependencies.writeStderr(
+      `launchctl kickstart 失敗：${restarted.stderr || restarted.stdout}`,
+    );
+    return 1;
+  }
+  if (await waitForListening(listen, dependencies)) {
+    dependencies.writeStdout(`服務正在監聽 ${listen}`);
+    return 0;
+  }
+  dependencies.writeStderr(`服務未在 10 秒內開始監聽 ${listen}`);
+  const tail = await readErrorLogTail(
+    join(
+      dependencies.home,
+      "Library",
+      "Logs",
+      "agentport",
+      "agentport.err.log",
+    ),
+  );
+  if (tail) {
+    dependencies.writeStderr(tail);
+  }
+  return 1;
+}
+
+interface UninstallMacosInput {
+  dependencies: ServiceDependencies;
+  plistPath: string;
+  installed: InstalledService;
+  expectedInstallDirectory: string;
+}
+
+async function uninstallMacosService(
+  input: UninstallMacosInput,
+): Promise<number> {
+  const { dependencies, plistPath, installed, expectedInstallDirectory } =
+    input;
+  if (installed.installDirectory !== expectedInstallDirectory) {
+    dependencies.writeStderr(
+      `拒絕移除非預期的安裝目錄：${installed.installDirectory}`,
+    );
+    return 1;
+  }
+  try {
+    await assertSafeInstalledDirectory(
+      installed.installDirectory,
+      dependencies.home,
+    );
+  } catch (error) {
+    dependencies.writeStderr(describeError(error));
+    return 1;
+  }
+  const stopped = await dependencies.runCommand("launchctl", [
+    "bootout",
+    `gui/${String(dependencies.uid)}`,
+    plistPath,
+  ]);
+  if (stopped.exitCode !== 0 && stopped.exitCode !== 3) {
+    dependencies.writeStderr(
+      `launchctl bootout 失敗：${stopped.stderr || stopped.stdout}`,
+    );
+    return 1;
+  }
+  try {
+    await assertSafeInstalledDirectory(
+      installed.installDirectory,
+      dependencies.home,
+    );
+    await rm(plistPath, { force: true });
+    await dependencies.removeDirectory(installed.installDirectory);
+    const path = wrapperPath(dependencies.home);
+    const wrapper = await readOptionalFile(path);
+    if (wrapper === undefined) {
+      // No wrapper is also a successful uninstall.
+    } else if (isAgentPortWrapper(wrapper)) {
+      await rm(path, { force: true });
+    } else {
+      dependencies.writeStdout(`包裝指令不含 AgentPort 標記，不刪除：${path}`);
+    }
+  } catch (error) {
+    dependencies.writeStderr(`無法移除服務：${describeError(error)}`);
+    return 1;
+  }
+  dependencies.writeStdout(
+    "AgentPort 服務已移除；設定、env、資料庫與 log 已保留。",
+  );
+  return 0;
+}
+
+async function readOptionalFile(path: string): Promise<string | undefined> {
+  try {
+    return await readFile(path, "utf8");
+  } catch (error) {
+    if (isMissingFile(error)) {
+      return undefined;
+    }
+    throw error;
   }
 }
 
@@ -585,4 +925,13 @@ function escapeXml(value: string): string {
     .replaceAll(">", "&gt;")
     .replaceAll('"', "&quot;")
     .replaceAll("'", "&apos;");
+}
+
+function unescapeXml(value: string): string {
+  return value
+    .replaceAll("&apos;", "'")
+    .replaceAll("&quot;", '"')
+    .replaceAll("&gt;", ">")
+    .replaceAll("&lt;", "<")
+    .replaceAll("&amp;", "&");
 }
