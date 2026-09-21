@@ -4,11 +4,11 @@
 
 **Blocked by:** 09, 11
 
-**Status:** ready-for-agent
+**Status:** done
 
 - [x] LaunchAgent plist 與 systemd user unit 範本，含 `HOME` / `USER` / `PATH` 與 `token_env` 變數餵入方式（env file，mode 0600）
 - [x] README：安裝、設定、啟動、遠端連入（預設 SSH tunnel 到 loopback）、Claude Code / Codex 的 MCP client 設定範例
-- [ ] 在本機 Mac 以 LaunchAgent 實際啟動並跑通一輪 Claude 與 Codex 派工（沿票 01 / 02 research 的 launchd 實驗）
+- [x] 在本機 Mac 以 LaunchAgent 實際啟動並跑通一輪 Claude 與 Codex 派工（沿票 01 / 02 research 的 launchd 實驗）
 - [x] `docs/adr/`：同使用者憑證 ADR（偏離 v1 ADR-0006 / 0007 / 0010、記錄政策灰區與 API key 逃生口）並修訂 ADR-0002 第二段；附 `**Falsified if:**`
 - [x] v1 保留的 ADR 0001 / 0003 / 0005 / 0009 複製到 v2 `docs/adr/` 並註明來源
 
@@ -16,6 +16,6 @@
 
 ADR-0002 第二段的修訂需寫明 v2 實際行為（建置票 11 已實作）：重啟時 running 一律 `failed{interrupted}`、不回填 partial；queued 依原順序自動續跑，不再暫停等 caller 確認；理由為 queued 無副作用、單操作者。另記每個 `db_path` 單實例鎖（重啟掃描的前提：不會有另一個存活程序持有同一批 running Task）。
 
-## 狀態註記（2026-09-21）
+## 實機驗收（2026-09-21）
 
-除「在本機 Mac 以 LaunchAgent 實際啟動並跑通一輪 Claude 與 Codex 派工」外皆已完成；該條由使用者依 README「驗證部署」自行執行，勾選後本票改 `done`。實作時定案寫回 `specs/agentport-v2.md`「部署與憑證」。
+依 README 在本機 Mac（macOS 26、Node 24.21.0、claude 2.1.278、codex 0.155.0）安裝 LaunchAgent：`plutil -lint` OK，`launchctl print` 為 running、程序 PPID 為 1（launchd 啟動，非終端機），以 `node --env-file` 讀入 0600 的 env file。以 `@modelcontextprotocol/client` 的 Streamable HTTP + bearer 呼叫：`list_agents` 回兩個 agent；同時派給 `smoke-claude` 與 `smoke-codex` 的 Task 皆 `completed`（6.9 s / 12.6 s），`caller` 記為 `smoke`，`diff_stat` 為 `untracked: notes/hello.md`，檔案確實寫出；錯誤 token 回 401。證實 launchd 下 Claude 可讀 login Keychain、Codex 可讀 `~/.codex/auth.json`。驗收後已 bootout 並移除 plist、設定與測試 workspace。
