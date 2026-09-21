@@ -31,10 +31,27 @@ function delay(ms: number): Promise<void> {
 export function scriptedDriver(script: DriverScript): RuntimeDriver & {
   received: TurnInput[];
 } {
+  return sequencedDriver([script]);
+}
+
+/**
+ * 像 `scriptedDriver`，但依序消耗多份 `DriverScript`：第 N 次呼叫（`start`
+ * 或 `resume` 皆計入同一個計數器）用 `scripts[N]`，超過陣列長度時沿用最後一份。
+ * 用來模擬「前一個 Task 用某個腳本、follow-up 的 Task 用另一個腳本」，例如第一輪
+ * 正常 `completed`、第二輪（resume）回 `failed{session_unresumable}`。
+ */
+export function sequencedDriver(scripts: DriverScript[]): RuntimeDriver & {
+  received: TurnInput[];
+} {
   const received: TurnInput[] = [];
+  let callCount = 0;
 
   function makeTurn(input: TurnInput, hooks?: TurnHooks): Turn {
     received.push(input);
+    const script = scripts[
+      Math.min(callCount, scripts.length - 1)
+    ] as DriverScript;
+    callCount += 1;
     let killed = false;
 
     async function* events(): AsyncIterable<DriverEvent> {
