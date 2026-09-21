@@ -5,6 +5,7 @@ import type { Scheduler } from "../scheduler.js";
 import type { TaskStore } from "../store/sqlite.js";
 import { registerGetTask } from "./tools/get-task.js";
 import { registerListAgents } from "./tools/list-agents.js";
+import { registerListTasks } from "./tools/list-tasks.js";
 import { registerSubmitTask } from "./tools/submit-task.js";
 
 export interface ServerFactoryDeps {
@@ -24,6 +25,7 @@ export function createServerFactory(deps: ServerFactoryDeps): () => McpServer {
     registerListAgents(server, { config: deps.config });
     registerSubmitTask(server, deps);
     registerGetTask(server, { store: deps.store });
+    registerListTasks(server, { store: deps.store });
     return server;
   };
 }

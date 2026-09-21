@@ -25,10 +25,14 @@ export const GitCommitSchema = z.object({
   subject: z.string(),
 });
 
-/** `hints` 非權威附註：`permission_denied` 原樣轉交，`git` 記 git 摘要失敗原因。 */
+/**
+ * `hints` 非權威附註：`permission_denied` 原樣轉交，`git` 記 git 摘要失敗原因，
+ * `truncated` 記 `final_text` 是否因超過容量上限被截尾（ADR-0005）。
+ */
 export const HintsSchema = z.object({
   permission_denied: z.array(z.unknown()).optional(),
   git: z.string().optional(),
+  truncated: z.boolean().optional(),
 });
 
 /**
@@ -56,8 +60,21 @@ export const TaskRecordSchema = z.object({
   raw_log_path: z.string().nullable(),
 });
 
+/**
+ * `list_tasks` 的摘要形狀：`TaskRecordSchema` 去掉 `prompt`、`final_text`、
+ * `diff_stat`、`commits`、`usage`，避免單筆摘要就把回應體撐大（ADR-0005）。
+ */
+export const TaskSummarySchema = TaskRecordSchema.omit({
+  prompt: true,
+  final_text: true,
+  diff_stat: true,
+  commits: true,
+  usage: true,
+});
+
 export type TaskState = z.infer<typeof TaskStateSchema>;
 export type TaskErrorCode = z.infer<typeof TaskErrorCodeSchema>;
 export type GitCommit = z.infer<typeof GitCommitSchema>;
 export type Hints = z.infer<typeof HintsSchema>;
 export type TaskRecord = z.infer<typeof TaskRecordSchema>;
+export type TaskSummary = z.infer<typeof TaskSummarySchema>;
