@@ -7,6 +7,7 @@ import {
 } from "node:fs";
 import { join } from "node:path";
 
+import { isLoopbackHost, parseListen } from "../http/listen.js";
 import type { IndexedAgent } from "./expand.js";
 import type { ConfigError } from "./errors.js";
 import type { Env } from "./paths.js";
@@ -45,6 +46,7 @@ export function validateSemantics(
   agents: IndexedAgent[],
   callers: IndexedCaller[],
   runtimes: Config["runtimes"],
+  server: Config["server"],
   env: Env,
 ): ConfigError[] {
   const errors: ConfigError[] = [];
@@ -53,8 +55,36 @@ export function validateSemantics(
   validateWorkspaces(agents, errors);
   validateCallers(callers, env, errors);
   validateRuntimeExecutables(agents, runtimes, env, errors);
+  validateListenAllowedHosts(server, errors);
 
   return errors;
+}
+
+/**
+ * 非 loopback `listen`（不是 127.0.0.1 / localhost / ::1）沒有實際隔離；
+ * 一定要設 `allowed_hosts` 才放行，讓 `src/http/server.ts` 有明確的 Host /
+ * Origin 允許清單，而不是預設對任何 Host header 開門。`listen` 格式錯誤留給
+ * `src/http/server.ts` 啟動時再報，這裡只在格式正確、host 非 loopback時才擋。
+ */
+function validateListenAllowedHosts(
+  server: Config["server"],
+  errors: ConfigError[],
+): void {
+  let host: string;
+  try {
+    ({ host } = parseListen(server.listen));
+  } catch {
+    return;
+  }
+  if (isLoopbackHost(host)) {
+    return;
+  }
+  if (server.allowed_hosts.length === 0) {
+    errors.push({
+      path: "server.allowed_hosts",
+      message: "非 loopback 監聽必須設定 server.allowed_hosts",
+    });
+  }
 }
 
 function validateAgentNames(

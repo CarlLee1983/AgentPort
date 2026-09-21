@@ -3,15 +3,9 @@ import { afterEach, describe, expect, it } from "vitest";
 import { unavailableDrivers } from "../helpers/unavailable-driver.js";
 import { cleanupTempDirs } from "../config/helpers.js";
 import { createTestApp } from "../helpers/app.js";
-import {
-  resetCapacityLimitsForTesting,
-  setCapacityLimitsForTesting,
-} from "../../src/mcp/capacity.js";
+import { createCapacityPolicy } from "../../src/mcp/capacity.js";
 
-afterEach(() => {
-  resetCapacityLimitsForTesting();
-  return cleanupTempDirs();
-});
+afterEach(cleanupTempDirs);
 
 interface ListTasksPayload {
   tasks: { task_id: string }[];
@@ -26,8 +20,9 @@ interface GetTaskPayload {
 describe("capacity (ADR-0005)", () => {
   it("list_tasks 在回應體逼近上限時提前縮頁，依 cursor 續走可不漏不重複拿到每一筆", async () => {
     // 測試用的上限縮小到 64 KiB，不必真的塞出 8 MiB payload 就能逼出縮頁。
-    setCapacityLimitsForTesting({ responseBodyLimitBytes: 64 * 1024 });
-    const app = await createTestApp(unavailableDrivers);
+    const app = await createTestApp(unavailableDrivers, {
+      capacity: createCapacityPolicy({ responseBodyLimitBytes: 64 * 1024 }),
+    });
     try {
       const context = app.store.createContext("stationhub");
       // final_text 不進摘要，改用 error.message 撐大單筆摘要的序列化大小。
@@ -65,7 +60,8 @@ describe("capacity (ADR-0005)", () => {
         cursor = payload.next_cursor;
       }
 
-      // `ulid()` 在同一毫秒內不保證單調遞增，只驗證每一筆恰好出現一次、不漏不重。
+      // 這裡只在意分頁不漏不重，不驗證順序（順序由 monotonic ulid 保證，見
+      // tests/store/sqlite.test.ts）。
       expect(seen.slice().sort()).toEqual(taskIds.slice().sort());
     } finally {
       await app.close();

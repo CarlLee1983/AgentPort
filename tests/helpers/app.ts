@@ -4,6 +4,7 @@ import { InMemoryTransport } from "@modelcontextprotocol/server";
 import { createApp } from "../../src/app.js";
 import type { Config } from "../../src/config/schema.js";
 import type { DriverRegistry } from "../../src/driver/types.js";
+import type { CapacityPolicy } from "../../src/mcp/capacity.js";
 import type { TaskStore } from "../../src/store/sqlite.js";
 import {
   agentToml,
@@ -35,7 +36,7 @@ export interface TestApp {
  */
 export async function createTestApp(
   drivers: DriverRegistry,
-  options: { extraToml?: string } = {},
+  options: { extraToml?: string; capacity?: CapacityPolicy } = {},
 ): Promise<TestApp> {
   const dir = await makeTempDir();
   const workspace = await makeWorkspace(dir, "workspace");
@@ -53,12 +54,12 @@ export async function createTestApp(
     );
   }
 
-  return createTestAppFromConfig(loadResult.config, drivers, {
-    dir,
-    dbPath,
-    logDir,
-    workspace,
-  });
+  return createTestAppFromConfig(
+    loadResult.config,
+    drivers,
+    { dir, dbPath, logDir, workspace },
+    options.capacity,
+  );
 }
 
 /**
@@ -106,8 +107,14 @@ async function createTestAppFromConfig(
   config: Config,
   drivers: DriverRegistry,
   paths: TestAppPaths,
+  capacity?: CapacityPolicy,
 ): Promise<TestApp> {
-  const app = createApp({ config, drivers, caller: "local" });
+  const app = createApp({
+    config,
+    drivers,
+    caller: "local",
+    ...(capacity ? { capacity } : {}),
+  });
 
   const [clientTransport, serverTransport] =
     InMemoryTransport.createLinkedPair();

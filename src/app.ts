@@ -2,6 +2,7 @@ import type { McpServer } from "@modelcontextprotocol/server";
 
 import type { Config } from "./config/schema.js";
 import type { DriverRegistry } from "./driver/types.js";
+import { createCapacityPolicy, type CapacityPolicy } from "./mcp/capacity.js";
 import { createServerFactory } from "./mcp/server.js";
 import { createScheduler } from "./scheduler.js";
 import { openTaskStore, type TaskStore } from "./store/sqlite.js";
@@ -11,6 +12,8 @@ export interface CreateAppOptions {
   config: Config;
   drivers: DriverRegistry;
   caller: string;
+  /** 僅供測試：覆寫 ADR-0005 容量政策的上限，不必真的塞出 8 MiB payload。 */
+  capacity?: CapacityPolicy;
 }
 
 export interface App {
@@ -23,6 +26,7 @@ export interface App {
 export function createApp(options: CreateAppOptions): App {
   const store = openTaskStore(options.config.storage.db_path);
   const notifier = createTaskNotifier();
+  const capacity = options.capacity ?? createCapacityPolicy();
   const scheduler = createScheduler({
     store,
     drivers: options.drivers,
@@ -34,6 +38,7 @@ export function createApp(options: CreateAppOptions): App {
     store,
     scheduler,
     notifier,
+    capacity,
     caller: options.caller,
   });
 

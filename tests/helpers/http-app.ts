@@ -32,9 +32,15 @@ export interface TestHttpApp {
  * 建一個暫存目錄設定檔（`[[callers]]` 由 `callers` 參數指定），起一個真的
  * `startHttpServer`（`127.0.0.1:0` 隨機埠），回傳可用來組 URL / bearer token 的 handle。
  */
+export interface CreateTestHttpAppOptions {
+  listen?: string;
+  allowedHosts?: string[];
+}
+
 export async function createTestHttpApp(
   drivers: DriverRegistry,
   callers: TestCaller[],
+  options: CreateTestHttpAppOptions = {},
 ): Promise<TestHttpApp> {
   const dir = await makeTempDir();
   await makeWorkspace(dir, "workspace");
@@ -49,7 +55,13 @@ export async function createTestHttpApp(
     )
     .join("");
 
-  const toml = `${agentToml()}${callerToml}\n[server]\nlisten = "127.0.0.1:0"\n\n[storage]\ndb_path = "${dbPath}"\nlog_dir = "${logDir}"\n`;
+  const listen = options.listen ?? "127.0.0.1:0";
+  const allowedHostsToml =
+    options.allowedHosts && options.allowedHosts.length > 0
+      ? `allowed_hosts = [${options.allowedHosts.map((host) => `"${host}"`).join(", ")}]\n`
+      : "";
+
+  const toml = `${agentToml()}${callerToml}\n[server]\nlisten = "${listen}"\n${allowedHostsToml}\n[storage]\ndb_path = "${dbPath}"\nlog_dir = "${logDir}"\n`;
   const configPath = await writeConfigFile(dir, toml);
 
   const envOverrides: Record<string, string> = { HOME: dir, PATH: dir };
@@ -79,6 +91,7 @@ async function createTestHttpAppFromConfig(
     listen: config.server.listen,
     serverFactory: app.serverFactory,
     auth,
+    allowedHosts: config.server.allowed_hosts,
   });
 
   return {

@@ -75,6 +75,26 @@ describe("follow_up", () => {
     }
   });
 
+  it("context 綁的 agent 已不在設定檔內時回 unknown_agent", async () => {
+    const app = await createTestApp(unavailableDrivers);
+    try {
+      const context = app.store.createContext("ghost-agent");
+      const response = await app.client.callTool({
+        name: "follow_up",
+        arguments: { context_id: context.context_id, prompt: "hi" },
+      });
+      expect(response.isError).toBe(true);
+      expect(response.structuredContent).toEqual({
+        error: {
+          code: "unknown_agent",
+          message: expect.any(String) as unknown,
+        },
+      });
+    } finally {
+      await app.close();
+    }
+  });
+
   it("前一個 task 仍 running 時，follow_up 的新 task 保持 queued 直到前一個 completed", async () => {
     const driver = scriptedDriver({
       events: [

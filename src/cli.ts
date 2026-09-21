@@ -4,8 +4,9 @@ import { serveStdio } from "@modelcontextprotocol/server/stdio";
 import { createApp } from "./app.js";
 import { loadConfig } from "./config/load.js";
 import { resolveConfigPath } from "./config/paths.js";
+import type { Config } from "./config/schema.js";
 import { createDrivers } from "./driver/registry.js";
-import { createBearerAuth } from "./http/auth.js";
+import { createBearerAuth, resolveBearerCallers } from "./http/auth.js";
 import { startHttpServer } from "./http/server.js";
 
 const USAGE = "usage: agentport check-config [--config <path>]";
@@ -15,7 +16,7 @@ const SERVE_USAGE = "usage: agentport serve [--config <path>]";
 type ParsedArgs = { ok: true; configPath: string | undefined } | { ok: false };
 
 /** 只接受 `--config <path>`；缺值或任何未知旗標都視為用法錯誤。 */
-function parseCheckConfigArgs(args: string[]): ParsedArgs {
+function parseConfigArgs(args: string[]): ParsedArgs {
   let configPath: string | undefined;
   for (let i = 0; i < args.length; i += 1) {
     const arg = args[i];
@@ -32,11 +33,19 @@ function parseCheckConfigArgs(args: string[]): ParsedArgs {
   return { ok: true, configPath };
 }
 
-function runCheckConfig(args: string[]): number {
-  const parsedArgs = parseCheckConfigArgs(args);
+type LoadConfigOutcome =
+  { ok: true; config: Config } | { ok: false; exitCode: number };
+
+/**
+ * 三個子命令共用的設定檔載入流程：解析 `--config`、找路徑、`loadConfig`，
+ * 錯誤（用法錯誤 exit 2、設定檔驗證錯誤 exit 1）已經印到 stderr，呼叫端只要
+ * 看 `ok` 決定要不要繼續、`ok: false` 時直接把 `exitCode` 回傳出去。
+ */
+function loadConfigOrReport(args: string[], usage: string): LoadConfigOutcome {
+  const parsedArgs = parseConfigArgs(args);
   if (!parsedArgs.ok) {
-    console.error(USAGE);
-    return 2;
+    console.error(usage);
+    return { ok: false, exitCode: 2 };
   }
   const configPath = resolveConfigPath(parsedArgs.configPath, process.env);
   const result = loadConfig(configPath, process.env);
@@ -45,10 +54,19 @@ function runCheckConfig(args: string[]): number {
     for (const error of result.errors) {
       console.error(`${error.path}: ${error.message}`);
     }
-    return 1;
+    return { ok: false, exitCode: 1 };
   }
 
-  const { agents, callers } = result.config;
+  return { ok: true, config: result.config };
+}
+
+function runCheckConfig(args: string[]): number {
+  const outcome = loadConfigOrReport(args, USAGE);
+  if (!outcome.ok) {
+    return outcome.exitCode;
+  }
+
+  const { agents, callers } = outcome.config;
   console.log("name\truntime\tpolicy\tworkspace");
   for (const agent of agents) {
     console.log(
@@ -60,24 +78,14 @@ function runCheckConfig(args: string[]): number {
 }
 
 function runStdio(args: string[]): number {
-  const parsedArgs = parseCheckConfigArgs(args);
-  if (!parsedArgs.ok) {
-    console.error(STDIO_USAGE);
-    return 2;
-  }
-  const configPath = resolveConfigPath(parsedArgs.configPath, process.env);
-  const result = loadConfig(configPath, process.env);
-
-  if (!result.ok) {
-    for (const error of result.errors) {
-      console.error(`${error.path}: ${error.message}`);
-    }
-    return 1;
+  const outcome = loadConfigOrReport(args, STDIO_USAGE);
+  if (!outcome.ok) {
+    return outcome.exitCode;
   }
 
   const app = createApp({
-    config: result.config,
-    drivers: createDrivers(result.config, process.env),
+    config: outcome.config,
+    drivers: createDrivers(outcome.config, process.env),
     caller: "local",
   });
 
@@ -108,45 +116,42 @@ function runStdio(args: string[]): number {
 }
 
 function runServe(args: string[]): number {
-  const parsedArgs = parseCheckConfigArgs(args);
-  if (!parsedArgs.ok) {
-    console.error(SERVE_USAGE);
-    return 2;
+  const outcome = loadConfigOrReport(args, SERVE_USAGE);
+  if (!outcome.ok) {
+    return outcome.exitCode;
   }
-  const configPath = resolveConfigPath(parsedArgs.configPath, process.env);
-  const result = loadConfig(configPath, process.env);
+  const config = outcome.config;
 
-  if (!result.ok) {
-    for (const error of result.errors) {
-      console.error(`${error.path}: ${error.message}`);
-    }
-    return 1;
-  }
-
-  if (result.config.callers.length === 0) {
+  if (config.callers.length === 0) {
     console.error(
       "callers[] 不可為空：agentport serve 需要至少一個 caller 才能啟動",
     );
     return 1;
   }
 
+  const resolvedCallers = resolveBearerCallers(config.callers, process.env);
+  if (!resolvedCallers.ok) {
+    for (const tokenEnv of resolvedCallers.missing) {
+      console.error(
+        `callers[].token_env 指到的環境變數未設定或為空：${tokenEnv}`,
+      );
+    }
+    return 1;
+  }
+
   const app = createApp({
-    config: result.config,
-    drivers: createDrivers(result.config, process.env),
+    config,
+    drivers: createDrivers(config, process.env),
     caller: "local",
   });
 
-  const auth = createBearerAuth(
-    result.config.callers.map((caller) => ({
-      name: caller.name,
-      token: process.env[caller.token_env] ?? "",
-    })),
-  );
+  const auth = createBearerAuth(resolvedCallers.callers);
 
   startHttpServer({
-    listen: result.config.server.listen,
+    listen: config.server.listen,
     serverFactory: app.serverFactory,
     auth,
+    allowedHosts: config.server.allowed_hosts,
   })
     .then((handle) => {
       console.log(`listening on ${handle.url}`);

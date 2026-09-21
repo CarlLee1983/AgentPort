@@ -30,6 +30,8 @@ interface EventOutcome {
   hints: Hints;
   terminal: boolean;
   completed?: CompletedOutcome;
+  /** 這個事件是不是剛剛才把 `runtime_session_id` 回填進 context。 */
+  filledRuntimeSession?: boolean;
 }
 
 /**
@@ -44,7 +46,10 @@ export function createScheduler(deps: SchedulerDeps): Scheduler {
 
   function enqueue(taskId: string): void {
     const task = store.getTask(taskId);
-    const agent = task?.agent ?? taskId;
+    if (!task) {
+      return;
+    }
+    const agent = task.agent;
     const previous = chains.get(agent) ?? Promise.resolve();
     const next = previous
       .then(() => runTask(taskId))
@@ -127,6 +132,13 @@ export function createScheduler(deps: SchedulerDeps): Scheduler {
             )
           : driver.start(turnInput, hooks);
 
+      // 第一個 Task 才回填 runtime_session_id（spec）：resume 的 Task 一開始
+      // context 就已經有值，之後收到的 `started` 事件（不管是同一個 Task 內
+      // 重複送，或這個 run 本身就是 resume）都不該覆寫掉原本的值。
+      let hasRuntimeSession =
+        context?.runtime_session_id !== null &&
+        context?.runtime_session_id !== undefined;
+
       let hints: Hints = {};
       let terminal = false;
       let completed: CompletedOutcome | undefined;
@@ -135,10 +147,13 @@ export function createScheduler(deps: SchedulerDeps): Scheduler {
           // 已經收到終態事件（completed / failed），忽略之後送來的事件，不覆寫結果。
           continue;
         }
-        const outcome = handleEvent(task, hints, event);
+        const outcome = handleEvent(task, hints, event, hasRuntimeSession);
         hints = outcome.hints;
         terminal = outcome.terminal;
         completed = outcome.completed;
+        if (outcome.filledRuntimeSession) {
+          hasRuntimeSession = true;
+        }
       }
 
       if (completed) {
@@ -170,11 +185,15 @@ export function createScheduler(deps: SchedulerDeps): Scheduler {
     task: TaskRecord,
     hints: Hints,
     event: DriverEvent,
+    hasRuntimeSession: boolean,
   ): EventOutcome {
     switch (event.type) {
       case "started":
+        if (hasRuntimeSession) {
+          return { hints, terminal: false };
+        }
         store.setRuntimeSession(task.context_id, event.runtime_session_id);
-        return { hints, terminal: false };
+        return { hints, terminal: false, filledRuntimeSession: true };
       case "permission_denied":
         return {
           hints: {

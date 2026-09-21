@@ -104,4 +104,33 @@ describe("scheduler 對例外與非終態事件的韌性", () => {
       await app.close();
     }
   });
+
+  it("同一個 Task 收到兩個 started 事件時，只有第一個回填 runtime_session_id", async () => {
+    const driver = scriptedDriver({
+      events: [
+        { type: "started", runtime_session_id: "sess-first" },
+        { type: "started", runtime_session_id: "sess-second" },
+        { type: "completed", final_text: "done", usage: null },
+      ],
+    });
+    const app = await createTestApp({ claude: driver, codex: driver });
+    try {
+      const submitResponse = await app.client.callTool({
+        name: "submit_task",
+        arguments: { agent: "stationhub", prompt: "double started" },
+      });
+      const { task_id: taskId, context_id: contextId } =
+        submitResponse.structuredContent as {
+          task_id: string;
+          context_id: string;
+        };
+      await waitForTaskFinal(app.client, taskId);
+
+      expect(app.store.getContext(contextId)?.runtime_session_id).toBe(
+        "sess-first",
+      );
+    } finally {
+      await app.close();
+    }
+  });
 });

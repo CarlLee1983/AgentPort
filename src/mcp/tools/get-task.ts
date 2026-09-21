@@ -5,7 +5,7 @@ import type { Config } from "../../config/schema.js";
 import type { TaskStore } from "../../store/sqlite.js";
 import type { TaskNotifier } from "../../task/notifier.js";
 import { TaskRecordSchema } from "../../task/schema.js";
-import { truncateFinalText } from "../capacity.js";
+import type { CapacityPolicy } from "../capacity.js";
 import { result, toolError } from "../result.js";
 
 const TERMINAL_STATES = new Set(["completed", "failed", "cancelled"]);
@@ -21,6 +21,7 @@ export interface GetTaskDeps {
   store: TaskStore;
   notifier: TaskNotifier;
   config: Config;
+  capacity: CapacityPolicy;
 }
 
 /**
@@ -38,24 +39,27 @@ export function registerGetTask(server: McpServer, deps: GetTaskDeps): void {
       outputSchema: OutputSchema,
     },
     async ({ task_id, wait_seconds }) => {
+      // 先取 revision 再讀 task：兩次呼叫之間若剛好發生 notify，revision 會
+      // 領先 sinceRevision，等一下 waitForChange 才不會把這次變化吃掉、白等到逾時。
+      const sinceRevision = deps.notifier.current(task_id);
       const task = deps.store.getTask(task_id);
       if (!task) {
         return toolError("not_found", `找不到 Task：${task_id}`);
       }
 
       if (!wait_seconds || TERMINAL_STATES.has(task.state)) {
-        return result(truncateFinalText(task));
+        return result(deps.capacity.truncateFinalText(task));
       }
 
       const timeoutMs =
         Math.min(wait_seconds, deps.config.server.long_poll_max_seconds) * 1000;
-      await deps.notifier.waitForChange(task_id, timeoutMs);
+      await deps.notifier.waitForChange(task_id, sinceRevision, timeoutMs);
 
       const latest = deps.store.getTask(task_id);
       if (!latest) {
         return toolError("not_found", `找不到 Task：${task_id}`);
       }
-      return result(truncateFinalText(latest));
+      return result(deps.capacity.truncateFinalText(latest));
     },
   );
 }

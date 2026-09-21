@@ -40,6 +40,7 @@ export const ConfigSchema = z.strictObject({
     .strictObject({
       listen: z.string().default("127.0.0.1:3333"),
       long_poll_max_seconds: z.number().int().min(1).max(55).default(30),
+      allowed_hosts: z.array(z.string()).default([]),
     })
     .prefault({}),
   storage: z
