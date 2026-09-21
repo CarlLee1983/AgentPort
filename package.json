@@ -19,11 +19,16 @@
     "check": "pnpm run format:check && pnpm run lint && pnpm run typecheck && pnpm run build && pnpm run test"
   },
   "dependencies": {
+    "@modelcontextprotocol/server": "2.0.0",
+    "better-sqlite3": "^13.0.3",
     "smol-toml": "^1.8.0",
+    "ulid": "^3.0.2",
     "zod": "^4.6.0"
   },
   "devDependencies": {
     "@eslint/js": "^10.0.1",
+    "@modelcontextprotocol/client": "2.0.0",
+    "@types/better-sqlite3": "^9.6.0",
     "@types/node": "^24.0.0",
     "eslint": "^10.10.0",
     "globals": "^17.12.0",

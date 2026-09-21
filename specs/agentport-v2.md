@@ -136,6 +136,8 @@ token_env = "AGENTPORT_TOKEN_GROK"
 - 持久化：Task 表 `task_id`、`context_id`、`agent`、`caller`、`prompt`、`state`、`created_at` / `started_at` / `finished_at`、`final_text`、`diff_stat`、`commits[]`、`usage`、`hints`、`error{code, message}`、`raw_log_path`。Context 表 `context_id`、`agent`、`runtime_session_id`、`created_at`。永久保留；不做 submit 去重。
 - `hints` 非權威：`permission_denied[]` 原樣轉交 Claude 的 `permission_denials`；`git` 記摘要失敗原因。不做問句 heuristic。
 
+票 02 實作時定案：tool 層錯誤以 `isError: true` 加 `structuredContent: { error: { code, message } }` 回傳（SDK 在 `isError` 時跳過 outputSchema 驗證）；Driver 事件流結束而無終態事件視為 `failed{runtime_failed}`；收到終態事件後忽略後續事件；`db_path` 與 `log_dir` 的父目錄由服務啟動時建立；`agentport stdio` 在真 Driver（票 04 / 05）落地前掛的是一律 `failed{runtime_failed}` 的占位 Driver。
+
 ### Git 摘要
 
 Turn 結束後服務層在 workspace 執行 `git diff --stat`（含 untracked 以 `git status --porcelain` 補）與 Turn 期間新增的 commit 清單（記 Turn 開始時的 HEAD，結束後 `git log <start>..HEAD --oneline`）。非 git 目錄或 git 出錯 → null + `hints.git`。
