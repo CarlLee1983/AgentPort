@@ -161,4 +161,46 @@ describe("HTTP transport 與 bearer 驗證", () => {
       await codexClient.close();
     }
   });
+
+  it("非 loopback listen + allowed_hosts：允許的 Host 通過、其他 Host 回 403", async () => {
+    app = await createTestHttpApp(
+      unavailableDrivers,
+      [{ name: "grok", tokenEnv: "AGENTPORT_TOKEN_GROK", token: "secret-1" }],
+      { listen: "0.0.0.0:0", allowedHosts: ["myhost.lan"] },
+    );
+    // `listen` 綁在 0.0.0.0，實際連線走 loopback 介面，靠 Host header 模擬遠端 host。
+    const boundUrl = new URL(app.handle.url);
+    const url = new URL(`http://127.0.0.1:${boundUrl.port}/`);
+
+    // 一個合法的 legacy-era `initialize` 請求（`@modelcontextprotocol/client`
+    // 實際送出的第一個請求就長這樣，不帶 `_meta` envelope，`createMcpHandler`
+    // 預設 `legacy: 'stateless'` 一樣會處理），用來確認 Host 通過後請求真的能
+    // 打進 MCP handler，不只是「沒被 403 擋下來」。
+    const initializeBody = JSON.stringify({
+      method: "initialize",
+      params: {
+        protocolVersion: "2025-11-25",
+        capabilities: {},
+        clientInfo: { name: "test-client", version: "0.0.0" },
+      },
+      jsonrpc: "2.0",
+      id: 0,
+    });
+
+    const allowed = await rawRequest(url, {
+      headers: {
+        Authorization: "Bearer secret-1",
+        Host: "myhost.lan",
+        "content-type": "application/json",
+        accept: "application/json, text/event-stream",
+      },
+      body: initializeBody,
+    });
+    expect(allowed.status).toBe(200);
+
+    const rejected = await rawRequest(url, {
+      headers: { Authorization: "Bearer secret-1", Host: "evil" },
+    });
+    expect(rejected.status).toBe(403);
+  });
 });

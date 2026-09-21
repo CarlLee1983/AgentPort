@@ -86,7 +86,13 @@ export function loadConfig(path: string, env: Env): LoadResult {
   errors.push(...expanded.errors);
 
   errors.push(
-    ...validateSemantics(expanded.agents, validCallers, expanded.runtimes, env),
+    ...validateSemantics(
+      expanded.agents,
+      validCallers,
+      expanded.runtimes,
+      server,
+      env,
+    ),
   );
 
   if (errors.length > 0) {

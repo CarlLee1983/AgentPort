@@ -2,7 +2,7 @@ import { mkdirSync } from "node:fs";
 import { dirname } from "node:path";
 
 import Database from "better-sqlite3";
-import { ulid } from "ulid";
+import { monotonicFactory } from "ulid";
 
 import type {
   GitCommit,
@@ -103,6 +103,11 @@ interface ContextRow {
  * `dbPath` 所在的目錄不存在時先建立（設定檔預設路徑指向尚未存在的巢狀目錄）。
  */
 export function openTaskStore(dbPath: string): TaskStore {
+  // 用 monotonicFactory 而不是裸 `ulid()`：同一毫秒內連續呼叫時，一般 ulid 只保證
+  // 時間戳部分遞增、隨機尾碼不保證順序；monotonic 版在同一毫秒內把尾碼加一，讓
+  // `task_id` / `context_id` 全域嚴格遞增，`listTasks` 才能拿它當可靠的分頁 cursor
+  // 與時間排序鍵（見下方 `ORDER BY task_id DESC`）。
+  const ulid = monotonicFactory();
   mkdirSync(dirname(dbPath), { recursive: true });
   const db = new Database(dbPath);
   db.pragma("journal_mode = WAL");
@@ -292,6 +297,9 @@ export function openTaskStore(dbPath: string): TaskStore {
         params.cursor = input.cursor;
       }
       const where = clauses.length > 0 ? `WHERE ${clauses.join(" AND ")}` : "";
+      // `task_id` 是 monotonic ulid，字典序即建立順序，`ORDER BY task_id DESC`
+      // 等同「最新建立的排最前面」；`cursor` 用 `task_id < @cursor` 取下一頁，
+      // 靠的正是這個嚴格遞增保證（同一毫秒建立的兩筆也不會有 cursor 卡住或跳過的問題）。
       // 多拿一筆判斷是否還有下一頁，取回後丟掉。
       const rows = db
         .prepare(

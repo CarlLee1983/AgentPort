@@ -4,6 +4,7 @@ import type { Config } from "../config/schema.js";
 import type { Scheduler } from "../scheduler.js";
 import type { TaskStore } from "../store/sqlite.js";
 import type { TaskNotifier } from "../task/notifier.js";
+import type { CapacityPolicy } from "./capacity.js";
 import { registerFollowUp } from "./tools/follow-up.js";
 import { registerGetTask } from "./tools/get-task.js";
 import { registerListAgents } from "./tools/list-agents.js";
@@ -15,6 +16,7 @@ export interface ServerFactoryDeps {
   store: TaskStore;
   scheduler: Scheduler;
   notifier: TaskNotifier;
+  capacity: CapacityPolicy;
   caller: string;
 }
 
@@ -39,8 +41,9 @@ export function createServerFactory(
       store: deps.store,
       notifier: deps.notifier,
       config: deps.config,
+      capacity: deps.capacity,
     });
-    registerListTasks(server, { store: deps.store });
+    registerListTasks(server, { store: deps.store, capacity: deps.capacity });
     return server;
   };
 }

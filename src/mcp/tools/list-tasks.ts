@@ -4,7 +4,7 @@ import { z } from "zod";
 import type { TaskStore } from "../../store/sqlite.js";
 import { TaskStateSchema, TaskSummarySchema } from "../../task/schema.js";
 import type { TaskSummary } from "../../task/schema.js";
-import { fitsCapacity } from "../capacity.js";
+import type { CapacityPolicy } from "../capacity.js";
 import { result } from "../result.js";
 
 const InputSchema = z.object({
@@ -22,6 +22,7 @@ const OutputSchema = z.object({
 
 export interface ListTasksDeps {
   store: TaskStore;
+  capacity: CapacityPolicy;
 }
 
 /**
@@ -58,7 +59,7 @@ export function registerListTasks(
         const lastIncluded: TaskSummary | undefined = tasks[tasks.length - 1];
         if (
           lastIncluded &&
-          !fitsCapacity({ tasks: candidate, next_cursor: null })
+          !deps.capacity.fitsCapacity({ tasks: candidate, next_cursor: null })
         ) {
           next_cursor = lastIncluded.task_id;
           break;

@@ -14,38 +14,21 @@ import {
 } from "@modelcontextprotocol/server";
 
 import type { BearerAuth } from "./auth.js";
+import { hostnameOf, isLoopbackHost, parseListen } from "./listen.js";
 
-const LOOPBACK_HOSTNAMES = ["127.0.0.1", "localhost", "::1", "[::1]"];
-
-export interface ParsedListen {
-  host: string;
-  port: number;
-}
-
-/** `host:port`（含裸 IPv6 需以 `[]` 包住）。 */
-export function parseListen(listen: string): ParsedListen {
-  const separatorIndex = listen.lastIndexOf(":");
-  if (separatorIndex === -1) {
-    throw new Error(`listen 格式錯誤，需為 host:port：${listen}`);
-  }
-  const host = listen.slice(0, separatorIndex);
-  const portText = listen.slice(separatorIndex + 1);
-  const port = Number(portText);
-  if (
-    host.length === 0 ||
-    !Number.isInteger(port) ||
-    port < 0 ||
-    port > 65535
-  ) {
-    throw new Error(`listen 格式錯誤，需為 host:port：${listen}`);
-  }
-  return { host, port };
-}
+export type { ParsedListen } from "./listen.js";
+export { parseListen } from "./listen.js";
 
 export interface StartHttpServerOptions {
   listen: string;
   serverFactory: (caller?: string) => McpServer;
   auth: BearerAuth;
+  /**
+   * 非 loopback `listen` 時的 Host / Origin 允許清單（`loadConfig` 已驗證非
+   * loopback 監聽一定會有值）；loopback 監聽時忽略，一律用 SDK 內建的
+   * loopback 驗證。項目可以是 `host` 或 `host:port`。
+   */
+  allowedHosts?: string[];
 }
 
 export interface HttpServerHandle {
@@ -60,6 +43,15 @@ function firstHeaderValue(
 }
 
 /**
+ * 驗證過的 caller 名稱以 `clientId` 傳給 server factory；`token` 不放原始
+ * bearer token（已經驗證過、之後也只認 `clientId`，沒有理由讓它繼續在記憶體
+ * 裡流轉），一律填固定字串。
+ */
+export function buildAuthInfo(caller: string): AuthInfo {
+  return { token: "redacted", clientId: caller, scopes: [] };
+}
+
+/**
  * 把 `serverFactory` 掛到 Node HTTP server：stateless `createMcpHandler`
  * （不用 MCP session），前面依序過 Host / Origin 驗證與 bearer 驗證；
  * bearer 驗過的 caller 名稱以 `AuthInfo.clientId` 傳入 factory。
@@ -68,7 +60,8 @@ export async function startHttpServer(
   options: StartHttpServerOptions,
 ): Promise<HttpServerHandle> {
   const { host, port } = parseListen(options.listen);
-  const isLoopback = LOOPBACK_HOSTNAMES.includes(host);
+  const isLoopback = isLoopbackHost(host);
+  const allowedHostnames = (options.allowedHosts ?? []).map(hostnameOf);
 
   const handler = createMcpHandler((ctx) =>
     options.serverFactory(ctx.authInfo?.clientId),
@@ -77,10 +70,10 @@ export async function startHttpServer(
 
   const validateHost = isLoopback
     ? localhostHostValidation()
-    : hostHeaderValidation([host]);
+    : hostHeaderValidation(allowedHostnames);
   const validateOrigin = isLoopback
     ? localhostOriginValidation()
-    : originValidation([host]);
+    : originValidation(allowedHostnames);
 
   const httpServer = createServer((request, response) => {
     if (
@@ -105,11 +98,7 @@ export async function startHttpServer(
       method: string;
       url: string;
     };
-    authenticatedRequest.auth = {
-      token: firstHeaderValue(request.headers.authorization) ?? "",
-      clientId: authResult.caller,
-      scopes: [],
-    };
+    authenticatedRequest.auth = buildAuthInfo(authResult.caller);
     void nodeHandler(authenticatedRequest, response);
   });
 

@@ -12,11 +12,21 @@ const DEFAULT_FINAL_TEXT_LIMIT_BYTES =
   DEFAULT_RESPONSE_BODY_LIMIT_BYTES / 2 - 64 * 1024;
 const ENVELOPE_OVERHEAD_BYTES = 1024;
 
-export const RESPONSE_BODY_LIMIT_BYTES = DEFAULT_RESPONSE_BODY_LIMIT_BYTES;
-export const FINAL_TEXT_LIMIT_BYTES = DEFAULT_FINAL_TEXT_LIMIT_BYTES;
+export interface CapacityPolicyOptions {
+  responseBodyLimitBytes?: number;
+  finalTextLimitBytes?: number;
+}
 
-let responseBodyLimitBytes = DEFAULT_RESPONSE_BODY_LIMIT_BYTES;
-let finalTextLimitBytes = DEFAULT_FINAL_TEXT_LIMIT_BYTES;
+export interface CapacityPolicy {
+  /** payload 序列化後是否落在目前的回應體容量上限內（ADR-0005）。 */
+  fitsCapacity(payload: unknown): boolean;
+  /**
+   * `final_text` 超過上限時，回傳一份截尾後的新 `TaskRecord` 並標記
+   * `hints.truncated = true`；完整內容留在 `raw_log_path`。不改動傳入的 task。
+   * 未超過上限時原樣回傳。
+   */
+  truncateFinalText(task: TaskRecord): TaskRecord;
+}
 
 /** 估算一個 tool 成功回應 payload 實際佔用的 JSON-RPC 回應體大小。 */
 function estimateResponseBodyBytes(payload: unknown): number {
@@ -24,11 +34,6 @@ function estimateResponseBodyBytes(payload: unknown): number {
     Buffer.byteLength(JSON.stringify(payload), "utf8") * 2 +
     ENVELOPE_OVERHEAD_BYTES
   );
-}
-
-/** payload 序列化後是否落在目前的回應體容量上限內（ADR-0005）。 */
-export function fitsCapacity(payload: unknown): boolean {
-  return estimateResponseBodyBytes(payload) <= responseBodyLimitBytes;
 }
 
 /**
@@ -51,42 +56,36 @@ function truncateUtf8(text: string, maxBytes: number): string {
 }
 
 /**
- * `final_text` 超過上限時，回傳一份截尾後的新 `TaskRecord` 並標記
- * `hints.truncated = true`；完整內容留在 `raw_log_path`。不改動傳入的 task。
- * 未超過上限時原樣回傳。
+ * 建立一份容量政策：預設值即 ADR-0005 的 8 MiB 回應體上限與對半分給
+ * `final_text` 的上限；測試可傳 `options` 覆寫成小很多的上限，不必真的塞出
+ * 8 MiB payload 就能逼出縮頁 / 截尾行為。由 `createApp` 建立一份預設實例，
+ * 經 server factory 的 deps 傳給 `get_task` / `list_tasks`。
  */
-export function truncateFinalText(task: TaskRecord): TaskRecord {
-  if (task.final_text === null) {
-    return task;
-  }
-  if (Buffer.byteLength(task.final_text, "utf8") <= finalTextLimitBytes) {
-    return task;
-  }
+export function createCapacityPolicy(
+  options: CapacityPolicyOptions = {},
+): CapacityPolicy {
+  const responseBodyLimitBytes =
+    options.responseBodyLimitBytes ?? DEFAULT_RESPONSE_BODY_LIMIT_BYTES;
+  const finalTextLimitBytes =
+    options.finalTextLimitBytes ?? DEFAULT_FINAL_TEXT_LIMIT_BYTES;
+
   return {
-    ...task,
-    final_text: truncateUtf8(task.final_text, finalTextLimitBytes),
-    hints: { ...task.hints, truncated: true },
+    fitsCapacity(payload) {
+      return estimateResponseBodyBytes(payload) <= responseBodyLimitBytes;
+    },
+
+    truncateFinalText(task) {
+      if (task.final_text === null) {
+        return task;
+      }
+      if (Buffer.byteLength(task.final_text, "utf8") <= finalTextLimitBytes) {
+        return task;
+      }
+      return {
+        ...task,
+        final_text: truncateUtf8(task.final_text, finalTextLimitBytes),
+        hints: { ...task.hints, truncated: true },
+      };
+    },
   };
-}
-
-/**
- * 僅供測試：暫時覆寫回應體 / final_text 容量上限，讓測試不必真的塞出 8 MiB
- * payload 就能驗證縮頁與截尾行為。
- */
-export function setCapacityLimitsForTesting(overrides: {
-  responseBodyLimitBytes?: number;
-  finalTextLimitBytes?: number;
-}): void {
-  if (overrides.responseBodyLimitBytes !== undefined) {
-    responseBodyLimitBytes = overrides.responseBodyLimitBytes;
-  }
-  if (overrides.finalTextLimitBytes !== undefined) {
-    finalTextLimitBytes = overrides.finalTextLimitBytes;
-  }
-}
-
-/** 僅供測試：把容量上限還原成預設值。 */
-export function resetCapacityLimitsForTesting(): void {
-  responseBodyLimitBytes = DEFAULT_RESPONSE_BODY_LIMIT_BYTES;
-  finalTextLimitBytes = DEFAULT_FINAL_TEXT_LIMIT_BYTES;
 }

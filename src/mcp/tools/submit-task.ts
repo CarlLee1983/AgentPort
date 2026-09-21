@@ -4,6 +4,7 @@ import { z } from "zod";
 import type { Config } from "../../config/schema.js";
 import type { Scheduler } from "../../scheduler.js";
 import type { TaskStore } from "../../store/sqlite.js";
+import { createAndEnqueue } from "./enqueue.js";
 import { result, toolError } from "../result.js";
 
 const InputSchema = z.object({
@@ -45,19 +46,13 @@ export function registerSubmitTask(
       }
 
       const context = deps.store.createContext(agent);
-      const task = deps.store.createTask({
-        context_id: context.context_id,
-        agent,
-        caller: deps.caller,
-        prompt,
-      });
-      deps.scheduler.enqueue(task.task_id);
-
-      return result({
-        task_id: task.task_id,
-        context_id: context.context_id,
-        state: "queued" as const,
-      });
+      return result(
+        createAndEnqueue(deps, {
+          context_id: context.context_id,
+          agent,
+          prompt,
+        }),
+      );
     },
   );
 }
