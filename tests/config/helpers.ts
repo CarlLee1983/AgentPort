@@ -46,9 +46,10 @@ export async function makeWorkspace(
 export async function makeFakeExecutable(
   dir: string,
   name: string,
+  script = "#!/bin/sh\nexit 0\n",
 ): Promise<string> {
   const execPath = join(dir, name);
-  await writeFile(execPath, "#!/bin/sh\nexit 0\n", "utf8");
+  await writeFile(execPath, script, "utf8");
   await chmod(execPath, 0o755);
   return execPath;
 }

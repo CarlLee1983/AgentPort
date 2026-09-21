@@ -1,0 +1,7 @@
+{"type":"thread.started","thread_id":"01a0c201-ce7e-7bc1-b06b-911c159b76da"}
+{"type":"turn.started"}
+{"type":"item.completed","item":{"id":"item_0","type":"agent_message","text":"I’ll run `ls` in the workspace and report only the filenames shown."}}
+{"type":"item.started","item":{"id":"item_1","type":"command_execution","command":"/bin/zsh -lc ls","aggregated_output":"","exit_code":null,"status":"in_progress"}}
+{"type":"item.completed","item":{"id":"item_1","type":"command_execution","command":"/bin/zsh -lc ls","aggregated_output":"a.txt\nb.txt\n","exit_code":0,"status":"completed"}}
+{"type":"item.completed","item":{"id":"item_2","type":"agent_message","text":"I see:\n\n- `a.txt`\n- `b.txt`"}}
+{"type":"turn.completed","usage":{"input_tokens":41517,"cached_input_tokens":24064,"cache_write_input_tokens":0,"output_tokens":113,"reasoning_output_tokens":18}}

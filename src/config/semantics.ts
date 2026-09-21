@@ -155,26 +155,17 @@ function validateRuntimeExecutables(
 ): void {
   const usedRuntimes = new Set(agents.map(({ value }) => value.runtime));
   for (const runtime of usedRuntimes) {
-    const configuredCommand = runtimes[runtime]?.command;
-    if (configuredCommand !== undefined) {
-      const isBareName = !configuredCommand.includes("/");
-      const found = isBareName
-        ? findOnPath(configuredCommand, env.PATH)
-        : isExecutableFile(configuredCommand);
-      if (!found) {
-        errors.push({
-          path: `runtimes.${runtime}.command`,
-          message: isBareName
-            ? `在 PATH 中找不到可執行檔：${configuredCommand}`
-            : `runtime 執行檔不存在或不可執行：${configuredCommand}`,
-        });
-      }
-      continue;
-    }
-    if (!findOnPath(runtime, env.PATH)) {
+    const configuredCommand = runtimes[runtime].command;
+    const isBareName = !configuredCommand.includes("/");
+    const found = isBareName
+      ? findOnPath(configuredCommand, env.PATH)
+      : isExecutableFile(configuredCommand);
+    if (!found) {
       errors.push({
         path: `runtimes.${runtime}.command`,
-        message: `在 PATH 中找不到可執行檔：${runtime}`,
+        message: isBareName
+          ? `在 PATH 中找不到可執行檔：${configuredCommand}`
+          : `runtime 執行檔不存在或不可執行：${configuredCommand}`,
       });
     }
   }

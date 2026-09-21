@@ -2,7 +2,7 @@ import { readFileSync } from "node:fs";
 
 import { afterEach, describe, expect, it } from "vitest";
 
-import { unavailableDrivers } from "../../src/driver/unavailable.js";
+import { unavailableDrivers } from "../helpers/unavailable-driver.js";
 import { cleanupTempDirs } from "../config/helpers.js";
 import { scriptedDriver } from "../helpers/fake-driver.js";
 import { initGitWorkspace } from "../helpers/git.js";
@@ -67,6 +67,10 @@ describe("submit_task", () => {
           usage: { input_tokens: 10, output_tokens: 5 },
         },
       ],
+      rawLines: [
+        '{"type":"system","subtype":"init","session_id":"sess-1"}',
+        '{"type":"result","subtype":"success"}',
+      ],
     });
     const app = await createTestApp({ claude: driver, codex: driver });
     try {
@@ -93,10 +97,12 @@ describe("submit_task", () => {
       const lines = readFileSync(task.raw_log_path as string, "utf8")
         .trim()
         .split("\n");
-      expect(lines).toHaveLength(3);
+      // JSONL 現在是原始 CLI 行（`rawLines`），不是映射後的 DriverEvent。
+      expect(lines).toHaveLength(2);
       expect(JSON.parse(lines[0] as string)).toEqual({
-        type: "started",
-        runtime_session_id: "sess-1",
+        type: "system",
+        subtype: "init",
+        session_id: "sess-1",
       });
     } finally {
       await app.close();

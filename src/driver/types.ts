@@ -15,7 +15,7 @@ export type DriverEvent =
       final_text: string;
       usage: Record<string, number> | null;
     }
-  | { type: "failed"; error: string };
+  | { type: "failed"; error: string; code?: "session_unresumable" };
 
 export interface TurnInput {
   workspace: string;
@@ -29,9 +29,17 @@ export interface Turn {
   kill(): void;
 }
 
+export interface TurnHooks {
+  /** 收到一行原始 CLI 輸出（尚未映射成 DriverEvent）時呼叫；供寫進原始 JSONL log。 */
+  onRawLine?(line: string): void;
+}
+
 export interface RuntimeDriver {
-  start(input: TurnInput): Turn;
-  resume(input: TurnInput & { runtime_session_id: string }): Turn;
+  start(input: TurnInput, hooks?: TurnHooks): Turn;
+  resume(
+    input: TurnInput & { runtime_session_id: string },
+    hooks?: TurnHooks,
+  ): Turn;
 }
 
 export type DriverRegistry = Record<RuntimeName, RuntimeDriver>;

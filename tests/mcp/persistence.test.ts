@@ -5,7 +5,7 @@ import { afterEach, describe, expect, it } from "vitest";
 
 import { createApp } from "../../src/app.js";
 import { loadConfig } from "../../src/config/load.js";
-import { unavailableDrivers } from "../../src/driver/unavailable.js";
+import { unavailableDrivers } from "../helpers/unavailable-driver.js";
 import {
   agentToml,
   baseEnv,

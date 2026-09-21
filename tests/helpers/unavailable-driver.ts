@@ -3,7 +3,7 @@ import type {
   DriverRegistry,
   RuntimeDriver,
   Turn,
-} from "./types.js";
+} from "../../src/driver/types.js";
 
 /**
  * 真正的 Runtime Driver 尚未實作（票 04 / 05）。`agentport stdio` 暫時用這個

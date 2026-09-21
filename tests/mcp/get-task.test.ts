@@ -1,6 +1,6 @@
 import { afterEach, describe, expect, it } from "vitest";
 
-import { unavailableDrivers } from "../../src/driver/unavailable.js";
+import { unavailableDrivers } from "../helpers/unavailable-driver.js";
 import { cleanupTempDirs } from "../config/helpers.js";
 import { createTestApp } from "../helpers/app.js";
 

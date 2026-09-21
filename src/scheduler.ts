@@ -85,20 +85,23 @@ export function createScheduler(deps: SchedulerDeps): Scheduler {
         policy: agent.policy,
         extra_args: agent.extra_args ?? [],
       };
+      const hooks = { onRawLine: (line: string) => rawLog?.writeLine(line) };
       const turn =
         context?.runtime_session_id !== null &&
         context?.runtime_session_id !== undefined
-          ? driver.resume({
-              ...turnInput,
-              runtime_session_id: context.runtime_session_id,
-            })
-          : driver.start(turnInput);
+          ? driver.resume(
+              {
+                ...turnInput,
+                runtime_session_id: context.runtime_session_id,
+              },
+              hooks,
+            )
+          : driver.start(turnInput, hooks);
 
       let hints: Hints = {};
       let terminal = false;
       let completed: CompletedOutcome | undefined;
       for await (const event of turn.events) {
-        rawLog.write(event);
         if (terminal) {
           // 已經收到終態事件（completed / failed），忽略之後送來的事件，不覆寫結果。
           continue;
@@ -163,7 +166,7 @@ export function createScheduler(deps: SchedulerDeps): Scheduler {
         };
       case "failed":
         store.markFailed(task.task_id, {
-          code: "runtime_failed",
+          code: event.code ?? "runtime_failed",
           message: event.error,
           hints: hintsOrUndefined(hints),
         });

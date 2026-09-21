@@ -4,7 +4,7 @@ import { serveStdio } from "@modelcontextprotocol/server/stdio";
 import { createApp } from "./app.js";
 import { loadConfig } from "./config/load.js";
 import { resolveConfigPath } from "./config/paths.js";
-import { unavailableDrivers } from "./driver/unavailable.js";
+import { createDrivers } from "./driver/registry.js";
 
 const USAGE = "usage: agentport check-config [--config <path>]";
 const STDIO_USAGE = "usage: agentport stdio [--config <path>]";
@@ -74,7 +74,7 @@ function runStdio(args: string[]): number {
 
   const app = createApp({
     config: result.config,
-    drivers: unavailableDrivers,
+    drivers: createDrivers(result.config, process.env),
     caller: "local",
   });
 

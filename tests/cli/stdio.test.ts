@@ -17,6 +17,29 @@ import {
 } from "../config/helpers.js";
 
 const execFileAsync = promisify(execFile);
+
+/** 假 `claude`：不看引數，吐最小的 stream-json（init + result）後 exit 0。 */
+async function makeFakeClaude(dir: string): Promise<void> {
+  const init = JSON.stringify({
+    type: "system",
+    subtype: "init",
+    session_id: "fake-session",
+  });
+  const result = JSON.stringify({
+    type: "result",
+    subtype: "success",
+    is_error: false,
+    result: "fake done",
+    session_id: "fake-session",
+    usage: { input_tokens: 1, output_tokens: 1 },
+    permission_denials: [],
+  });
+  await makeFakeExecutable(
+    dir,
+    "claude",
+    `#!/bin/sh\necho '${init}'\necho '${result}'\nexit 0\n`,
+  );
+}
 const CLI_PATH = fileURLToPath(new URL("../../dist/cli.js", import.meta.url));
 
 afterEach(cleanupTempDirs);
@@ -43,7 +66,7 @@ describe("agentport stdio 子命令", () => {
   it("真的 spawn 子程序，透過 stdio 連線呼叫 list_agents / submit_task / get_task", async () => {
     const dir = await makeTempDir();
     await makeWorkspace(dir, "workspace");
-    await makeFakeExecutable(dir, "claude");
+    await makeFakeClaude(dir);
     const dbPath = `${dir}/agentport.sqlite`;
     const logDir = `${dir}/logs`;
     const configPath = await writeConfigFile(
@@ -79,7 +102,7 @@ describe("agentport stdio 子命令", () => {
         task_id: string;
       };
 
-      let task: { state: string; error?: { code: string } } = {
+      let task: { state: string; final_text?: string | null } = {
         state: "queued",
       };
       const deadline = Date.now() + 5000;
@@ -97,9 +120,9 @@ describe("agentport stdio 子命令", () => {
         }
       }
 
-      // 真 Driver 還沒做（票 04/05），這張票的假 Driver 立即回 failed。
-      expect(task.state).toBe("failed");
-      expect(task.error?.code).toBe("runtime_failed");
+      // 假 claude 吐最小 stream-json：init + result，真實 stdio 路徑應走到 completed。
+      expect(task.state).toBe("completed");
+      expect(task.final_text).toBe("fake done");
     } finally {
       await client.close();
     }

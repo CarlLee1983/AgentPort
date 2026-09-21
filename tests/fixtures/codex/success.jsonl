@@ -1,0 +1,7 @@
+{"type":"thread.started","thread_id":"01a0c201-7cd4-7890-ad53-b6a102ed4ca7"}
+{"type":"turn.started"}
+{"type":"item.completed","item":{"id":"item_0","type":"agent_message","text":"Creating `note.txt` with the requested content using `apply_patch` only."}}
+{"type":"item.started","item":{"id":"item_1","type":"file_change","changes":[{"path":"/workspace/fixture/note.txt","kind":"add"}],"status":"in_progress"}}
+{"type":"item.completed","item":{"id":"item_1","type":"file_change","changes":[{"path":"/workspace/fixture/note.txt","kind":"add"}],"status":"completed"}}
+{"type":"item.completed","item":{"id":"item_2","type":"agent_message","text":"Created `note.txt` containing `hi`."}}
+{"type":"turn.completed","usage":{"input_tokens":42020,"cached_input_tokens":26112,"cache_write_input_tokens":0,"output_tokens":263,"reasoning_output_tokens":173}}

@@ -71,13 +71,9 @@ export function expandConfigPaths(
     ),
   };
 
-  const runtimes: Config["runtimes"] = {};
+  const runtimes = { ...shape.runtimes };
   for (const name of RUNTIME_NAMES) {
-    const command = shape.runtimes[name]?.command;
-    if (command === undefined) {
-      runtimes[name] = shape.runtimes[name];
-      continue;
-    }
+    const command = shape.runtimes[name].command;
     const expandedCommand = needsExpansion(command)
       ? expandOrRecordError(
           command,

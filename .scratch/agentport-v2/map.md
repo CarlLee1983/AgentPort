@@ -43,6 +43,7 @@ Created: 2026-09-20
 - Token 輪替與撤銷。
 - 第三個 runtime（Cursor Agent 等）與 Windows。
 - Runtime 產出的 Artifact 判定（哪些檔案可回給 caller）。
+- `read-only` policy 對 Claude 的對應：`plan`（現行，不嘗試寫檔、無 permission_denied 證據、留 plans 檔）還是 `default` + `--permission-prompts none`（寫入被拒並記入 hints）。票 04/05 實跑發現。
 - 每 agent 佇列上限、`submit_task` 的 `idempotency_key`、Task 保留期限清理——票 05 先不做，有痛點再開。
 
 ## Out of scope

@@ -22,9 +22,18 @@ export const CallerSchema = z.strictObject({
   token_env: z.string(),
 });
 
-export const RuntimeConfigSchema = z.strictObject({
-  command: z.string().optional(),
-});
+/** `command` 未設時各自預設成裸名，交給語意驗證走 `PATH` 查找（見 `src/driver/registry.ts`）。 */
+export const ClaudeRuntimeConfigSchema = z
+  .strictObject({
+    command: z.string().default("claude"),
+  })
+  .prefault({});
+
+export const CodexRuntimeConfigSchema = z
+  .strictObject({
+    command: z.string().default("codex"),
+  })
+  .prefault({});
 
 export const ConfigSchema = z.strictObject({
   server: z
@@ -41,8 +50,8 @@ export const ConfigSchema = z.strictObject({
     .prefault({}),
   runtimes: z
     .strictObject({
-      claude: RuntimeConfigSchema.optional(),
-      codex: RuntimeConfigSchema.optional(),
+      claude: ClaudeRuntimeConfigSchema,
+      codex: CodexRuntimeConfigSchema,
     })
     .prefault({}),
   agents: z.array(AgentSchema).min(1, "agents[] 不可為空"),
