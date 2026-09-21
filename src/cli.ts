@@ -9,6 +9,10 @@ import type { DriverRegistry } from "./driver/types.js";
 import { createDrivers } from "./driver/registry.js";
 import { createBearerAuth, resolveBearerCallers } from "./http/auth.js";
 import { startHttpServer } from "./http/server.js";
+import {
+  createProcessServiceDependencies,
+  runService,
+} from "./service/index.js";
 
 const USAGE = "usage: agentport check-config [--config <path>]";
 const STDIO_USAGE = "usage: agentport stdio [--config <path>]";
@@ -225,6 +229,10 @@ export function main(argv: string[]): number {
 
   if (command === "serve") {
     return runServe(rest);
+  }
+
+  if (command === "service") {
+    return runService(rest, createProcessServiceDependencies());
   }
 
   console.error(USAGE);
