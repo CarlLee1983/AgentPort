@@ -4,9 +4,11 @@
 
 **Blocked by:** 06
 
-**Status:** ready-for-agent
+**Status:** done
 
-- [ ] 啟動時掃描 SQLite：所有 running → `failed`、`error.code = interrupted`，不從 JSONL 回填 partial
-- [ ] queued 保留並由 worker 依原順序繼續執行
-- [ ] 測試以「寫入 running / queued 狀態 → 重建 server → 觀察」的方式驗證，不依賴真程序
-- [ ] 行為與 v1 ADR-0002 第二段的差異記在 12 號票的 ADR
+- [x] 啟動時掃描 SQLite：所有 running → `failed`、`error.code = interrupted`，不從 JSONL 回填 partial
+- [x] queued 保留並由 worker 依原順序繼續執行
+- [x] 測試以「寫入 running / queued 狀態 → 重建 server → 觀察」的方式驗證，不依賴真程序
+- [x] 行為與 v1 ADR-0002 第二段的差異記在 12 號票的 ADR（已寫入票 12「自票 11 移交」段落，ADR 本文由票 12 產出）
+
+實作時定案（重啟掃描位置、單實例鎖）已寫回 `specs/agentport-v2.md`「Task 狀態模型」段落。

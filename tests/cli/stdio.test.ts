@@ -127,4 +127,46 @@ describe("agentport stdio 子命令", () => {
       await client.close();
     }
   }, 10000);
+
+  it("同一個 db_path 已被另一個 agentport stdio 程序占用時，第二個以 exit code 1 結束並印出鎖訊息", async () => {
+    const dir = await makeTempDir();
+    await makeWorkspace(dir, "workspace");
+    await makeFakeClaude(dir);
+    const dbPath = `${dir}/agentport.sqlite`;
+    const logDir = `${dir}/logs`;
+    const configPath = await writeConfigFile(
+      dir,
+      `${agentToml()}\n[storage]\ndb_path = "${dbPath}"\nlog_dir = "${logDir}"\n`,
+    );
+    const env = baseEnv({ HOME: dir, PATH: dir });
+
+    // 第一個程序：透過 stdio client 連上，讓它一直活著（不 close），佔住
+    // single-instance 鎖。
+    const firstTransport = new StdioClientTransport({
+      command: process.execPath,
+      args: [CLI_PATH, "stdio", "--config", configPath],
+      env: env as Record<string, string>,
+    });
+    const firstClient = new Client({ name: "test-client-1", version: "0.0.0" });
+    await firstClient.connect(firstTransport);
+
+    try {
+      // 第二個程序指向同一個 db_path：createApp 裡的 single-instance 鎖應該
+      // 讓它啟動失敗，不用等它真的把 stdio 服務起來。
+      await expect(
+        execFileAsync(
+          process.execPath,
+          [CLI_PATH, "stdio", "--config", configPath],
+          { env },
+        ),
+      ).rejects.toMatchObject({
+        code: 1,
+        stderr: expect.stringContaining(
+          `另一個 agentport 程序正在使用 ${dbPath}`,
+        ) as unknown,
+      });
+    } finally {
+      await firstClient.close();
+    }
+  }, 10000);
 });

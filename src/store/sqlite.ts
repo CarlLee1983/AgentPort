@@ -87,6 +87,14 @@ export interface TaskStore {
   cancelQueued(taskId: string, input: CancelQueuedInput): boolean;
   /** 把一個 `running` Task 標成 `cancelled`：保留已收到的文字與 git 摘要。 */
   markCancelled(taskId: string, input: MarkCancelledInput): void;
+  /**
+   * 服務啟動時的重啟掃描（票 11）：把所有 `running` Task 標成
+   * `failed{interrupted}`，不從 JSONL 回填 partial（`final_text` 留 null，
+   * `raw_log_path` 不動）。回傳受影響的筆數。
+   */
+  interruptRunning(): number;
+  /** 依 `task_id` 遞增（建立順序）取出所有 `queued` Task id，供重啟後依序續跑。 */
+  listQueuedTaskIds(): string[];
   close(): void;
 }
 
@@ -129,7 +137,40 @@ export function openTaskStore(dbPath: string): TaskStore {
   const ulid = monotonicFactory();
   mkdirSync(dirname(dbPath), { recursive: true });
   const db = new Database(dbPath);
-  db.pragma("journal_mode = WAL");
+  // 短 busy_timeout：只是為了讓下面搶 EXCLUSIVE 鎖的那個寫入盡快失敗（不是
+  // 5 秒的預設值），搶到鎖之後就改回 better-sqlite3 的預設值 5000ms，不影響
+  // 開啟後正常操作的行為（例如真的發生短暫 SQLITE_BUSY 時還是有機會重試）。
+  db.pragma("busy_timeout = 200");
+  try {
+    // 一個 db_path 同時只能有一個 agentport 程序：`locking_mode = EXCLUSIVE`
+    // 必須設在 `journal_mode = WAL` 之前，之後任何一次寫入都會讓這個連線一路
+    // 持有檔案鎖直到 `close()`（程序意外中止時 OS 會釋放，不需要額外的
+    // stale-lock 處理）。第二個程序這幾步任何一步撞到別人已持有的鎖都是
+    // SQLITE_BUSY / SQLITE_LOCKED，藉此在啟動當下就快速失敗，而不是等到真的
+    // 操作 tasks/contexts 表才發現。
+    db.pragma("locking_mode = EXCLUSIVE");
+    db.pragma("journal_mode = WAL");
+    db.exec("BEGIN EXCLUSIVE; COMMIT;");
+  } catch (error) {
+    db.close();
+    // 只有「鎖被別人占走」這類錯誤才改寫成好懂的訊息；檔案損毀
+    // （SQLITE_NOTADB）、唯讀、權限不足等其他錯誤原樣拋出，不要誤導成
+    // 「另一個程序在用」。用 `startsWith` 是因為 SQLITE_BUSY 有
+    // SQLITE_BUSY_SNAPSHOT 等擴充碼，都算同一類。
+    const code =
+      error instanceof Error &&
+      "code" in error &&
+      typeof error.code === "string"
+        ? error.code
+        : "";
+    if (code.startsWith("SQLITE_BUSY") || code.startsWith("SQLITE_LOCKED")) {
+      throw new Error(`另一個 agentport 程序正在使用 ${dbPath}`, {
+        cause: error,
+      });
+    }
+    throw error;
+  }
+  db.pragma("busy_timeout = 5000");
   db.exec(`
     CREATE TABLE IF NOT EXISTS contexts (
       context_id TEXT PRIMARY KEY,
@@ -192,6 +233,12 @@ export function openTaskStore(dbPath: string): TaskStore {
   // 誤把已經是別種終態的 Task 蓋回 cancelled。
   const updateMarkCancelled = db.prepare(
     `UPDATE tasks SET state = 'cancelled', finished_at = @finished_at, final_text = @final_text, diff_stat = @diff_stat, commits = @commits, usage = @usage, hints = @hints, error_code = @error_code, error_message = @error_message WHERE task_id = @task_id AND state = 'running'`,
+  );
+  const updateInterruptRunning = db.prepare(
+    `UPDATE tasks SET state = 'failed', finished_at = @finished_at, error_code = 'interrupted', error_message = @error_message WHERE state = 'running'`,
+  );
+  const selectQueuedTaskIds = db.prepare(
+    `SELECT task_id FROM tasks WHERE state = 'queued' ORDER BY task_id ASC`,
   );
 
   function rowToTask(row: TaskRow): TaskRecord {
@@ -402,6 +449,19 @@ export function openTaskStore(dbPath: string): TaskStore {
         error_code: input.code,
         error_message: input.message,
       });
+    },
+
+    interruptRunning() {
+      const info = updateInterruptRunning.run({
+        finished_at: new Date().toISOString(),
+        error_message: "service restarted while task was running",
+      });
+      return info.changes;
+    },
+
+    listQueuedTaskIds() {
+      const rows = selectQueuedTaskIds.all() as { task_id: string }[];
+      return rows.map((row) => row.task_id);
     },
 
     close() {

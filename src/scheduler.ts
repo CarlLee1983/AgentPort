@@ -157,10 +157,14 @@ export function createScheduler(deps: SchedulerDeps): Scheduler {
 
     const entry = active.get(taskId);
     if (!entry) {
-      // running 但這個 process 沒有對應的 `ActiveTask`：多半是前次服務程序
-      // 意外中止、DB 留了一筆 running 但從沒被這次啟動的 scheduler 接手過。
-      // 沒有 Turn 可以 kill，也沒有任何已收到的文字或摘要好等，直接收斂成
-      // cancelled，不要回 cancelling 讓呼叫端白等 long_poll_max_seconds。
+      // 防禦分支：正常情況下走不到這裡。啟動時的重啟掃描（票 11，
+      // `createApp` 裡的 `store.interruptRunning()`）已經把上次程序中止時
+      // 殘留的 running Task 全部收斂成 failed，加上 single-instance 鎖保證
+      // 同一個 db_path 不會有第二個 process，這個 process 看到的 running
+      // Task 理論上都在 `active` 裡有對應項目。保留這條分支只是為了在假設
+      // 破裂（例如未來繞過 `createApp` 直接操作 store）時仍有安全的收斂
+      // 行為，而不是讓呼叫端對著一個永遠沒有 Turn 可以 kill 的 Task 白等
+      // `cancelling`。
       markCancelled(taskId, {
         final_text: "",
         usage: null,

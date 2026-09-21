@@ -1,7 +1,20 @@
 import { afterEach, describe, expect, it } from "vitest";
 
-import { cleanupTempDirs } from "../config/helpers.js";
-import { createMultiAgentTestApp, waitForTaskFinal } from "../helpers/app.js";
+import { loadConfig } from "../../src/config/load.js";
+import {
+  agentToml,
+  baseEnv,
+  cleanupTempDirs,
+  makeFakeExecutable,
+  makeTempDir,
+  makeWorkspace,
+  writeConfigFile,
+} from "../config/helpers.js";
+import {
+  createMultiAgentTestApp,
+  createTestAppFromConfig,
+  waitForTaskFinal,
+} from "../helpers/app.js";
 import { scriptedDriver } from "../helpers/fake-driver.js";
 
 afterEach(cleanupTempDirs);
@@ -44,8 +57,11 @@ describe("scheduler 佇列：同 agent 序列、跨 agent 並行", () => {
         task_id: string;
       };
 
-      // 送出後立刻檢查：第一個已進 running，其餘還在 queued（第一個要跑 100ms）。
-      await new Promise((resolve) => setTimeout(resolve, 30));
+      // 用 `pulled(1)` 等到第一個 Task 的 `started` 事件確定送達，不用猜時間：
+      // 這個時間點第一個 Task 一定還沒送出 `completed`（`delayMs` 讓每個事件
+      // 都要等一段時間），同 agent FIFO 保證第二、三個 Task 這時一定還在
+      // queued，不會偶爾因為機器忙、排程延遲而誤判成「已經跑完」。
+      await driver.pulled(1);
       const second = await app.client.callTool({
         name: "get_task",
         arguments: { task_id: id2 },
@@ -84,17 +100,63 @@ describe("scheduler 佇列：同 agent 序列、跨 agent 並行", () => {
     }
   });
 
-  it("兩個 agent 各派一個 300ms task：started_at 差 < 100ms（重疊執行）", async () => {
-    const driver = scriptedDriver({
+  it("兩個 agent 各派一個 task：兩條 chain 各自獨立，不會被同一條 FIFO 序列化擋住", async () => {
+    // 兩個 agent 用不同 runtime（claude / codex），各自配一個獨立的假
+    // driver 實例：`holdAfter` 讓 Turn 送出 `started` 後卡住，`pulled(1)`
+    // 是每個 driver 自己的計數器，兩邊都等到才能確定「兩個 Turn 真的同時在
+    // 跑」。如果 scheduler 不小心把兩個 agent 排進同一條 FIFO chain，其中一個
+    // 永遠排不到、`pulled(1)` 永遠不 resolve，這裡會逾時失敗，而不是像原本
+    // 用 `started_at` 差值那樣偶爾因為機器忙就跨過 100ms 門檻、悄悄變成假
+    // 陽性或假陰性。
+    const driverA = scriptedDriver({
       events: [
-        { type: "started", runtime_session_id: "sess" },
-        { type: "completed", final_text: "done", usage: null },
+        { type: "started", runtime_session_id: "sess-a" },
+        { type: "completed", final_text: "done a", usage: null },
       ],
-      delayMs: 300,
+      holdAfter: 1,
     });
-    const app = await createMultiAgentTestApp(
-      { claude: driver, codex: driver },
-      ["stationhub", "forgepilot"],
+    const driverB = scriptedDriver({
+      events: [
+        { type: "started", runtime_session_id: "sess-b" },
+        { type: "completed", final_text: "done b", usage: null },
+      ],
+      holdAfter: 1,
+    });
+
+    const dir = await makeTempDir();
+    const stationhubWorkspace = await makeWorkspace(dir, "stationhub");
+    await makeWorkspace(dir, "forgepilot");
+    await makeFakeExecutable(dir, "claude");
+    await makeFakeExecutable(dir, "codex");
+    const dbPath = `${dir}/agentport.sqlite`;
+    const logDir = `${dir}/logs`;
+    const toml =
+      agentToml({
+        name: "stationhub",
+        workspace: "stationhub",
+        runtime: "claude",
+      }) +
+      agentToml({
+        name: "forgepilot",
+        workspace: "forgepilot",
+        runtime: "codex",
+      }) +
+      `\n[storage]\ndb_path = "${dbPath}"\nlog_dir = "${logDir}"\n`;
+    const configPath = await writeConfigFile(dir, toml);
+    const loadResult = loadConfig(
+      configPath,
+      baseEnv({ HOME: dir, PATH: dir }),
+    );
+    if (!loadResult.ok) {
+      throw new Error(
+        `測試設定檔載入失敗：${loadResult.errors.map((e) => `${e.path}: ${e.message}`).join("; ")}`,
+      );
+    }
+
+    const app = await createTestAppFromConfig(
+      loadResult.config,
+      { claude: driverA, codex: driverB },
+      { dir, dbPath, logDir, workspace: stationhubWorkspace },
     );
     try {
       const submitA = await app.client.callTool({
@@ -113,16 +175,24 @@ describe("scheduler 佇列：同 agent 序列、跨 agent 並行", () => {
         task_id: string;
       };
 
+      await Promise.all([driverA.pulled(1), driverB.pulled(1)]);
+
+      // 兩邊都證實同時在跑之後，靠 `cancel_task` 讓卡住的 Turn 結束
+      // （`holdAfter` 的假 driver 只有 `kill()` 能讓它繼續走完迭代）。
+      await app.client.callTool({
+        name: "cancel_task",
+        arguments: { task_id: idA },
+      });
+      await app.client.callTool({
+        name: "cancel_task",
+        arguments: { task_id: idB },
+      });
+
       const taskA = await waitForTaskFinal(app.client, idA);
       const taskB = await waitForTaskFinal(app.client, idB);
 
-      expect(taskA.state).toBe("completed");
-      expect(taskB.state).toBe("completed");
-
-      const startedA = Date.parse(taskA.started_at as string);
-      const startedB = Date.parse(taskB.started_at as string);
-
-      expect(Math.abs(startedA - startedB)).toBeLessThan(100);
+      expect(taskA.state).toBe("cancelled");
+      expect(taskB.state).toBe("cancelled");
     } finally {
       await app.close();
     }

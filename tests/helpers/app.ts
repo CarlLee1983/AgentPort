@@ -31,17 +31,14 @@ export interface TestApp {
 }
 
 /**
- * 建一個暫存目錄（config TOML + workspace + db + logs），用 `createApp` 組裝
- * server factory，並透過 `InMemoryTransport` 連上一個真的 MCP `Client`。
+ * 建一個暫存目錄（config TOML + workspace + db + logs）並載入設定檔，但不
+ * 開 store、不建 app：給需要在建 app 之前先用 `openTaskStore` 直接寫入「殘留」
+ * 狀態的測試（例如票 11 重啟語意）使用，之後再用 `createTestAppFromConfig`
+ * 建 app 觀察後續行為。
  */
-export async function createTestApp(
-  drivers: DriverRegistry,
-  options: {
-    extraToml?: string;
-    capacity?: CapacityPolicy;
-    turnTimeoutMs?: number;
-  } = {},
-): Promise<TestApp> {
+export async function prepareTestAppConfig(
+  options: { extraToml?: string } = {},
+): Promise<{ config: Config; paths: TestAppPaths }> {
   const dir = await makeTempDir();
   const workspace = await makeWorkspace(dir, "workspace");
   await makeFakeExecutable(dir, "claude");
@@ -58,10 +55,29 @@ export async function createTestApp(
     );
   }
 
+  return {
+    config: loadResult.config,
+    paths: { dir, dbPath, logDir, workspace },
+  };
+}
+
+/**
+ * 建一個暫存目錄（config TOML + workspace + db + logs），用 `createApp` 組裝
+ * server factory，並透過 `InMemoryTransport` 連上一個真的 MCP `Client`。
+ */
+export async function createTestApp(
+  drivers: DriverRegistry,
+  options: {
+    extraToml?: string;
+    capacity?: CapacityPolicy;
+    turnTimeoutMs?: number;
+  } = {},
+): Promise<TestApp> {
+  const { config, paths } = await prepareTestAppConfig(options);
   return createTestAppFromConfig(
-    loadResult.config,
+    config,
     drivers,
-    { dir, dbPath, logDir, workspace },
+    paths,
     options.capacity,
     options.turnTimeoutMs,
   );
@@ -108,7 +124,12 @@ export async function createMultiAgentTestApp(
   });
 }
 
-async function createTestAppFromConfig(
+/**
+ * 已有 `config`（例如 `prepareTestAppConfig` 產出、或重啟測試沿用前一個
+ * app 的 `config`）時，直接建 app 並連上 client；`createTestApp` 內部也是
+ * 靠這個函式組裝。
+ */
+export async function createTestAppFromConfig(
   config: Config,
   drivers: DriverRegistry,
   paths: TestAppPaths,

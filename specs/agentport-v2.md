@@ -135,6 +135,8 @@ token_env = "AGENTPORT_TOKEN_GROK"
 
 - Context：服務發 ULID，`submit_task` 時建立並回傳，綁定一個 agent；`runtime_session_id` 存於 Context，第一個 Task `started` 事件後回填。Context 內嚴格線性：前一個 Task 未完成的 follow-up 排在同 agent 佇列後。前一個 failed / cancelled 仍可 follow-up，有 session id 就 resume，否則起新 session。
 - 佇列：每 agent 一條 FIFO，不同 agent 並行，無上限。重啟後 queued 自動續跑（偏離 v1 ADR-0002 第二段，隨票 08 修訂）。中斷的 Task 不從 JSONL 回填 partial。
+- 建置票 11 實作時定案：重啟掃描在 `createApp` 內執行（`serve`、`stdio`、測試共用），先把所有 running 一次改為 `failed{interrupted}`（`final_text` 維持 null、保留 `raw_log_path`、設 `finished_at`），再依 `task_id` 遞增把 queued 重新排入，因此同 agent 的 FIFO 與 Context 線性不變，帶 `runtime_session_id` 的 follow-up 照常 resume。設定檔已移除該 agent 的殘留 queued 會收斂為 `failed{runtime_failed}`。
+- 建置票 11 實作時定案（使用者決定）：每個 `db_path` 只允許一個服務程序。`openTaskStore` 以 `locking_mode = EXCLUSIVE`（先於 `journal_mode = WAL`）加一次寫入取得獨佔鎖，持有到關閉；第二個程序（例如 `serve` 常駐時再開 `stdio`）拿到 `SQLITE_BUSY` 就快速失敗，訊息為「另一個 agentport 程序正在使用 <db_path>」，以非零碼結束。其他 SQLite 錯誤原樣回報。程序結束時 OS 自動釋放鎖，不需處理殘留鎖。主機上同時要用 `serve` 與 `stdio` 時，stdio 需設另一個 `db_path`。
 - 持久化：Task 表 `task_id`、`context_id`、`agent`、`caller`、`prompt`、`state`、`created_at` / `started_at` / `finished_at`、`final_text`、`diff_stat`、`commits[]`、`usage`、`hints`、`error{code, message}`、`raw_log_path`。Context 表 `context_id`、`agent`、`runtime_session_id`、`created_at`。永久保留；不做 submit 去重。
 - `hints` 非權威：`permission_denied[]` 原樣轉交 Claude 的 `permission_denials`；`git` 記摘要失敗原因。不做問句 heuristic。
 

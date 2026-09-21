@@ -1,10 +1,11 @@
 #!/usr/bin/env node
 import { serveStdio } from "@modelcontextprotocol/server/stdio";
 
-import { createApp } from "./app.js";
+import { createApp, type App } from "./app.js";
 import { loadConfig } from "./config/load.js";
 import { resolveConfigPath } from "./config/paths.js";
 import type { Config } from "./config/schema.js";
+import type { DriverRegistry } from "./driver/types.js";
 import { createDrivers } from "./driver/registry.js";
 import { createBearerAuth, resolveBearerCallers } from "./http/auth.js";
 import { startHttpServer } from "./http/server.js";
@@ -60,6 +61,36 @@ function loadConfigOrReport(args: string[], usage: string): LoadConfigOutcome {
   return { ok: true, config: result.config };
 }
 
+type CreateAppOutcome =
+  { ok: true; app: App } | { ok: false; exitCode: number };
+
+/**
+ * `runStdio` / `runServe` 共用：只包 `createApp` 這一步（`createDrivers` 的
+ * 錯誤維持原本行為，不在這裡接住）。失敗多半是 single-instance 鎖搶輸了
+ * （另一個 agentport 程序正用同一個 db_path）：印出清楚的錯誤訊息，不要讓
+ * 未接住的例外印出一大串 stack trace；`cause`（原始 SQLite 錯誤）另外印一行，
+ * 方便診斷但不混進第一行訊息。
+ */
+function createAppOrReport(
+  config: Config,
+  drivers: DriverRegistry,
+): CreateAppOutcome {
+  try {
+    const app = createApp({ config, drivers, caller: "local" });
+    return { ok: true, app };
+  } catch (error) {
+    if (error instanceof Error) {
+      console.error(error.message);
+      if (error.cause instanceof Error) {
+        console.error(error.cause.message);
+      }
+    } else {
+      console.error(String(error));
+    }
+    return { ok: false, exitCode: 1 };
+  }
+}
+
 function runCheckConfig(args: string[]): number {
   const outcome = loadConfigOrReport(args, USAGE);
   if (!outcome.ok) {
@@ -83,11 +114,12 @@ function runStdio(args: string[]): number {
     return outcome.exitCode;
   }
 
-  const app = createApp({
-    config: outcome.config,
-    drivers: createDrivers(outcome.config, process.env),
-    caller: "local",
-  });
+  const drivers = createDrivers(outcome.config, process.env);
+  const appOutcome = createAppOrReport(outcome.config, drivers);
+  if (!appOutcome.ok) {
+    return appOutcome.exitCode;
+  }
+  const app = appOutcome.app;
 
   try {
     // serveStdio() 本身是同步 API（回傳 StdioServerHandle，不是 Promise）；
@@ -139,11 +171,12 @@ function runServe(args: string[]): number {
     return 1;
   }
 
-  const app = createApp({
-    config,
-    drivers: createDrivers(config, process.env),
-    caller: "local",
-  });
+  const drivers = createDrivers(config, process.env);
+  const appOutcome = createAppOrReport(config, drivers);
+  if (!appOutcome.ok) {
+    return appOutcome.exitCode;
+  }
+  const app = appOutcome.app;
 
   const auth = createBearerAuth(resolvedCallers.callers);
 

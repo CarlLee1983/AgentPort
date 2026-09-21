@@ -27,33 +27,54 @@ export interface App {
 /** 組裝 Task Store、Scheduler 與 server factory；是 `agentport stdio` 與測試共用的入口。 */
 export function createApp(options: CreateAppOptions): App {
   const store = openTaskStore(options.config.storage.db_path);
-  const notifier = createTaskNotifier();
-  const capacity = options.capacity ?? createCapacityPolicy();
-  const scheduler = createScheduler({
-    store,
-    drivers: options.drivers,
-    config: options.config,
-    notifier,
-    ...(options.turnTimeoutMs !== undefined
-      ? { turnTimeoutMs: options.turnTimeoutMs }
-      : {}),
-  });
-  const serverFactory = createServerFactory({
-    config: options.config,
-    store,
-    scheduler,
-    notifier,
-    capacity,
-    caller: options.caller,
-  });
+  try {
+    const notifier = createTaskNotifier();
+    const capacity = options.capacity ?? createCapacityPolicy();
+    const scheduler = createScheduler({
+      store,
+      drivers: options.drivers,
+      config: options.config,
+      notifier,
+      ...(options.turnTimeoutMs !== undefined
+        ? { turnTimeoutMs: options.turnTimeoutMs }
+        : {}),
+    });
+    const serverFactory = createServerFactory({
+      config: options.config,
+      store,
+      scheduler,
+      notifier,
+      capacity,
+      caller: options.caller,
+    });
 
-  return {
-    serverFactory,
-    store,
-    close() {
-      // 先把還在跑的 Turn 都 kill 掉，避免留下孤兒子程序，再關 DB 連線。
-      scheduler.shutdown();
-      store.close();
-    },
-  };
+    // 重啟語意（票 11）：這個 process 沒有任何殘留 Task 對應的 Turn，DB 裡留著
+    // 的 running 一定是上次程序中止時卡住的，先收斂成 failed{interrupted}；
+    // queued 依 task_id（建立順序）重新 enqueue，讓 per-agent FIFO 與 Context
+    // 線性照舊成立。single-instance 鎖（`openTaskStore`）保證同一個 db_path
+    // 不會有第二個 process 在旁邊，所以這裡看到的 running 絕不是「其實還在跑」
+    // 的假警報。
+    const interrupted = store.interruptRunning();
+    if (interrupted > 0) {
+      console.error(`重啟時中斷 ${String(interrupted)} 個 running Task`);
+    }
+    for (const taskId of store.listQueuedTaskIds()) {
+      scheduler.enqueue(taskId);
+    }
+
+    return {
+      serverFactory,
+      store,
+      close() {
+        // 先把還在跑的 Turn 都 kill 掉，避免留下孤兒子程序，再關 DB 連線。
+        scheduler.shutdown();
+        store.close();
+      },
+    };
+  } catch (error) {
+    // openTaskStore 成功之後任何一步出錯都要先關掉 store，不然 single-instance
+    // 鎖會一直被這個失敗的呼叫占著，呼叫端就算收到例外也重新開不了。
+    store.close();
+    throw error;
+  }
 }
