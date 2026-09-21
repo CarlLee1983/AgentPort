@@ -1,7 +1,7 @@
 ---
 title: AgentPort v2 — 裝好就能用的 MCP 派工服務
-labels: [ready-for-agent]
-status: draft
+labels: [implemented]
+status: implemented
 source_map: ../.scratch/agentport-v2/map.md
 created: 2026-09-21
 ---
@@ -70,7 +70,7 @@ created: 2026-09-21
 
 ### 架構與模組
 
-- TypeScript、Node ≥ 20、`@modelcontextprotocol/server` + `node` 2.0.0、zod 4、better-sqlite3。Mac 與 Linux 為執行目標。
+- TypeScript、Node ≥ 24（`package.json` engines；macOS 部署依賴 Node 內建 `--env-file`）、`@modelcontextprotocol/server` + `node` 2.0.0、zod 4、better-sqlite3。Mac 與 Linux 為執行目標。
 - 模組：設定檔載入、Agent Registry（設定檔的記憶體投影）、Task Store（SQLite）、Scheduler（每 agent 一條 FIFO worker）、Runtime Driver（claude、codex 各一）、Git 摘要、MCP server factory、兩個進入點（`agentport serve` HTTP、`agentport stdio`）。
 - 一份 server factory 同時餵 `serveStdio` 與 `createMcpHandler`；HTTP 為 stateless，`task_id` 是唯一 handle，不用 MCP session。
 - v1 可搬：`loopback-server.ts` 的 `toNodeHandler` + Host/Origin 驗證 + bearer → `AuthInfo`、兩個 CLI 的 JSONL 解析。v1 的 launcher、principal、receipt、fencing、recovery、supervisor 不搬。
@@ -148,7 +148,7 @@ Turn 開始時記下 HEAD（unborn 視為空樹）；Turn `completed` 後在 wor
 
 ### MCP tool 表面（地圖票 07 定案）
 
-沿地圖定案的六個 tool，輸入輸出 zod schema 並回 `structuredContent` + 同內容 `content[text]`。以下為預設形狀，票 07 結案後以票為準：
+沿地圖定案的六個 tool，輸入輸出 zod schema 並回 `structuredContent` + 同內容 `content[text]`：
 
 - `list_agents()` → `{ agents: [{ name, description, runtime, policy }] }`
 - `submit_task({ agent, prompt })` → `{ task_id, context_id, state: "queued" }`

@@ -169,3 +169,49 @@ agentport stdio --config ~/.config/agentport/agentport.stdio.toml
 - 從 client 呼叫 `list_agents`，回傳的清單跟 `check-config` 一致
 - 提交一個 Claude task 跑到 `completed`
 - 提交一個 Codex task 跑到 `completed`
+
+## MCP tools
+
+所有 tool 都回 `structuredContent` 與同內容的 `content[0].text`（JSON）。tool 層錯誤回 `isError: true` 加 `{ "error": { "code", "message" } }`，碼為 `not_found`、`invalid_state`、`unknown_agent`。
+
+| tool          | 輸入                                               | 回傳                                                                                          |
+| ------------- | -------------------------------------------------- | --------------------------------------------------------------------------------------------- |
+| `list_agents` | —                                                  | `{ agents: [{ name, description?, runtime, policy }] }`                                       |
+| `submit_task` | `{ agent, prompt }`                                | `{ task_id, context_id, state: "queued" }`，同時建立新 Context                                |
+| `follow_up`   | `{ context_id, prompt }`                           | 同上；沿用該 Context 的 Agent 與 Runtime Session                                              |
+| `get_task`    | `{ task_id, wait_seconds? }`                       | Task 完整記錄；`wait_seconds` > 0 時等到狀態改變或 `min(wait_seconds, long_poll_max_seconds)` |
+| `cancel_task` | `{ task_id }`                                      | `{ task_id, state }`；對已結束的 Task 回 `invalid_state`                                      |
+| `list_tasks`  | `{ agent?, context_id?, state?, limit?, cursor? }` | `{ tasks: [摘要], next_cursor }`，新到舊，`limit` 預設 50、上限 100                           |
+
+Task 狀態：`queued → running → completed | failed | cancelled`。Task 記錄含 `final_text`、`diff_stat`（Turn 期間的 `git diff --stat` 與未追蹤檔）、`commits`、`usage`、`hints`（`permission_denied`、`git`、`truncated`）、`error`、`raw_log_path`（CLI 原始輸出）。`error.code` 可能為 `runtime_failed`、`session_unresumable`、`interrupted`（服務重啟時正在執行）、`cancelled`、`timeout`。
+
+典型流程：`submit_task` → 反覆 `get_task`（帶 `wait_seconds`）直到結束 → Runtime 的最終回覆若是提問，用 `follow_up` 回答。服務重啟後 `task_id` 仍查得到；排隊中的 Task 自動繼續，執行中的標為 `interrupted`，可在同一 Context `follow_up` 續派。
+
+## 已知限制
+
+- **Codex 取消後的 follow-up 不穩定**：取消執行中的 Codex Task 後，同一 Context 的 `follow_up` 實測可能完成但不記得取消前的內容，或回 `session_unresumable`。Claude 取消後可正常續接。
+- **`read-only` 對 Claude 對應 `plan` 模式**：Claude 不會嘗試寫檔，因此不會出現 `hints.permission_denied`，並會在 `~/.claude/plans/` 留檔。
+- **`workspace-write` 對 Claude 對應 `acceptEdits`**：檔案編輯自動允許，但部分 Bash 指令仍會被拒（記在 `hints.permission_denied`）。
+- **policy 不是隔離邊界**：服務以管理者本人身分執行，Runtime 可存取該使用者可及的一切（見 `docs/adr/0009-*`、`docs/adr/0011-*`）。
+- **每個 `db_path` 只能有一個服務程序**：見上方「本機 stdio」。
+
+## 開發
+
+```sh
+pnpm install
+pnpm check      # format:check → lint → typecheck → build → test，驗證一律跑這個
+```
+
+真 CLI 測試預設跳過，需本機已登入 `claude` / `codex`，並會消耗訂閱額度：
+
+```sh
+AGENTPORT_REAL_CLI=1 pnpm vitest run tests/driver/claude/real-cli.test.ts \
+  tests/driver/codex/real-cli.test.ts tests/mcp/follow-up-real-cli.test.ts tests/mcp/cancel-real-cli.test.ts
+```
+
+## 文件
+
+- `CONTEXT.md`：領域詞彙
+- `specs/agentport-v2.md`：規格與各建置票的實作定案
+- `docs/adr/`：架構決策（0001 / 0002 / 0003 / 0005 / 0009 繼承自 v1，0011 為 v2 憑證模型）
+- `.scratch/agentport-v2/map.md`：決策地圖與尚未處理的議題；`.scratch/agentport-v2-build/`：建置工單
