@@ -13,5 +13,10 @@
     // 但專案本身不需要 DOM lib；開 skipLibCheck 略過檢查該第三方型別檔案。
     "skipLibCheck": true
   },
-  "include": ["src/**/*.ts", "tests/**/*.ts", "eslint.config.js"]
+  "include": [
+    "src/**/*.ts",
+    "tests/**/*.ts",
+    "vitest.config.ts",
+    "eslint.config.js"
+  ]
 }
