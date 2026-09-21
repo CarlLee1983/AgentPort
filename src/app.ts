@@ -13,7 +13,7 @@ export interface CreateAppOptions {
 }
 
 export interface App {
-  serverFactory: () => McpServer;
+  serverFactory: (caller?: string) => McpServer;
   store: TaskStore;
   close(): void;
 }
