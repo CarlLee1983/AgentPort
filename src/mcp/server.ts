@@ -18,16 +18,23 @@ export interface ServerFactoryDeps {
   caller: string;
 }
 
-/** 一份 server factory 同時餵 `serveStdio` 與（後續票的）`createMcpHandler`。 */
-export function createServerFactory(deps: ServerFactoryDeps): () => McpServer {
-  return () => {
+/**
+ * 一份 server factory 同時餵 `serveStdio` 與 `createMcpHandler`。
+ * 每次呼叫可傳入本次連線 / 請求的 caller（HTTP 依 bearer 對應的 caller 名稱）；
+ * 省略時用 `deps.caller`（stdio 固定為 `"local"`）。
+ */
+export function createServerFactory(
+  deps: ServerFactoryDeps,
+): (caller?: string) => McpServer {
+  return (caller) => {
     const server = new McpServer(
       { name: "agentport", version: "0.0.0" },
       { capabilities: { tools: {} } },
     );
     registerListAgents(server, { config: deps.config });
-    registerSubmitTask(server, deps);
-    registerFollowUp(server, deps);
+    const callerDeps = { ...deps, caller: caller ?? deps.caller };
+    registerSubmitTask(server, callerDeps);
+    registerFollowUp(server, callerDeps);
     registerGetTask(server, {
       store: deps.store,
       notifier: deps.notifier,
