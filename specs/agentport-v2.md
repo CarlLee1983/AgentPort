@@ -10,7 +10,7 @@ created: 2026-09-21
 
 詞彙依 `CONTEXT.md`：Caller、Logical Agent、Workspace、Runtime、Runtime Driver、Task、Turn、Follow-up Task、Context、Runtime Session。v2 沒有 Execution 系列、Deployment Readiness、Clarification Reply、`needs_input`。
 
-地圖上仍有四張票未結案，本 spec 對應處以 **【假設】** 標示並給預設值：MCP tool 表面（票 07）、部署與憑證 ADR（票 08）、單輪 prototype（票 09）、取消與逾時（票 10）。實作時若票結案結果不同，以票為準並回改本文。
+地圖票 01–10 皆已結案（07–10 於 2026-09-21 依建置票實作結果結案），原先標示 **【假設】** 的區段已依實作定案。
 
 ## Problem Statement
 
@@ -146,7 +146,7 @@ token_env = "AGENTPORT_TOKEN_GROK"
 
 Turn 開始時記下 HEAD（unborn 視為空樹）；Turn `completed` 後在 workspace 執行 `git diff --stat --relative <start> -- .`（限縮並相對於 workspace 子樹，untracked 以 `git status --porcelain -- .` 補在尾端）與 `git log <start>..HEAD`（不限縮子樹，由舊到新）。`commits` 形狀為 `{ sha, subject }[]`。所有 git 呼叫帶 `-c core.quotePath=false`。非 git 目錄、記 HEAD 失敗或 git 出錯 → `diff_stat` / `commits` 為 null + `hints.git`，Task 仍 completed。`failed` 的 Task 不跑摘要。（票 03 實作時定案）
 
-### MCP tool 表面【假設，票 07 未結案】
+### MCP tool 表面（地圖票 07 定案）
 
 沿地圖定案的六個 tool，輸入輸出 zod schema 並回 `structuredContent` + 同內容 `content[text]`。以下為預設形狀，票 07 結案後以票為準：
 
@@ -168,7 +168,7 @@ Turn 開始時記下 HEAD（unborn 視為空樹）；Turn `completed` 後在 wor
 - HTTP：`[server] allowed_hosts[]`，`listen` 非 loopback 時必填（啟動驗證），Host / Origin 只放行清單內主機；loopback 用 SDK 內建驗證。401 帶 `WWW-Authenticate: Bearer`，Host/Origin 不合回 403。`AuthInfo.token` 不保存原始 token。caller 名稱經 `AuthInfo.clientId` 進 server factory。
 - ADR-0005 已複製到 `docs/adr/`。
 
-### 取消與逾時【假設，地圖票 10 未結案；建置票 10 已依此實作】
+### 取消與逾時（地圖票 10 定案，依建置票 10 實作）
 
 - `cancel_task` 對 running Task：對子程序 process group 送 SIGTERM，5 秒後 SIGKILL；Task → `cancelled`，保留已收到的 `message` 文字為 `final_text`、仍跑 git 摘要。
 - Runtime Session 被殺後是否可 resume 由票 09 / 10 實測決定；預設視為可 resume（Claude session 檔在磁碟、Codex thread 在 `~/.codex`），resume 失敗走 `session_unresumable`。
@@ -182,7 +182,7 @@ Turn 開始時記下 HEAD（unborn 視為空樹）；Turn `completed` 後在 wor
 - 逾時從 Task 進入 running 起算（含記錄 HEAD 的時間）。`turn_timeout_seconds` 為 ≥ 1 的整數。
 - 取消後 follow-up 實測（2026-09-21，`policy = full`，Turn 中執行 `sleep 60` 時取消）：Claude 取消約 0.7 秒完成，follow-up `--resume` 成功且記得取消前的內容（2/2 次）。Codex 取消約 5 毫秒完成，follow-up 結果不穩定：3 次中 2 次 `completed` 但不記得、1 次 `failed{session_unresumable}`，沒有一次記得。推測 Codex 在 Turn 結束前未把該輪寫進 thread rollout（未驗證）。服務層不抹平此差異；真 CLI 測試 `tests/mcp/cancel-real-cli.test.ts` 對 Codex 接受兩種結果。
 
-### 部署與憑證【假設，地圖票 08 未結案；建置票 12 已依此實作】
+### 部署與憑證（地圖票 08 定案，依建置票 12 實作）
 
 - 服務以已登入 CLI 的 OS 使用者身分常駐：Mac 用 LaunchAgent（`gui/<uid>`），Linux 用 `systemd --user`。環境至少帶 `HOME`、`USER`、`PATH`。
 - `token_env` 變數由 plist `EnvironmentVariables` 或 systemd `EnvironmentFile=` 餵入；預設路徑 `~/.config/agentport/agentport.env`（mode 0600）。
@@ -222,7 +222,7 @@ Turn 開始時記下 HEAD（unborn 視為空樹）；Turn `completed` 後在 wor
 
 ## Further Notes
 
-- 本 spec 由地圖 `.scratch/agentport-v2/map.md` 合成；票 01–06 已結案，票 07–10 未結案。建議先跑票 09 的 prototype，它會給票 10（被殺後能否 resume）與票 07（diff 摘要實際形狀）實測依據，再回頭修本文的三個【假設】區段。
+- 本 spec 由地圖 `.scratch/agentport-v2/map.md` 合成；地圖票 01–10 皆已結案。票 09 的 prototype 未另寫，其問題由建置票 03–05、07、10 的真 CLI 測試回答。
 - 憑證模型是官方政策灰區，ADR 必須明寫；若日後官方收緊，逃生口是 `CODEX_API_KEY` 與 Claude 的 API key 模式，不需改架構。
 - 本機事實（2026-09-21）：`claude` 2.1.278、`codex` 0.155.0 於 `~/.local/bin`；Claude Code 憑證在 macOS login Keychain（`Claude Code-credentials`，查詢依賴 `USER`），Linux 在 `~/.claude/.credentials.json`；Codex 憑證在 `~/.codex/auth.json`。
 - Claude Code、Codex、Cursor 都能從設定送自訂 header；Claude Desktop 遠端只走 OAuth Connector，不在 v2 支援清單。

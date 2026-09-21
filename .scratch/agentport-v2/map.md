@@ -34,6 +34,10 @@ Created: 2026-09-20
 - [Task 狀態模型與 follow-up 語意](issues/05-grilling-task-model.md) — 五態無 `needs_input`，提問即 `final_text`、回答即 follow-up；Context 由服務發 id 綁 agent、內部線性，resume 失敗明確 `session_unresumable`；重啟 running→`failed{interrupted}`、queued 自動續跑（偏離 ADR-0002，隨票 08 修訂）；存 prompt 原文、永久保留、不去重。
 - [設定檔 schema（TOML）](issues/06-grilling-config-schema.md) — `--config`/`$AGENTPORT_CONFIG`/XDG 路徑；`[server]`/`[storage]`/`[runtimes.*].command`/`[[agents]]`（name、description、workspace、runtime、必填 policy、extra_args）/`[[callers]]`（name、`token_env`）；token 不進檔案；一 workspace 一 agent；stdio caller 記 `local`；啟動一次列出所有驗證錯誤。
 - [Research：codex exec --json 執行面](issues/02-research-codex-exec.md) — approval 在 exec 模式永遠 never（不阻塞）；auth.json 在 launchd 下可用；thread_id 可 resume；file_change 不完整需靠 git diff；stdin 必須 ignore。
+- [MCP tool 表面](issues/07-grilling-mcp-tools.md) — 六個 tool 依 spec 形狀定案；`structuredContent` + `isError` 錯誤碼；ADR-0005 8 MiB 回應體上限，`list_tasks` 縮頁、`final_text` 截尾。
+- [部署方式與同使用者憑證模型](issues/08-grilling-deploy-and-credentials.md) — LaunchAgent / systemd --user，token 走 0600 env file（Mac `node --env-file`、Linux `EnvironmentFile=`），SSH tunnel；ADR-0011 並修訂 ADR-0002；本機 LaunchAgent 實測兩 runtime 皆可用。
+- [Prototype：在本機跑通一輪派工](issues/09-prototype-one-turn.md) — 未另寫 prototype，由正式實作的真 CLI 測試回答：事件流、session 續接、diff 摘要形狀皆成立。
+- [Task 取消與 Turn 逾時](issues/10-grilling-cancel.md) — process group SIGTERM → 5 s SIGKILL；取消即 `cancelled` 保留部分文字與 git 摘要；`turn_timeout_seconds` 3600；Claude 被殺後可 resume，Codex 不穩定。
 
 ## Not yet specified
 
