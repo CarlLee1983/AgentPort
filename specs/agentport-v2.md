@@ -184,6 +184,8 @@ Turn 開始時記下 HEAD（unborn 視為空樹）；Turn `completed` 後在 wor
 
 ### 部署與憑證（地圖票 08 定案，依建置票 12 實作）
 
+> 一鍵部署（`agentport service` 子命令與打包腳本）見 [`service-install.md`](service-install.md)，將取代下方的手動範本流程。
+
 - 服務以已登入 CLI 的 OS 使用者身分常駐：Mac 用 LaunchAgent（`gui/<uid>`），Linux 用 `systemd --user`。環境至少帶 `HOME`、`USER`、`PATH`。
 - `token_env` 變數由 plist `EnvironmentVariables` 或 systemd `EnvironmentFile=` 餵入；預設路徑 `~/.config/agentport/agentport.env`（mode 0600）。
 - 遠端進入預設 SSH tunnel 到 loopback；直連 HTTP 需管理者明確改 `listen`。
