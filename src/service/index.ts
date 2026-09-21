@@ -120,9 +120,13 @@ export async function runService(
     return 2;
   }
 
-  if (dependencies.platform !== "darwin") {
+  if (dependencies.platform !== "darwin" && dependencies.platform !== "linux") {
     dependencies.writeStderr(`不支援的平台：${dependencies.platform}`);
     return 1;
+  }
+
+  if (dependencies.platform === "linux") {
+    return runLinuxService(args, dependencies);
   }
 
   if (command !== "install") {
@@ -245,6 +249,522 @@ export async function runService(
     dependencies.writeStderr(`無法寫入包裝指令：${describeError(error)}`);
     return 1;
   }
+}
+
+async function runLinuxService(
+  args: string[],
+  dependencies: ServiceDependencies,
+): Promise<number> {
+  const [command, ...rest] = args;
+  if (
+    command !== "install" &&
+    command !== "status" &&
+    command !== "restart" &&
+    command !== "uninstall"
+  ) {
+    dependencies.writeStderr(SERVICE_USAGE);
+    return 2;
+  }
+  if (command !== "install") {
+    const parsed = parseConfigArgs(rest);
+    if (!parsed.ok) {
+      dependencies.writeStderr(SERVICE_USAGE);
+      return 2;
+    }
+    return runLinuxServiceCommand(command, parsed.configPath, dependencies);
+  }
+  const parsed = parseInstallArgs(rest);
+  if (!parsed.ok) {
+    dependencies.writeStderr(SERVICE_USAGE);
+    return 2;
+  }
+  const configPath = resolve(
+    resolveConfigPath(parsed.configPath, dependencies.env),
+  );
+  const installDirectory = serviceInstallDirectory(dependencies);
+  const cliPath = join(installDirectory, "dist", "cli.js");
+  const envPath = join(dirname(configPath), "agentport.env");
+  const unit = renderLinuxUnit({
+    home: dependencies.home,
+    nodePath: dependencies.nodePath,
+    cliPath,
+    configPath,
+    envPath,
+  });
+  if (!parsed.dryRun) {
+    try {
+      await assertWrapperCanBeInstalled(dependencies.home);
+    } catch (error) {
+      dependencies.writeStderr(describeError(error));
+      return 1;
+    }
+    const prepared = await prepareConfiguration({
+      configPath,
+      env: dependencies.env,
+      generateToken: dependencies.generateToken,
+    });
+    if (prepared.kind === "needs-configuration") {
+      dependencies.writeStdout(
+        `已產生設定檔：${prepared.configPath}；填好 agent 後重跑。`,
+      );
+      return 1;
+    }
+    if (prepared.kind === "invalid-configuration") {
+      reportConfigErrors(prepared.errors, dependencies);
+      return 1;
+    }
+    if (prepared.envPermissionTightened) {
+      dependencies.writeStdout(
+        `已將 env 檔權限收緊為 0600：${prepared.envPath}`,
+      );
+    }
+    for (const token of prepared.createdTokens) {
+      dependencies.writeStdout(
+        `新 token（只顯示這一次）：caller ${token.callerName}、${token.tokenEnv}、${token.value}`,
+      );
+    }
+    const exitCode = await installLinux({
+      dependencies,
+      installDirectory,
+      unitPath: linuxUnitPath(dependencies),
+      unit,
+      listen: prepared.config.server.listen,
+    });
+    if (exitCode !== 0) return exitCode;
+    try {
+      await installWrapper({
+        home: dependencies.home,
+        nodePath: dependencies.nodePath,
+        cliPath,
+      });
+      return 0;
+    } catch (error) {
+      dependencies.writeStderr(`無法寫入包裝指令：${describeError(error)}`);
+      return 1;
+    }
+  }
+  const prepared = await prepareConfiguration({
+    configPath,
+    env: dependencies.env,
+    generateToken: dependencies.generateToken,
+    dryRun: true,
+  });
+  if (prepared.kind === "needs-configuration") {
+    dependencies.writeStderr(`設定檔不存在：${prepared.configPath}`);
+    return 1;
+  }
+  if (prepared.kind === "invalid-configuration") {
+    reportConfigErrors(prepared.errors, dependencies);
+    return 1;
+  }
+  dependencies.writeStdout(unit);
+  dependencies.writeStdout(
+    renderWrapper({
+      home: dependencies.home,
+      nodePath: dependencies.nodePath,
+      cliPath,
+    }),
+  );
+  dependencies.writeStdout(
+    `systemctl --user daemon-reload && systemctl --user enable --now agentport`,
+  );
+  return 0;
+}
+
+function linuxUnitPath(
+  dependencies: Pick<ServiceDependencies, "home" | "env">,
+): string {
+  const configHome =
+    dependencies.env.XDG_CONFIG_HOME || join(dependencies.home, ".config");
+  return resolve(
+    dependencies.home,
+    configHome,
+    "systemd",
+    "user",
+    "agentport.service",
+  );
+}
+
+interface LinuxInstallInput {
+  dependencies: ServiceDependencies;
+  installDirectory: string;
+  unitPath: string;
+  unit: string;
+  listen: string;
+}
+
+async function installLinux(input: LinuxInstallInput): Promise<number> {
+  const { dependencies, installDirectory, unitPath, unit, listen } = input;
+  const newDirectory = `${installDirectory}.new`;
+  const hadUnit = existsSync(unitPath);
+  let previousUnit: string | undefined;
+  let replacement: DirectoryReplacement | undefined;
+  let wasEnabled = false;
+  let attemptedStart = false;
+  try {
+    if (hadUnit) {
+      previousUnit = await readFile(unitPath, "utf8");
+      const enabled = await dependencies.runCommand("systemctl", [
+        "--user",
+        "is-enabled",
+        "agentport",
+      ]);
+      wasEnabled = enabled.exitCode === 0;
+    }
+    await rm(newDirectory, { recursive: true, force: true });
+    await mkdir(dirname(installDirectory), { recursive: true });
+    await dependencies.copyDirectory(dependencies.programRoot, newDirectory);
+    replacement = await replaceInstalledDirectory(
+      installDirectory,
+      newDirectory,
+      dependencies,
+    );
+    await mkdir(dirname(unitPath), { recursive: true });
+    await dependencies.writeFile(unitPath, unit);
+    const reloaded = await dependencies.runCommand("systemctl", [
+      "--user",
+      "daemon-reload",
+    ]);
+    if (reloaded.exitCode !== 0)
+      throw new Error(reloaded.stderr || reloaded.stdout);
+    const action = wasEnabled
+      ? ["--user", "restart", "agentport"]
+      : ["--user", "enable", "--now", "agentport"];
+    attemptedStart = true;
+    const started = await dependencies.runCommand("systemctl", action);
+    if (started.exitCode !== 0)
+      throw new Error(started.stderr || started.stdout);
+  } catch (error) {
+    await rollbackLinuxInstallation({
+      dependencies,
+      installDirectory,
+      unitPath,
+      previousUnit,
+      replacement,
+      wasEnabled,
+      hadUnit,
+      attemptedStart,
+    });
+    dependencies.writeStderr(`無法完成 Linux 安裝：${describeError(error)}`);
+    return 1;
+  }
+  try {
+    await discardPreviousDirectory(replacement, dependencies);
+  } catch (error) {
+    dependencies.writeStderr(
+      `無法清理舊版程式，保留新版本與殘留舊檔：${describeError(error)}`,
+    );
+    return 1;
+  }
+  await reportLinuxLinger(dependencies);
+  if (await waitForListening(listen, dependencies)) {
+    dependencies.writeStdout(`服務正在監聽 ${listen}`);
+    return 0;
+  }
+  dependencies.writeStderr(`服務未在 10 秒內開始監聽 ${listen}`);
+  await reportLinuxJournal(dependencies);
+  return 1;
+}
+
+interface LinuxRollbackInput {
+  dependencies: ServiceDependencies;
+  installDirectory: string;
+  unitPath: string;
+  previousUnit: string | undefined;
+  replacement: DirectoryReplacement | undefined;
+  wasEnabled: boolean;
+  hadUnit: boolean;
+  attemptedStart: boolean;
+}
+
+async function rollbackLinuxInstallation(
+  input: LinuxRollbackInput,
+): Promise<void> {
+  const {
+    dependencies,
+    installDirectory,
+    unitPath,
+    previousUnit,
+    replacement,
+    wasEnabled,
+    hadUnit,
+    attemptedStart,
+  } = input;
+  try {
+    if (replacement !== undefined) {
+      await rm(installDirectory, { recursive: true, force: true });
+      if (replacement.oldDirectory !== undefined) {
+        await rename(replacement.oldDirectory, installDirectory);
+      }
+    }
+    if (previousUnit === undefined) {
+      if (!hadUnit) await rm(unitPath, { force: true });
+    } else {
+      await writeFileOnDisk(unitPath, previousUnit, "utf8");
+    }
+    if (attemptedStart && !wasEnabled) {
+      const disabled = await dependencies.runCommand("systemctl", [
+        "--user",
+        "disable",
+        "--now",
+        "agentport",
+      ]);
+      if (disabled.exitCode !== 0) {
+        dependencies.writeStderr(
+          `復原既有 Linux 服務停用失敗：${disabled.stderr || disabled.stdout}`,
+        );
+      }
+    }
+    const reloaded = await dependencies.runCommand("systemctl", [
+      "--user",
+      "daemon-reload",
+    ]);
+    if (reloaded.exitCode !== 0) {
+      dependencies.writeStderr(
+        `復原既有 Linux 服務重新載入失敗：${reloaded.stderr || reloaded.stdout}`,
+      );
+    } else if (wasEnabled) {
+      const restarted = await dependencies.runCommand("systemctl", [
+        "--user",
+        "restart",
+        "agentport",
+      ]);
+      if (restarted.exitCode !== 0) {
+        dependencies.writeStderr(
+          `復原既有 Linux 服務重新啟動失敗：${restarted.stderr || restarted.stdout}`,
+        );
+      }
+    }
+  } catch (error) {
+    dependencies.writeStderr(
+      `復原既有 Linux 服務失敗：${describeError(error)}`,
+    );
+  }
+}
+
+async function runLinuxServiceCommand(
+  command: "status" | "restart" | "uninstall",
+  suppliedConfigPath: string | undefined,
+  dependencies: ServiceDependencies,
+): Promise<number> {
+  const unitPath = linuxUnitPath(dependencies);
+  if (!existsSync(unitPath)) {
+    const message = "AgentPort 服務未安裝";
+    if (command === "restart") {
+      dependencies.writeStderr(message);
+      return 1;
+    }
+    dependencies.writeStdout(message);
+    return 0;
+  }
+  const installed = await readInstalledLinuxService(unitPath);
+  if (installed === undefined) {
+    dependencies.writeStderr(`無法讀取已安裝的服務定義：${unitPath}`);
+    return 1;
+  }
+  if (command === "uninstall") {
+    return uninstallLinuxService({ dependencies, unitPath, installed });
+  }
+  const configPath = resolve(suppliedConfigPath ?? installed.configPath);
+  const loaded = loadConfig(configPath, dependencies.env);
+  if (command === "restart") {
+    if (!loaded.ok) {
+      reportConfigErrors(loaded.errors, dependencies);
+      return 1;
+    }
+    const restarted = await dependencies.runCommand("systemctl", [
+      "--user",
+      "restart",
+      "agentport",
+    ]);
+    if (restarted.exitCode !== 0) {
+      dependencies.writeStderr(
+        `systemctl restart 失敗：${restarted.stderr || restarted.stdout}`,
+      );
+      return 1;
+    }
+    if (await waitForListening(loaded.config.server.listen, dependencies)) {
+      dependencies.writeStdout(`服務正在監聽 ${loaded.config.server.listen}`);
+      return 0;
+    }
+    dependencies.writeStderr(
+      `服務未在 10 秒內開始監聽 ${loaded.config.server.listen}`,
+    );
+    await reportLinuxJournal(dependencies);
+    return 1;
+  }
+  if (!loaded.ok) reportConfigErrors(loaded.errors, dependencies);
+  return statusLinuxService({
+    dependencies,
+    installed,
+    listen: loaded.ok ? loaded.config.server.listen : undefined,
+  });
+}
+
+async function readInstalledLinuxService(
+  unitPath: string,
+): Promise<InstalledService | undefined> {
+  try {
+    const unit = await readFile(unitPath, "utf8");
+    const match = /^ExecStart="(.*)" "(.*)" serve --config "(.*)"$/m.exec(unit);
+    if (
+      match?.[1] === undefined ||
+      match[2] === undefined ||
+      match[3] === undefined
+    )
+      return undefined;
+    return {
+      nodePath: systemdUnquote(match[1]),
+      installDirectory: dirname(dirname(systemdUnquote(match[2]))),
+      configPath: systemdUnquote(match[3]),
+    };
+  } catch {
+    return undefined;
+  }
+}
+
+interface StatusLinuxInput {
+  dependencies: ServiceDependencies;
+  installed: InstalledService;
+  listen: string | undefined;
+}
+
+async function statusLinuxService(input: StatusLinuxInput): Promise<number> {
+  const { dependencies, installed, listen } = input;
+  const result = await dependencies.runCommand("systemctl", [
+    "--user",
+    "status",
+    "agentport",
+    "--no-pager",
+  ]);
+  const running = /Active:\s+active \(running\)/.test(result.stdout);
+  const pid = /Main PID:\s+(\d+)/.exec(result.stdout)?.[1];
+  const reachable =
+    listen === undefined ? false : await dependencies.probePort(listen);
+  const nodeExists = existsSync(installed.nodePath);
+  dependencies.writeStdout(`服務狀態：${running ? "running" : "stopped"}`);
+  if (pid !== undefined) dependencies.writeStdout(`pid：${pid}`);
+  dependencies.writeStdout(
+    listen === undefined
+      ? "監聽位址：無法從無效設定檔判定"
+      : `監聽位址：${listen}${reachable ? "（可連）" : "（無法連線）"}`,
+  );
+  dependencies.writeStdout(`安裝目錄：${installed.installDirectory}`);
+  dependencies.writeStdout(`node 路徑：${installed.nodePath}`);
+  if (!nodeExists) dependencies.writeStderr("node 路徑已失效，請重跑 install");
+  await reportLinuxLinger(dependencies, true);
+  await reportLinuxJournal(dependencies);
+  return result.exitCode === 0 &&
+    running &&
+    pid !== undefined &&
+    reachable &&
+    nodeExists
+    ? 0
+    : 1;
+}
+
+async function reportLinuxLinger(
+  dependencies: ServiceDependencies,
+  showState = false,
+): Promise<void> {
+  const linger = await dependencies.runCommand("loginctl", [
+    "show-user",
+    dependencies.user,
+    "-p",
+    "Linger",
+  ]);
+  const value = /Linger=(yes|no)/.exec(
+    `${linger.stdout}\n${linger.stderr}`,
+  )?.[1];
+  if (showState && value !== undefined) {
+    dependencies.writeStdout(`linger：${value}`);
+  }
+  if (value === "no") {
+    dependencies.writeStdout(
+      `提示：loginctl enable-linger ${dependencies.user}`,
+    );
+  }
+}
+
+async function reportLinuxJournal(
+  dependencies: ServiceDependencies,
+): Promise<void> {
+  const journal = await dependencies.runCommand("journalctl", [
+    "--user",
+    "-u",
+    "agentport",
+    "-n",
+    String(ERROR_LOG_TAIL_LINES),
+    "--no-pager",
+  ]);
+  const output = journal.stdout || journal.stderr;
+  if (output) dependencies.writeStderr(output);
+}
+
+interface UninstallLinuxInput {
+  dependencies: ServiceDependencies;
+  unitPath: string;
+  installed: InstalledService;
+}
+
+async function uninstallLinuxService(
+  input: UninstallLinuxInput,
+): Promise<number> {
+  const { dependencies, unitPath, installed } = input;
+  if (installed.installDirectory !== serviceInstallDirectory(dependencies)) {
+    dependencies.writeStderr(
+      `拒絕移除非預期的安裝目錄：${installed.installDirectory}`,
+    );
+    return 1;
+  }
+  try {
+    await assertSafeInstalledDirectory(
+      installed.installDirectory,
+      dependencies.home,
+    );
+  } catch (error) {
+    dependencies.writeStderr(describeError(error));
+    return 1;
+  }
+  const stopped = await dependencies.runCommand("systemctl", [
+    "--user",
+    "disable",
+    "--now",
+    "agentport",
+  ]);
+  if (stopped.exitCode !== 0) {
+    dependencies.writeStderr(
+      `systemctl disable 失敗：${stopped.stderr || stopped.stdout}`,
+    );
+    return 1;
+  }
+  try {
+    await assertSafeInstalledDirectory(
+      installed.installDirectory,
+      dependencies.home,
+    );
+    await rm(unitPath, { force: true });
+    await dependencies.removeDirectory(installed.installDirectory);
+    const path = wrapperPath(dependencies.home);
+    const wrapper = await readOptionalFile(path);
+    if (wrapper !== undefined && isAgentPortWrapper(wrapper))
+      await rm(path, { force: true });
+    if (wrapper !== undefined && !isAgentPortWrapper(wrapper))
+      dependencies.writeStdout(`包裝指令不含 AgentPort 標記，不刪除：${path}`);
+    const reloaded = await dependencies.runCommand("systemctl", [
+      "--user",
+      "daemon-reload",
+    ]);
+    if (reloaded.exitCode !== 0)
+      throw new Error(reloaded.stderr || reloaded.stdout);
+  } catch (error) {
+    dependencies.writeStderr(`無法移除服務：${describeError(error)}`);
+    return 1;
+  }
+  dependencies.writeStdout(
+    "AgentPort 服務已移除；設定、env、資料庫與 log 已保留。",
+  );
+  return 0;
 }
 
 type ParsedConfigArgs =
@@ -916,6 +1436,40 @@ ${programArguments}
   <string>${escapeXml(join(logsDirectory, "agentport.err.log"))}</string>
 </dict>
 </plist>`;
+}
+
+export interface LinuxUnitOptions {
+  home: string;
+  nodePath: string;
+  cliPath: string;
+  configPath: string;
+  envPath: string;
+}
+
+/** Linux systemd user unit 的唯一來源；固定路徑一律以 systemd 引號表示。 */
+export function renderLinuxUnit(options: LinuxUnitOptions): string {
+  const path = `${join(options.home, ".local", "bin")}:/usr/local/bin:/usr/bin:/bin`;
+  return `[Unit]
+Description=AgentPort MCP service
+
+[Service]
+Type=simple
+EnvironmentFile=${systemdQuote(options.envPath)}
+Environment=${systemdQuote(`PATH=${path}`)}
+ExecStart=${systemdQuote(options.nodePath)} ${systemdQuote(options.cliPath)} serve --config ${systemdQuote(options.configPath)}
+Restart=always
+
+[Install]
+WantedBy=default.target
+`;
+}
+
+function systemdQuote(value: string): string {
+  return `"${value.replaceAll("\\", "\\\\").replaceAll('"', '\\"')}"`;
+}
+
+function systemdUnquote(value: string): string {
+  return value.replaceAll('\\"', '"').replaceAll("\\\\", "\\");
 }
 
 function escapeXml(value: string): string {

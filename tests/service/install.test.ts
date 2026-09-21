@@ -1238,3 +1238,347 @@ describe("service status、restart 與 uninstall（macOS）", () => {
     expect(await readFile(foreignApp, "utf8")).toBe("do not delete");
   });
 });
+
+describe("service install --dry-run（Linux）", () => {
+  it("印出具備正確引用路徑的 systemd user unit 與 wrapper，且不建立檔案", async () => {
+    const home = await makeTempDir();
+    const configPath = await validConfig(home);
+    const output: string[] = [];
+
+    const exitCode = await runService(
+      ["install", "--dry-run", "--config", configPath],
+      serviceDependencies(home, {
+        platform: "linux",
+        nodePath: "/opt/Node With Spaces/node",
+        writeStdout: (line) => output.push(line),
+      }),
+    );
+
+    expect(exitCode).toBe(0);
+    expect(output.join("\n")).toContain(
+      `ExecStart="/opt/Node With Spaces/node" "${join(home, ".local/share/agentport/app/dist/cli.js")}" serve --config "${configPath}"`,
+    );
+    expect(output.join("\n")).toContain(
+      `EnvironmentFile="${join(home, "agentport.env")}"`,
+    );
+    expect(output.join("\n")).toContain("Environment=");
+    expect(output.join("\n")).toContain("Restart=always");
+    expect(output.join("\n")).toContain("WantedBy=default.target");
+    expect(output.join("\n")).toContain(WRAPPER_MARKER);
+    expect(
+      existsSync(join(home, ".config/systemd/user/agentport.service")),
+    ).toBe(false);
+  });
+});
+
+describe("service lifecycle（Linux）", () => {
+  async function installLinuxService(
+    home: string,
+  ): Promise<{ configPath: string; source: string }> {
+    const source = await makeProgramRoot(home, "v1");
+    const configPath = await validConfig(home);
+    await runService(
+      ["install", "--config", configPath],
+      serviceDependencies(home, {
+        platform: "linux",
+        programRoot: source,
+        nodePath: process.execPath,
+      }),
+    );
+    return { configPath, source };
+  }
+
+  it("首次安裝寫 unit、啟用服務並提示未開的 linger；重跑改為 restart", async () => {
+    const home = await makeTempDir();
+    const source = await makeProgramRoot(home, "v1");
+    const configPath = await validConfig(home);
+    const commands: { command: string; args: string[] }[] = [];
+    const output: string[] = [];
+    const dependencies = serviceDependencies(home, {
+      platform: "linux",
+      programRoot: source,
+      nodePath: process.execPath,
+      runCommand: (command, args) => {
+        commands.push({ command, args });
+        return Promise.resolve({
+          exitCode: 0,
+          stdout: command === "loginctl" ? "Linger=no\n" : "",
+          stderr: "",
+        });
+      },
+      writeStdout: (line) => output.push(line),
+    });
+
+    expect(
+      await runService(["install", "--config", configPath], dependencies),
+    ).toBe(0);
+    expect(
+      await readFile(
+        join(home, ".config/systemd/user/agentport.service"),
+        "utf8",
+      ),
+    ).toContain("ExecStart=");
+    expect(
+      commands
+        .filter(({ command }) => command === "systemctl")
+        .map(({ args }) => args),
+    ).toEqual([
+      ["--user", "daemon-reload"],
+      ["--user", "enable", "--now", "agentport"],
+    ]);
+    expect(output.join("\n")).toContain(
+      "loginctl enable-linger agentport-test",
+    );
+    expect(
+      commands.some(
+        ({ command, args }) =>
+          command === "loginctl" && args.includes("enable-linger"),
+      ),
+    ).toBe(false);
+
+    commands.splice(0);
+    expect(
+      await runService(["install", "--config", configPath], dependencies),
+    ).toBe(0);
+    expect(
+      commands
+        .filter(({ command }) => command === "systemctl")
+        .map(({ args }) => args),
+    ).toEqual([
+      ["--user", "is-enabled", "agentport"],
+      ["--user", "daemon-reload"],
+      ["--user", "restart", "agentport"],
+    ]);
+  });
+
+  it("Linux 也會建立設定骨架，並在有效設定時補 token 與安裝 wrapper", async () => {
+    const home = await makeTempDir();
+    const missingConfigPath = join(home, "config", "agentport.toml");
+    const commands: string[] = [];
+
+    expect(
+      await runService(
+        ["install", "--config", missingConfigPath],
+        serviceDependencies(home, {
+          platform: "linux",
+          runCommand: (command, args) => {
+            commands.push(`${command} ${args.join(" ")}`);
+            return Promise.resolve({ exitCode: 0, stdout: "", stderr: "" });
+          },
+        }),
+      ),
+    ).toBe(1);
+    expect(await readFile(missingConfigPath, "utf8")).toContain("# [[agents]]");
+    expect(commands).toEqual([]);
+
+    const source = await makeProgramRoot(home, "v1");
+    const configPath = await validConfigWithCallers(
+      home,
+      '[[callers]]\nname = "default"\ntoken_env = "AGENTPORT_TOKEN_DEFAULT"\n',
+    );
+    expect(
+      await runService(
+        ["install", "--config", configPath],
+        serviceDependencies(home, { platform: "linux", programRoot: source }),
+      ),
+    ).toBe(0);
+    expect(await readFile(join(home, "agentport.env"), "utf8")).toContain(
+      "AGENTPORT_TOKEN_DEFAULT=fixed-token",
+    );
+    expect(await readFile(wrapperPath(home), "utf8")).toContain(WRAPPER_MARKER);
+  });
+
+  it("既有但未啟用的 unit 會重新 enable --now", async () => {
+    const home = await makeTempDir();
+    const source = await makeProgramRoot(home, "v1");
+    const configPath = await validConfig(home);
+    let treatAsDisabled = false;
+    const commands: { command: string; args: string[] }[] = [];
+    const dependencies = serviceDependencies(home, {
+      platform: "linux",
+      programRoot: source,
+      runCommand: (command, args) => {
+        commands.push({ command, args });
+        return Promise.resolve({
+          exitCode:
+            treatAsDisabled &&
+            command === "systemctl" &&
+            args[1] === "is-enabled"
+              ? 1
+              : 0,
+          stdout: "",
+          stderr: "",
+        });
+      },
+    });
+    await runService(["install", "--config", configPath], dependencies);
+    commands.splice(0);
+    treatAsDisabled = true;
+
+    expect(
+      await runService(["install", "--config", configPath], dependencies),
+    ).toBe(0);
+    expect(commands).toContainEqual({
+      command: "systemctl",
+      args: ["--user", "enable", "--now", "agentport"],
+    });
+  });
+
+  it("更新的 restart 失敗時復原既有 app 與 unit", async () => {
+    const home = await makeTempDir();
+    const source = await makeProgramRoot(home, "v1");
+    const configPath = await validConfig(home);
+    let failRestart = false;
+    const dependencies = serviceDependencies(home, {
+      platform: "linux",
+      programRoot: source,
+      runCommand: (command, args) =>
+        Promise.resolve({
+          exitCode:
+            failRestart && command === "systemctl" && args[1] === "restart"
+              ? 1
+              : 0,
+          stdout: "",
+          stderr: failRestart ? "restart failure" : "",
+        }),
+    });
+    await runService(["install", "--config", configPath], dependencies);
+    const unitPath = join(home, ".config/systemd/user/agentport.service");
+    const originalUnit = await readFile(unitPath, "utf8");
+    await writeFile(join(source, "version.txt"), "v2", "utf8");
+    failRestart = true;
+
+    expect(
+      await runService(["install", "--config", configPath], dependencies),
+    ).toBe(1);
+    expect(
+      await readFile(
+        join(home, ".local/share/agentport/app/version.txt"),
+        "utf8",
+      ),
+    ).toBe("v1");
+    expect(await readFile(unitPath, "utf8")).toBe(originalUnit);
+  });
+
+  it("更新後清理舊版失敗時保留已啟動的新 app 與 .old", async () => {
+    const home = await makeTempDir();
+    const source = await makeProgramRoot(home, "v1");
+    const configPath = await validConfig(home);
+    const workingDependencies = serviceDependencies(home, {
+      platform: "linux",
+      programRoot: source,
+    });
+    await runService(["install", "--config", configPath], workingDependencies);
+    await writeFile(join(source, "version.txt"), "v2", "utf8");
+
+    expect(
+      await runService(
+        ["install", "--config", configPath],
+        serviceDependencies(home, {
+          platform: "linux",
+          programRoot: source,
+          removeDirectory: () => Promise.reject(new Error("cleanup failed")),
+        }),
+      ),
+    ).toBe(1);
+    const app = join(home, ".local/share/agentport/app");
+    expect(await readFile(join(app, "version.txt"), "utf8")).toBe("v2");
+    expect(existsSync(`${app}.old`)).toBe(true);
+  });
+
+  it("啟動逾時時印出 journal 尾端並以非零結束", async () => {
+    const home = await makeTempDir();
+    const source = await makeProgramRoot(home, "v1");
+    const configPath = await validConfig(home);
+    const output: string[] = [];
+    const commands: { command: string; args: string[] }[] = [];
+    let clock = 0;
+
+    const exitCode = await runService(
+      ["install", "--config", configPath],
+      serviceDependencies(home, {
+        platform: "linux",
+        programRoot: source,
+        probePort: () => Promise.resolve(false),
+        now: () => clock,
+        sleep: (milliseconds) => {
+          clock += milliseconds;
+          return Promise.resolve();
+        },
+        runCommand: (command, args) => {
+          commands.push({ command, args });
+          return Promise.resolve({
+            exitCode: 0,
+            stdout: command === "journalctl" ? "journal tail" : "",
+            stderr: "",
+          });
+        },
+        writeStderr: (line) => output.push(line),
+      }),
+    );
+
+    expect(exitCode).toBe(1);
+    expect(output.join("\n")).toContain("journal tail");
+    expect(commands).toContainEqual({
+      command: "journalctl",
+      args: ["--user", "-u", "agentport", "-n", "20", "--no-pager"],
+    });
+  });
+
+  it("status 顯示 systemd health 與 linger，restart 和 uninstall 送出正確系統命令並保留資料", async () => {
+    const home = await makeTempDir();
+    const { configPath } = await installLinuxService(home);
+    const envPath = join(home, "agentport.env");
+    const dbPath = join(home, "agentport.sqlite");
+    await Promise.all([
+      writeFile(envPath, "TOKEN=value\n", "utf8"),
+      writeFile(dbPath, "sqlite", "utf8"),
+    ]);
+    const commands: { command: string; args: string[] }[] = [];
+    const output: string[] = [];
+    const dependencies = serviceDependencies(home, {
+      platform: "linux",
+      runCommand: (command, args) => {
+        commands.push({ command, args });
+        const stdout =
+          command === "systemctl" && args[1] === "status"
+            ? "Active: active (running)\nMain PID: 4567"
+            : command === "loginctl"
+              ? "Linger=yes"
+              : "";
+        return Promise.resolve({ exitCode: 0, stdout, stderr: "" });
+      },
+      writeStdout: (line) => output.push(line),
+    });
+
+    expect(await runService(["status"], dependencies)).toBe(0);
+    expect(output.join("\n")).toContain("running");
+    expect(output.join("\n")).toContain("4567");
+    expect(output.join("\n")).toContain("linger：yes");
+
+    commands.splice(0);
+    expect(await runService(["restart"], dependencies)).toBe(0);
+    expect(commands).toContainEqual({
+      command: "systemctl",
+      args: ["--user", "restart", "agentport"],
+    });
+
+    commands.splice(0);
+    expect(
+      await runService(["uninstall", "--config", configPath], dependencies),
+    ).toBe(0);
+    expect(commands).toEqual([
+      {
+        command: "systemctl",
+        args: ["--user", "disable", "--now", "agentport"],
+      },
+      { command: "systemctl", args: ["--user", "daemon-reload"] },
+    ]);
+    expect(
+      existsSync(join(home, ".config/systemd/user/agentport.service")),
+    ).toBe(false);
+    expect(existsSync(join(home, ".local/share/agentport/app"))).toBe(false);
+    expect(await readFile(envPath, "utf8")).toContain("TOKEN=value");
+    expect(await readFile(dbPath, "utf8")).toBe("sqlite");
+  });
+});
