@@ -9,6 +9,7 @@ AgentPort 將目標主機上的 AI Coding Runtime，以 Logical Agent 身份提�
 
 **Access Scope（工作存取範圍）**：
 界定哪些工作可由同一組已授權交辦方共同存取的範圍。本人與自有 bot 可以共享範圍，但仍保有個別身分及操作紀錄。
+_v2 未使用_：v2 只記錄 Caller 身分，所有 Caller 看得到所有 Task，不劃分存取範圍。
 
 **Logical Agent（簡稱 Agent）**：
 遠端呼叫者選擇的工作身份，關聯一個 Workspace 與指定 Runtime。Agent 身份不等於底層 CLI 品牌，也不等於一次執行中的程序。
@@ -48,9 +49,12 @@ _Avoid_: Clarification Reply、needs_input——這些是 v1 詞彙，v2 的 Run
 
 **Artifact**：
 經 AgentPort 判定可提供給呼叫者的工作產出。Runtime 回報的任意檔案路徑或工具輸出，不會自動成為可公開的 Artifact。
+_v2 未使用_：v2 只回傳最終文字與變更摘要，何者可作為 Artifact 尚未定義。
 
 **Runtime Capability**：
 Runtime 在特定整合方式下可可靠提供的操作能力。宣告支援代表具有明確行為語意，不能只根據同名 CLI 選項推定。
+_v2 未使用_：v2 不宣告 Runtime Capability。
 
 **Protocol Adapter**：
 外部協定與 AgentPort 工作語意之間的轉譯邊界。
+_v2 未使用_：v2 只提供 MCP 一種外部協定，不另立轉譯邊界的概念。
