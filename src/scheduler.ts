@@ -7,12 +7,14 @@ import {
 } from "./git/summary.js";
 import { openRawLog, type RawLog } from "./logs/jsonl.js";
 import type { TaskRecord, TaskStore } from "./store/sqlite.js";
+import type { TaskNotifier } from "./task/notifier.js";
 import type { Hints } from "./task/schema.js";
 
 export interface SchedulerDeps {
   store: TaskStore;
   drivers: DriverRegistry;
   config: Config;
+  notifier: TaskNotifier;
 }
 
 export interface Scheduler {
@@ -31,16 +33,20 @@ interface EventOutcome {
 }
 
 /**
- * 單一序列 worker：所有 Task 排在同一條 promise chain 上依序執行（票 02 範圍，
- * 每 agent 一條 FIFO 的並行版本留給後續票）。`runTask` 內任何例外都在自己的
- * try/catch 收斂成 `markFailed`，`.catch` 只是防止鏈斷掉的最後防線。
+ * 每 agent 一條 FIFO promise chain：同一 agent 的 Task 依序執行，不同 agent
+ * 並行，無上限。`enqueue` 在呼叫當下讀 task 決定要接到哪條 chain 後面，`runTask`
+ * 內任何例外都在自己的 try/catch 收斂成 `markFailed`，`.catch` 只是防止鏈斷掉
+ * 的最後防線。
  */
 export function createScheduler(deps: SchedulerDeps): Scheduler {
-  const { store, drivers, config } = deps;
-  let chain: Promise<void> = Promise.resolve();
+  const { store, drivers, config, notifier } = deps;
+  const chains = new Map<string, Promise<void>>();
 
   function enqueue(taskId: string): void {
-    chain = chain
+    const task = store.getTask(taskId);
+    const agent = task?.agent ?? taskId;
+    const previous = chains.get(agent) ?? Promise.resolve();
+    const next = previous
       .then(() => runTask(taskId))
       .catch((error: unknown) => {
         console.error(
@@ -49,6 +55,29 @@ export function createScheduler(deps: SchedulerDeps): Scheduler {
           }`,
         );
       });
+    chains.set(agent, next);
+  }
+
+  /** store 寫入狀態後立刻通知 notifier，讓 get_task 的 long-poll 可以醒過來。 */
+  function markRunning(taskId: string, rawLogPath: string): void {
+    store.markRunning(taskId, rawLogPath);
+    notifier.notify(taskId);
+  }
+
+  function markCompleted(
+    taskId: string,
+    input: Parameters<TaskStore["markCompleted"]>[1],
+  ): void {
+    store.markCompleted(taskId, input);
+    notifier.notify(taskId);
+  }
+
+  function markFailed(
+    taskId: string,
+    input: Parameters<TaskStore["markFailed"]>[1],
+  ): void {
+    store.markFailed(taskId, input);
+    notifier.notify(taskId);
   }
 
   async function runTask(taskId: string): Promise<void> {
@@ -63,7 +92,7 @@ export function createScheduler(deps: SchedulerDeps): Scheduler {
         (candidate) => candidate.name === task.agent,
       );
       if (!agent) {
-        store.markFailed(taskId, {
+        markFailed(taskId, {
           code: "runtime_failed",
           message: `未知 agent：${task.agent}`,
         });
@@ -71,7 +100,7 @@ export function createScheduler(deps: SchedulerDeps): Scheduler {
       }
 
       rawLog = openRawLog(config.storage.log_dir, taskId);
-      store.markRunning(taskId, rawLog.path);
+      markRunning(taskId, rawLog.path);
 
       // captureHead 失敗不阻擋 Turn：先記下結果，等 completed 時再決定要不要跑
       // summarizeTurn（見 finishCompleted）。
@@ -121,14 +150,14 @@ export function createScheduler(deps: SchedulerDeps): Scheduler {
           completed,
         );
       } else if (!terminal) {
-        store.markFailed(taskId, {
+        markFailed(taskId, {
           code: "runtime_failed",
           message: "driver ended without terminal event",
           hints: hintsOrUndefined(hints),
         });
       }
     } catch (error) {
-      store.markFailed(taskId, {
+      markFailed(taskId, {
         code: "runtime_failed",
         message: error instanceof Error ? error.message : String(error),
       });
@@ -165,7 +194,7 @@ export function createScheduler(deps: SchedulerDeps): Scheduler {
           completed: { final_text: event.final_text, usage: event.usage },
         };
       case "failed":
-        store.markFailed(task.task_id, {
+        markFailed(task.task_id, {
           code: event.code ?? "runtime_failed",
           message: event.error,
           hints: hintsOrUndefined(hints),
@@ -193,7 +222,7 @@ export function createScheduler(deps: SchedulerDeps): Scheduler {
     completed: CompletedOutcome,
   ): Promise<void> {
     if (!headResult.ok) {
-      store.markCompleted(taskId, {
+      markCompleted(taskId, {
         final_text: completed.final_text,
         usage: completed.usage,
         diff_stat: null,
@@ -205,7 +234,7 @@ export function createScheduler(deps: SchedulerDeps): Scheduler {
 
     const summary = await summarizeTurn(workspace, headResult.head);
     if (summary.ok) {
-      store.markCompleted(taskId, {
+      markCompleted(taskId, {
         final_text: completed.final_text,
         usage: completed.usage,
         diff_stat: summary.summary.diff_stat,
@@ -213,7 +242,7 @@ export function createScheduler(deps: SchedulerDeps): Scheduler {
         hints: hintsOrUndefined(hints),
       });
     } else {
-      store.markCompleted(taskId, {
+      markCompleted(taskId, {
         final_text: completed.final_text,
         usage: completed.usage,
         diff_stat: null,

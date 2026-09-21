@@ -61,6 +61,47 @@ export async function createTestApp(
   });
 }
 
+/**
+ * 建多個 agent 的測試 app（每個 agent 一個獨立 workspace 子目錄，名稱同 agent
+ * name），供驗證「每 agent 一條 FIFO、跨 agent 並行」的測試使用。
+ */
+export async function createMultiAgentTestApp(
+  drivers: DriverRegistry,
+  agentNames: string[],
+): Promise<TestApp> {
+  const [firstAgentName] = agentNames;
+  if (!firstAgentName) {
+    throw new Error("createMultiAgentTestApp 需要至少一個 agent name");
+  }
+
+  const dir = await makeTempDir();
+  await makeFakeExecutable(dir, "claude");
+  const dbPath = `${dir}/agentport.sqlite`;
+  const logDir = `${dir}/logs`;
+
+  let toml = "";
+  for (const name of agentNames) {
+    await makeWorkspace(dir, name);
+    toml += agentToml({ name, workspace: name });
+  }
+  toml += `\n[storage]\ndb_path = "${dbPath}"\nlog_dir = "${logDir}"\n`;
+  const configPath = await writeConfigFile(dir, toml);
+
+  const loadResult = loadConfig(configPath, baseEnv({ HOME: dir, PATH: dir }));
+  if (!loadResult.ok) {
+    throw new Error(
+      `測試設定檔載入失敗：${loadResult.errors.map((e) => `${e.path}: ${e.message}`).join("; ")}`,
+    );
+  }
+
+  return createTestAppFromConfig(loadResult.config, drivers, {
+    dir,
+    dbPath,
+    logDir,
+    workspace: `${dir}/${firstAgentName}`,
+  });
+}
+
 async function createTestAppFromConfig(
   config: Config,
   drivers: DriverRegistry,
