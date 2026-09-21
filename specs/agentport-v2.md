@@ -182,12 +182,19 @@ Turn 開始時記下 HEAD（unborn 視為空樹）；Turn `completed` 後在 wor
 - 逾時從 Task 進入 running 起算（含記錄 HEAD 的時間）。`turn_timeout_seconds` 為 ≥ 1 的整數。
 - 取消後 follow-up 實測（2026-09-21，`policy = full`，Turn 中執行 `sleep 60` 時取消）：Claude 取消約 0.7 秒完成，follow-up `--resume` 成功且記得取消前的內容（2/2 次）。Codex 取消約 5 毫秒完成，follow-up 結果不穩定：3 次中 2 次 `completed` 但不記得、1 次 `failed{session_unresumable}`，沒有一次記得。推測 Codex 在 Turn 結束前未把該輪寫進 thread rollout（未驗證）。服務層不抹平此差異；真 CLI 測試 `tests/mcp/cancel-real-cli.test.ts` 對 Codex 接受兩種結果。
 
-### 部署與憑證【假設，票 08 未結案】
+### 部署與憑證【假設，地圖票 08 未結案；建置票 12 已依此實作】
 
 - 服務以已登入 CLI 的 OS 使用者身分常駐：Mac 用 LaunchAgent（`gui/<uid>`），Linux 用 `systemd --user`。環境至少帶 `HOME`、`USER`、`PATH`。
 - `token_env` 變數由 plist `EnvironmentVariables` 或 systemd `EnvironmentFile=` 餵入；預設路徑 `~/.config/agentport/agentport.env`（mode 0600）。
 - 遠端進入預設 SSH tunnel 到 loopback；直連 HTTP 需管理者明確改 `listen`。
 - ADR：接受同使用者訂閱憑證模型，偏離 v1 ADR-0006 / 0007 / 0010；記錄官方政策灰區（第三方不得在產品中提供 claude.ai 登入或額度）；同一張 ADR 修訂 ADR-0002 的重啟語意。
+
+建置票 12 實作時定案：
+- token 一律放在 `~/.config/agentport/agentport.env`（mode 0600，`KEY=VALUE`），不進 plist / unit / TOML。launchd 沒有 env file 支援，macOS 改用 Node 內建 `node --env-file=<path> dist/cli.js serve`（檔案不存在時 node 直接以非零碼結束）；Linux 用 systemd `EnvironmentFile=`。原假設的 plist `EnvironmentVariables` 只用來帶 `HOME` / `USER` / `PATH`，不放 token。
+- 範本在 `deploy/macos/com.agentport.serve.plist`、`deploy/linux/agentport.service`、`deploy/agentport.env.example`，以 sed 替換佔位符安裝；PATH 補 `~/.local/bin`，CLI 裝在其他位置時用 `[runtimes.*].command` 絕對路徑。
+- macOS LaunchAgent 屬 `gui/<uid>`，重開機後需使用者登入才會啟動（Keychain 同樣需登入解鎖）；無人值守需自動登入。Linux 以 `loginctl enable-linger` 開機即起。
+- `serve` 常駐時本機 `stdio` 需另一份設定檔指向不同 `db_path`（單實例鎖，建置票 11）。
+- 憑證 ADR 為 `docs/adr/0011-same-user-subscription-credentials.md`，同一張修訂 ADR-0002 第二段；v1 的 0001 / 0002 / 0003 / 0005 / 0009 已複製到 `docs/adr/` 並註明來源與 v2 適用範圍。
 
 ### 保留的 v1 ADR
 

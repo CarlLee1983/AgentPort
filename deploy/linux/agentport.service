@@ -1,0 +1,27 @@
+# systemd --user unit 範本：以管理者自己的使用者身分常駐 `agentport serve`，
+# 讓子程序讀到 ~/.claude/.credentials.json 與 ~/.codex/auth.json。
+# 部署步驟見 README.md「啟動」一節。
+#
+# 佔位符（render 時取代）：
+#   __NODE__          node 執行檔絕對路徑（`command -v node`）
+#   __AGENTPORT_DIR__ AgentPort v2 repo 絕對路徑（含 dist/cli.js）
+#
+# token_env 從 %h/.config/agentport/agentport.env（mode 0600）讀入，
+# 用 systemd 原生的 EnvironmentFile；缺檔時 systemd 會拒絕啟動這個 unit。
+#
+# systemd --user 本身已經帶 HOME/USER（服務跑在該使用者的 user manager 底下），
+# 不用像 macOS LaunchAgent 那樣另外設，這裡只補 PATH。
+
+[Unit]
+Description=AgentPort v2 MCP server
+After=network.target
+
+[Service]
+Type=simple
+ExecStart="__NODE__" "__AGENTPORT_DIR__/dist/cli.js" serve
+EnvironmentFile=%h/.config/agentport/agentport.env
+Environment=PATH=%h/.local/bin:/usr/local/bin:/usr/bin:/bin
+Restart=always
+
+[Install]
+WantedBy=default.target

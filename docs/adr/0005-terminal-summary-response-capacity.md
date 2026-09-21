@@ -1,6 +1,6 @@
 ---
 status: accepted
-inherited_from: ../AgentPort/docs/adr/0005-terminal-summary-response-capacity.md (v1, 2026-09)
+inherited_from: ../../../AgentPort/docs/adr/0005-terminal-summary-response-capacity.md (v1, 2026-09)
 ---
 
 > 自 v1 原樣繼承（地圖 Notes：0005 回應容量上限）。v2 的 `list_tasks` / `get_task` 以此 8 MiB 回應體上限縮頁與截尾；v1 專有的 tool 名、cursor 格式、evidence 路徑不適用。
