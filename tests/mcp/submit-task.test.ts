@@ -5,6 +5,7 @@ import { afterEach, describe, expect, it } from "vitest";
 import { unavailableDrivers } from "../../src/driver/unavailable.js";
 import { cleanupTempDirs } from "../config/helpers.js";
 import { scriptedDriver } from "../helpers/fake-driver.js";
+import { initGitWorkspace } from "../helpers/git.js";
 import { createTestApp, waitForTaskFinal } from "../helpers/app.js";
 
 afterEach(cleanupTempDirs);
@@ -164,6 +165,10 @@ describe("submit_task", () => {
     });
     const app = await createTestApp({ claude: driver, codex: driver });
     try {
+      // workspace 需為 git repo，否則 completed 後的 git 摘要會失敗並多出
+      // hints.git，干擾這裡只想驗證 permission_denied 的斷言。
+      await initGitWorkspace(app.paths.workspace);
+
       const submitResponse = await app.client.callTool({
         name: "submit_task",
         arguments: { agent: "stationhub", prompt: "do the thing" },

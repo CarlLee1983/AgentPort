@@ -1,7 +1,13 @@
 import type { Config } from "./config/schema.js";
 import type { DriverEvent, DriverRegistry } from "./driver/types.js";
+import {
+  captureHead,
+  summarizeTurn,
+  type CaptureHeadResult,
+} from "./git/summary.js";
 import { openRawLog, type RawLog } from "./logs/jsonl.js";
 import type { TaskRecord, TaskStore } from "./store/sqlite.js";
+import type { Hints } from "./task/schema.js";
 
 export interface SchedulerDeps {
   store: TaskStore;
@@ -13,11 +19,15 @@ export interface Scheduler {
   enqueue(taskId: string): void;
 }
 
-type Hints = { permission_denied?: unknown[] };
+interface CompletedOutcome {
+  final_text: string;
+  usage: Record<string, number> | null;
+}
 
 interface EventOutcome {
   hints: Hints;
   terminal: boolean;
+  completed?: CompletedOutcome;
 }
 
 /**
@@ -63,6 +73,10 @@ export function createScheduler(deps: SchedulerDeps): Scheduler {
       rawLog = openRawLog(config.storage.log_dir, taskId);
       store.markRunning(taskId, rawLog.path);
 
+      // captureHead 失敗不阻擋 Turn：先記下結果，等 completed 時再決定要不要跑
+      // summarizeTurn（見 finishCompleted）。
+      const headResult = await captureHead(agent.workspace);
+
       const driver = drivers[agent.runtime];
       const context = store.getContext(task.context_id);
       const turnInput = {
@@ -82,6 +96,7 @@ export function createScheduler(deps: SchedulerDeps): Scheduler {
 
       let hints: Hints = {};
       let terminal = false;
+      let completed: CompletedOutcome | undefined;
       for await (const event of turn.events) {
         rawLog.write(event);
         if (terminal) {
@@ -91,9 +106,18 @@ export function createScheduler(deps: SchedulerDeps): Scheduler {
         const outcome = handleEvent(task, hints, event);
         hints = outcome.hints;
         terminal = outcome.terminal;
+        completed = outcome.completed;
       }
 
-      if (!terminal) {
+      if (completed) {
+        await finishCompleted(
+          taskId,
+          agent.workspace,
+          headResult,
+          hints,
+          completed,
+        );
+      } else if (!terminal) {
         store.markFailed(taskId, {
           code: "runtime_failed",
           message: "driver ended without terminal event",
@@ -131,12 +155,12 @@ export function createScheduler(deps: SchedulerDeps): Scheduler {
           terminal: false,
         };
       case "completed":
-        store.markCompleted(task.task_id, {
-          final_text: event.final_text,
-          usage: event.usage,
-          hints: hintsOrUndefined(hints),
-        });
-        return { hints, terminal: true };
+        // git 摘要要等收完事件後才跑（見 finishCompleted），這裡只記下 completed 的資料。
+        return {
+          hints,
+          terminal: true,
+          completed: { final_text: event.final_text, usage: event.usage },
+        };
       case "failed":
         store.markFailed(task.task_id, {
           code: "runtime_failed",
@@ -148,6 +172,51 @@ export function createScheduler(deps: SchedulerDeps): Scheduler {
       case "activity":
         // 這張票不記錄中間文字與活動摘要，final_text 只來自 completed 事件。
         return { hints, terminal: false };
+    }
+  }
+
+  /**
+   * `completed` 終態後才跑 git 摘要：`captureHead` 已經失敗就不用再跑
+   * `summarizeTurn`（結果只會是同一種錯），直接把原因記到 `hints.git`。成功時
+   * 才呼叫 `summarizeTurn`：成功把 `diff_stat` / `commits` 一起寫進
+   * `markCompleted`；失敗（非 git 目錄、git 指令出錯）Task 仍是 completed，
+   * 兩欄為 null 並把原因記在 `hints.git`。
+   */
+  async function finishCompleted(
+    taskId: string,
+    workspace: string,
+    headResult: CaptureHeadResult,
+    hints: Hints,
+    completed: CompletedOutcome,
+  ): Promise<void> {
+    if (!headResult.ok) {
+      store.markCompleted(taskId, {
+        final_text: completed.final_text,
+        usage: completed.usage,
+        diff_stat: null,
+        commits: null,
+        hints: hintsOrUndefined({ ...hints, git: headResult.reason }),
+      });
+      return;
+    }
+
+    const summary = await summarizeTurn(workspace, headResult.head);
+    if (summary.ok) {
+      store.markCompleted(taskId, {
+        final_text: completed.final_text,
+        usage: completed.usage,
+        diff_stat: summary.summary.diff_stat,
+        commits: summary.summary.commits,
+        hints: hintsOrUndefined(hints),
+      });
+    } else {
+      store.markCompleted(taskId, {
+        final_text: completed.final_text,
+        usage: completed.usage,
+        diff_stat: null,
+        commits: null,
+        hints: hintsOrUndefined({ ...hints, git: summary.reason }),
+      });
     }
   }
 

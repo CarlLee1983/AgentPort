@@ -4,7 +4,12 @@ import { dirname } from "node:path";
 import Database from "better-sqlite3";
 import { ulid } from "ulid";
 
-import type { TaskErrorCode, TaskRecord, TaskState } from "../task/schema.js";
+import type {
+  GitCommit,
+  TaskErrorCode,
+  TaskRecord,
+  TaskState,
+} from "../task/schema.js";
 
 export type { TaskRecord, TaskState } from "../task/schema.js";
 
@@ -25,6 +30,8 @@ export interface CreateTaskInput {
 export interface MarkCompletedInput {
   final_text: string;
   usage: Record<string, number> | null;
+  diff_stat?: string | null | undefined;
+  commits?: GitCommit[] | null | undefined;
   hints?: Record<string, unknown> | undefined;
 }
 
@@ -130,7 +137,7 @@ export function openTaskStore(dbPath: string): TaskStore {
     `UPDATE contexts SET runtime_session_id = @runtime_session_id WHERE context_id = @context_id`,
   );
   const updateMarkCompleted = db.prepare(
-    `UPDATE tasks SET state = 'completed', finished_at = @finished_at, final_text = @final_text, usage = @usage, hints = @hints WHERE task_id = @task_id`,
+    `UPDATE tasks SET state = 'completed', finished_at = @finished_at, final_text = @final_text, diff_stat = @diff_stat, commits = @commits, usage = @usage, hints = @hints WHERE task_id = @task_id`,
   );
   const updateMarkFailed = db.prepare(
     `UPDATE tasks SET state = 'failed', finished_at = @finished_at, error_code = @error_code, error_message = @error_message, hints = @hints WHERE task_id = @task_id`,
@@ -149,7 +156,7 @@ export function openTaskStore(dbPath: string): TaskStore {
       finished_at: row.finished_at,
       final_text: row.final_text,
       diff_stat: row.diff_stat,
-      commits: row.commits ? (JSON.parse(row.commits) as string[]) : null,
+      commits: row.commits ? (JSON.parse(row.commits) as GitCommit[]) : null,
       usage: row.usage
         ? (JSON.parse(row.usage) as Record<string, number>)
         : null,
@@ -238,6 +245,8 @@ export function openTaskStore(dbPath: string): TaskStore {
         task_id: taskId,
         finished_at: new Date().toISOString(),
         final_text: input.final_text,
+        diff_stat: input.diff_stat ?? null,
+        commits: input.commits ? JSON.stringify(input.commits) : null,
         usage: input.usage ? JSON.stringify(input.usage) : null,
         hints: input.hints ? JSON.stringify(input.hints) : null,
       });

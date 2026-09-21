@@ -140,7 +140,7 @@ token_env = "AGENTPORT_TOKEN_GROK"
 
 ### Git 摘要
 
-Turn 結束後服務層在 workspace 執行 `git diff --stat`（含 untracked 以 `git status --porcelain` 補）與 Turn 期間新增的 commit 清單（記 Turn 開始時的 HEAD，結束後 `git log <start>..HEAD --oneline`）。非 git 目錄或 git 出錯 → null + `hints.git`。
+Turn 開始時記下 HEAD（unborn 視為空樹）；Turn `completed` 後在 workspace 執行 `git diff --stat --relative <start> -- .`（限縮並相對於 workspace 子樹，untracked 以 `git status --porcelain -- .` 補在尾端）與 `git log <start>..HEAD`（不限縮子樹，由舊到新）。`commits` 形狀為 `{ sha, subject }[]`。所有 git 呼叫帶 `-c core.quotePath=false`。非 git 目錄、記 HEAD 失敗或 git 出錯 → `diff_stat` / `commits` 為 null + `hints.git`，Task 仍 completed。`failed` 的 Task 不跑摘要。（票 03 實作時定案）
 
 ### MCP tool 表面【假設，票 07 未結案】
 

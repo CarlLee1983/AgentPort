@@ -19,6 +19,18 @@ export const TASK_ERROR_CODES = [
 export const TaskStateSchema = z.enum(TASK_STATES);
 export const TaskErrorCodeSchema = z.enum(TASK_ERROR_CODES);
 
+/** Turn 期間新增的一個 commit：git 摘要模組（`src/git/summary.ts`）輸出的形狀。 */
+export const GitCommitSchema = z.object({
+  sha: z.string(),
+  subject: z.string(),
+});
+
+/** `hints` 非權威附註：`permission_denied` 原樣轉交，`git` 記 git 摘要失敗原因。 */
+export const HintsSchema = z.object({
+  permission_denied: z.array(z.unknown()).optional(),
+  git: z.string().optional(),
+});
+
 /**
  * Task 完整記錄的唯一定義來源：SQLite store 的回傳型別與 `get_task` 的
  * outputSchema 都 import 這裡，欄位只定義一次。
@@ -35,9 +47,9 @@ export const TaskRecordSchema = z.object({
   finished_at: z.string().nullable(),
   final_text: z.string().nullable(),
   diff_stat: z.string().nullable(),
-  commits: z.array(z.string()).nullable(),
+  commits: z.array(GitCommitSchema).nullable(),
   usage: z.record(z.string(), z.number()).nullable(),
-  hints: z.record(z.string(), z.unknown()).nullable(),
+  hints: HintsSchema.nullable(),
   error: z
     .object({ code: TaskErrorCodeSchema, message: z.string() })
     .nullable(),
@@ -46,4 +58,6 @@ export const TaskRecordSchema = z.object({
 
 export type TaskState = z.infer<typeof TaskStateSchema>;
 export type TaskErrorCode = z.infer<typeof TaskErrorCodeSchema>;
+export type GitCommit = z.infer<typeof GitCommitSchema>;
+export type Hints = z.infer<typeof HintsSchema>;
 export type TaskRecord = z.infer<typeof TaskRecordSchema>;

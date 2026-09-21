@@ -9,6 +9,7 @@ export interface DriverScript {
   events: DriverEvent[];
   delayMs?: number;
   throwAfter?: number;
+  onStart?: (input: TurnInput) => void | Promise<void>;
 }
 
 function delay(ms: number): Promise<void> {
@@ -32,6 +33,9 @@ export function scriptedDriver(script: DriverScript): RuntimeDriver & {
     let killed = false;
 
     async function* events(): AsyncIterable<DriverEvent> {
+      if (script.onStart) {
+        await script.onStart(input);
+      }
       for (let i = 0; i < script.events.length; i += 1) {
         if (killed) {
           return;
