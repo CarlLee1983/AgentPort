@@ -12,9 +12,14 @@ import {
 import { createConnection } from "node:net";
 import { dirname, join, resolve } from "node:path";
 
-import { loadConfig } from "../config/load.js";
 import { resolveConfigPath, type Env } from "../config/paths.js";
 import { parseListen } from "../http/listen.js";
+import { prepareConfiguration } from "./configuration.js";
+import {
+  assertWrapperCanBeInstalled,
+  installWrapper,
+  renderWrapper,
+} from "./wrapper.js";
 
 const SERVICE_USAGE =
   "usage: agentport service install [--dry-run] [--config <path>]";
@@ -120,52 +125,121 @@ export async function runService(
   const configPath = resolve(
     resolveConfigPath(parsed.configPath, dependencies.env),
   );
-  const result = loadConfig(configPath, dependencies.env);
-  if (!result.ok) {
-    for (const error of result.errors) {
-      dependencies.writeStderr(`${error.path}: ${error.message}`);
-    }
-    return 1;
-  }
-
   const plistPath = join(
     dependencies.home,
     "Library",
     "LaunchAgents",
     `${LAUNCH_AGENT_LABEL}.plist`,
   );
-  const configDirectory = dirname(configPath);
-  const envPath = join(configDirectory, "agentport.env");
   const installDirectory = join(
     dependencies.env.XDG_DATA_HOME ||
       join(dependencies.home, ".local", "share"),
     "agentport",
     "app",
   );
+  const cliPath = join(installDirectory, "dist", "cli.js");
+  const envPath = join(dirname(configPath), "agentport.env");
   const plist = renderMacosLaunchAgent({
     home: dependencies.home,
     user: dependencies.user,
     nodePath: dependencies.nodePath,
-    cliPath: join(installDirectory, "dist", "cli.js"),
+    cliPath,
     configPath,
     envPath,
   });
 
   if (parsed.dryRun) {
+    const prepared = await prepareConfiguration({
+      configPath,
+      env: dependencies.env,
+      generateToken: dependencies.generateToken,
+      dryRun: true,
+    });
+    if (prepared.kind === "needs-configuration") {
+      dependencies.writeStderr(`設定檔不存在：${prepared.configPath}`);
+      return 1;
+    }
+    if (prepared.kind === "invalid-configuration") {
+      reportConfigErrors(prepared.errors, dependencies);
+      return 1;
+    }
     dependencies.writeStdout(plist);
+    dependencies.writeStdout(
+      renderWrapper({
+        home: dependencies.home,
+        nodePath: dependencies.nodePath,
+        cliPath,
+      }),
+    );
     dependencies.writeStdout(
       `launchctl bootstrap gui/${String(dependencies.uid)} ${plistPath}`,
     );
     return 0;
   }
 
-  return installMacos({
+  try {
+    await assertWrapperCanBeInstalled(dependencies.home);
+  } catch (error) {
+    dependencies.writeStderr(describeError(error));
+    return 1;
+  }
+
+  const prepared = await prepareConfiguration({
+    configPath,
+    env: dependencies.env,
+    generateToken: dependencies.generateToken,
+  });
+  if (prepared.kind === "needs-configuration") {
+    dependencies.writeStdout(
+      `已產生設定檔：${prepared.configPath}；填好 agent 後重跑。`,
+    );
+    return 1;
+  }
+  if (prepared.kind === "invalid-configuration") {
+    reportConfigErrors(prepared.errors, dependencies);
+    return 1;
+  }
+
+  if (prepared.envPermissionTightened) {
+    dependencies.writeStdout(`已將 env 檔權限收緊為 0600：${prepared.envPath}`);
+  }
+  for (const token of prepared.createdTokens) {
+    dependencies.writeStdout(
+      `新 token（只顯示這一次）：caller ${token.callerName}、${token.tokenEnv}、${token.value}`,
+    );
+  }
+
+  const exitCode = await installMacos({
     dependencies,
     installDirectory,
     plistPath,
     plist,
-    listen: result.config.server.listen,
+    listen: prepared.config.server.listen,
   });
+  if (exitCode !== 0) {
+    return exitCode;
+  }
+
+  try {
+    await installWrapper({
+      home: dependencies.home,
+      nodePath: dependencies.nodePath,
+      cliPath,
+    });
+    return 0;
+  } catch (error) {
+    dependencies.writeStderr(`無法寫入包裝指令：${describeError(error)}`);
+    return 1;
+  }
+}
+
+function reportConfigErrors(
+  errors: { path: string; message: string }[],
+  dependencies: Pick<ServiceDependencies, "writeStderr">,
+): void {
+  for (const error of errors) {
+    dependencies.writeStderr(`${error.path}: ${error.message}`);
+  }
 }
 
 type ParsedInstallArgs =

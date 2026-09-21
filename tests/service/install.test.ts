@@ -1,12 +1,14 @@
 import { spawnSync } from "node:child_process";
 import { existsSync } from "node:fs";
 import {
+  chmod,
   cp,
   mkdir,
   readdir,
   readFile,
   rename,
   rm,
+  stat,
   writeFile,
 } from "node:fs/promises";
 import { join, relative } from "node:path";
@@ -17,6 +19,7 @@ import {
   runService,
   type ServiceDependencies,
 } from "../../src/service/index.js";
+import { WRAPPER_MARKER, wrapperPath } from "../../src/service/wrapper.js";
 import {
   agentToml,
   baseEnv,
@@ -61,6 +64,19 @@ async function validConfig(home: string): Promise<string> {
   await makeWorkspace(home, "workspace");
   await makeFakeExecutable(home, "claude");
   return writeConfigFile(home, agentToml());
+}
+
+async function validConfigWithCallers(
+  home: string,
+  callers: string,
+): Promise<string> {
+  const configPath = await validConfig(home);
+  await writeFile(
+    configPath,
+    `${await readFile(configPath, "utf8")}\n${callers}`,
+    "utf8",
+  );
+  return configPath;
 }
 
 async function makeProgramRoot(dir: string, contents: string): Promise<string> {
@@ -122,6 +138,7 @@ describe("service install --dry-run (macOS)", () => {
     expect(rendered).toContain(
       `launchctl bootstrap gui/501 ${join(home, "Library/LaunchAgents/com.agentport.serve.plist")}`,
     );
+    expect(rendered).toContain(WRAPPER_MARKER);
     expect(await readdir(home)).toEqual([
       "agentport.toml",
       "claude",
@@ -158,6 +175,28 @@ describe("service install --dry-run (macOS)", () => {
       });
       expect(result.status).toBe(0);
     }
+  });
+
+  it("有 caller 但 env 尚未建立時仍印出完整 wrapper，且不建立 token", async () => {
+    const home = await makeTempDir();
+    const configPath = await validConfigWithCallers(
+      home,
+      '[[callers]]\nname = "default"\ntoken_env = "AGENTPORT_TOKEN_DEFAULT"\n',
+    );
+    const output: string[] = [];
+
+    const exitCode = await runService(
+      ["install", "--dry-run", "--config", configPath],
+      serviceDependencies(home, {
+        generateToken: () => "planned-token",
+        writeStdout: (line) => output.push(line),
+      }),
+    );
+
+    expect(exitCode).toBe(0);
+    expect(output.join("\n")).toContain(WRAPPER_MARKER);
+    expect(output.join("\n")).not.toContain("planned-token");
+    expect(existsSync(join(home, "agentport.env"))).toBe(false);
   });
 
   it("同時印出結構與語意設定錯誤，且不印 plist", async () => {
@@ -218,6 +257,198 @@ describe("service install --dry-run (macOS)", () => {
 });
 
 describe("service install (macOS)", () => {
+  it("設定檔不存在時只建立骨架、提示填好 agent 後重跑，且不碰服務定義", async () => {
+    const home = await makeTempDir();
+    const configPath = join(home, "config", "agentport.toml");
+    const commands: string[] = [];
+    const output: string[] = [];
+
+    const exitCode = await runService(
+      ["install", "--config", configPath],
+      serviceDependencies(home, {
+        runCommand: (_command, args) => {
+          commands.push(args.join(" "));
+          return Promise.resolve({ exitCode: 0, stdout: "", stderr: "" });
+        },
+        writeStdout: (line) => output.push(line),
+      }),
+    );
+
+    expect(exitCode).toBe(1);
+    expect(await readFile(configPath, "utf8")).toContain("# [[agents]]");
+    expect(await readFile(configPath, "utf8")).toContain(
+      'token_env = "AGENTPORT_TOKEN_DEFAULT"',
+    );
+    expect(output.join("\n")).toContain(configPath);
+    expect(output.join("\n")).toContain("填好 agent 後重跑");
+    expect(commands).toEqual([]);
+    expect(existsSync(join(home, "Library/LaunchAgents"))).toBe(false);
+  });
+
+  it.each([
+    {
+      name: "AGENTPORT_CONFIG",
+      configPath: (home: string) => join(home, "custom", "agentport.toml"),
+      env: (home: string) => ({
+        HOME: home,
+        PATH: home,
+        AGENTPORT_CONFIG: join(home, "custom", "agentport.toml"),
+      }),
+    },
+    {
+      name: "XDG_CONFIG_HOME",
+      configPath: (home: string) =>
+        join(home, "xdg", "agentport", "agentport.toml"),
+      env: (home: string) => ({
+        HOME: home,
+        PATH: home,
+        XDG_CONFIG_HOME: join(home, "xdg"),
+      }),
+    },
+  ])("未給 --config 時依 $name 建立設定骨架", async ({ configPath, env }) => {
+    const home = await makeTempDir();
+    const path = configPath(home);
+    const commands: string[] = [];
+
+    const exitCode = await runService(
+      ["install"],
+      serviceDependencies(home, {
+        env: baseEnv(env(home)),
+        runCommand: (_command, args) => {
+          commands.push(args.join(" "));
+          return Promise.resolve({ exitCode: 0, stdout: "", stderr: "" });
+        },
+      }),
+    );
+
+    expect(exitCode).toBe(1);
+    expect(await readFile(path, "utf8")).toContain("# [[agents]]");
+    expect(commands).toEqual([]);
+  });
+
+  it("驗證失敗時不改寫既有設定檔，也不送 launchctl", async () => {
+    const home = await makeTempDir();
+    const configPath = join(home, "agentport.toml");
+    const contents = "not valid = [";
+    const commands: string[] = [];
+    await writeFile(configPath, contents, "utf8");
+
+    const exitCode = await runService(
+      ["install", "--config", configPath],
+      serviceDependencies(home, {
+        runCommand: (_command, args) => {
+          commands.push(args.join(" "));
+          return Promise.resolve({ exitCode: 0, stdout: "", stderr: "" });
+        },
+      }),
+    );
+
+    expect(exitCode).toBe(1);
+    expect(await readFile(configPath, "utf8")).toBe(contents);
+    expect(commands).toEqual([]);
+  });
+
+  it("只建立缺少的 caller token、以 0600 寫 env，且只在 stdout 顯示新的值", async () => {
+    const home = await makeTempDir();
+    const source = await makeProgramRoot(home, "v1");
+    const configPath = await validConfigWithCallers(
+      home,
+      '[[callers]]\nname = "kept"\ntoken_env = "AGENTPORT_TOKEN_KEEP"\n\n[[callers]]\nname = "new"\ntoken_env = "AGENTPORT_TOKEN_NEW"\n',
+    );
+    const envPath = join(home, "agentport.env");
+    const output: string[] = [];
+    await writeFile(envPath, "AGENTPORT_TOKEN_KEEP=keep-me\n", "utf8");
+    await chmod(envPath, 0o644);
+
+    const exitCode = await runService(
+      ["install", "--config", configPath],
+      serviceDependencies(home, {
+        programRoot: source,
+        generateToken: () => "new-token",
+        writeStdout: (line) => output.push(line),
+      }),
+    );
+
+    expect(exitCode).toBe(0);
+    expect(await readFile(envPath, "utf8")).toBe(
+      "AGENTPORT_TOKEN_KEEP=keep-me\nAGENTPORT_TOKEN_NEW=new-token\n",
+    );
+    expect((await stat(envPath)).mode & 0o777).toBe(0o600);
+    expect(output.join("\n")).toContain("AGENTPORT_TOKEN_NEW、new-token");
+    expect(output.join("\n")).not.toContain("keep-me");
+    expect(output.join("\n")).toContain("權限收緊為 0600");
+    const plist = await readFile(
+      join(home, "Library/LaunchAgents/com.agentport.serve.plist"),
+      "utf8",
+    );
+    expect(plist).not.toContain("new-token");
+  });
+
+  it("env 不存在時為每個 caller 建立 token，且不讓 token 進 plist 或 err log", async () => {
+    const home = await makeTempDir();
+    const source = await makeProgramRoot(home, "v1");
+    const configPath = await validConfigWithCallers(
+      home,
+      '[[callers]]\nname = "one"\ntoken_env = "AGENTPORT_TOKEN_ONE"\n\n[[callers]]\nname = "two"\ntoken_env = "AGENTPORT_TOKEN_TWO"\n',
+    );
+    const output: string[] = [];
+    let generated = 0;
+
+    const exitCode = await runService(
+      ["install", "--config", configPath],
+      serviceDependencies(home, {
+        programRoot: source,
+        generateToken: () => `generated-${String(++generated)}`,
+        writeStdout: (line) => output.push(line),
+      }),
+    );
+
+    const envPath = join(home, "agentport.env");
+    const plist = await readFile(
+      join(home, "Library/LaunchAgents/com.agentport.serve.plist"),
+      "utf8",
+    );
+    expect(exitCode).toBe(0);
+    expect(await readFile(envPath, "utf8")).toBe(
+      "AGENTPORT_TOKEN_ONE=generated-1\nAGENTPORT_TOKEN_TWO=generated-2\n",
+    );
+    expect((await stat(envPath)).mode & 0o777).toBe(0o600);
+    expect(output.join("\n")).toContain("AGENTPORT_TOKEN_ONE、generated-1");
+    expect(output.join("\n")).toContain("AGENTPORT_TOKEN_TWO、generated-2");
+    expect(plist).not.toContain("generated-1");
+    expect(plist).not.toContain("generated-2");
+    expect(
+      existsSync(join(home, "Library/Logs/agentport/agentport.err.log")),
+    ).toBe(false);
+  });
+
+  it("已存在的所有 token 重跑時不改 env，也不再輸出 token", async () => {
+    const home = await makeTempDir();
+    const source = await makeProgramRoot(home, "v1");
+    const configPath = await validConfigWithCallers(
+      home,
+      '[[callers]]\nname = "default"\ntoken_env = "AGENTPORT_TOKEN_DEFAULT"\n',
+    );
+    const envPath = join(home, "agentport.env");
+    const contents = "AGENTPORT_TOKEN_DEFAULT=keep-me\n";
+    const output: string[] = [];
+    await writeFile(envPath, contents, "utf8");
+    await chmod(envPath, 0o600);
+
+    const exitCode = await runService(
+      ["install", "--config", configPath],
+      serviceDependencies(home, {
+        programRoot: source,
+        generateToken: () => "must-not-be-used",
+        writeStdout: (line) => output.push(line),
+      }),
+    );
+
+    expect(exitCode).toBe(0);
+    expect(await readFile(envPath, "utf8")).toBe(contents);
+    expect(output.join("\n")).not.toContain("新 token");
+  });
+
   it("第一次安裝會複製程式、寫入 plist、bootstrap 並回報監聽位址", async () => {
     const home = await makeTempDir();
     const source = await makeProgramRoot(home, "v1");
@@ -598,5 +829,88 @@ describe("service install (macOS)", () => {
       await runService(["install", "--config", configPath], dependencies),
     ).toBe(0);
     expect(await snapshotTree(home)).toEqual(afterFirstInstall);
+  });
+
+  it("安裝的 wrapper 使用固定 node 執行 app CLI，並轉傳 check-config 參數", async () => {
+    const home = await makeTempDir();
+    const source = await makeProgramRoot(home, "v1");
+    const configPath = await validConfig(home);
+    const nodePath = join(home, "node with spaces");
+    await mkdir(join(source, "dist"));
+    await writeFile(
+      join(source, "dist", "cli.js"),
+      `#!/bin/sh\n[ "$1" = check-config ] && [ "$2" = --config ] && [ "$3" = '${configPath}' ]\n`,
+      "utf8",
+    );
+    await writeFile(
+      nodePath,
+      '#!/bin/sh\nscript="$1"\nshift\nexec /bin/sh "$script" "$@"\n',
+      "utf8",
+    );
+    await chmod(nodePath, 0o755);
+
+    const exitCode = await runService(
+      ["install", "--config", configPath],
+      serviceDependencies(home, { programRoot: source, nodePath }),
+    );
+    const path = wrapperPath(home);
+    const result = spawnSync(path, ["check-config", "--config", configPath], {
+      encoding: "utf8",
+    });
+
+    expect(exitCode).toBe(0);
+    expect(result.status).toBe(0);
+    expect((await stat(path)).mode & 0o111).toBe(0o111);
+    expect(await readFile(path, "utf8")).toContain(WRAPPER_MARKER);
+    expect(await readFile(path, "utf8")).toContain(`'${nodePath}'`);
+  });
+
+  it("使用者自己的同名 wrapper 會原封不動地拒絕，且不送 launchctl", async () => {
+    const home = await makeTempDir();
+    const source = await makeProgramRoot(home, "v1");
+    const configPath = await validConfig(home);
+    const path = wrapperPath(home);
+    const contents = "#!/bin/sh\necho mine\n";
+    const commands: string[] = [];
+    await mkdir(join(home, ".local", "bin"), { recursive: true });
+    await writeFile(path, contents, "utf8");
+
+    const exitCode = await runService(
+      ["install", "--config", configPath],
+      serviceDependencies(home, {
+        programRoot: source,
+        runCommand: (_command, args) => {
+          commands.push(args.join(" "));
+          return Promise.resolve({ exitCode: 0, stdout: "", stderr: "" });
+        },
+      }),
+    );
+
+    expect(exitCode).toBe(1);
+    expect(await readFile(path, "utf8")).toBe(contents);
+    expect(commands).toEqual([]);
+  });
+
+  it("帶標記的舊 wrapper 會被更新到本次 node 路徑", async () => {
+    const home = await makeTempDir();
+    const source = await makeProgramRoot(home, "v1");
+    const configPath = await validConfig(home);
+    const path = wrapperPath(home);
+    const nodePath = "/new node";
+    await mkdir(join(home, ".local", "bin"), { recursive: true });
+    await writeFile(
+      path,
+      `#!/bin/sh\n${WRAPPER_MARKER}\nexec /old/node\n`,
+      "utf8",
+    );
+
+    const exitCode = await runService(
+      ["install", "--config", configPath],
+      serviceDependencies(home, { programRoot: source, nodePath }),
+    );
+
+    expect(exitCode).toBe(0);
+    expect(await readFile(path, "utf8")).toContain("'/new node'");
+    expect(await readFile(path, "utf8")).not.toContain("/old/node");
   });
 });
