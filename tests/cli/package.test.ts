@@ -21,6 +21,24 @@ const PROJECT_ROOT = fileURLToPath(new URL("../..", import.meta.url));
 afterEach(cleanupTempDirs);
 
 describe("production package", () => {
+  it("service:install 將 service install 的參數交給打包出的 CLI", async () => {
+    const home = await makeTempDir();
+    await makeWorkspace(home, "workspace");
+    await makeFakeExecutable(home, "claude");
+    const configPath = await writeConfigFile(home, agentToml());
+
+    const { stdout } = await execFileAsync(
+      "pnpm",
+      ["service:install", "--", "--dry-run", "--config", configPath],
+      {
+        cwd: PROJECT_ROOT,
+        env: { ...process.env, HOME: home },
+      },
+    );
+
+    expect(stdout).toContain("com.agentport.serve");
+  }, 20_000);
+
   it("只打包建置產物，且獨立執行 check-config 成功", async () => {
     const packageDirectory = await makeTempDir();
     const configDirectory = await makeTempDir();
@@ -51,22 +69,4 @@ describe("production package", () => {
 
     expect(stdout).toContain("stationhub");
   });
-
-  it("service:install 將 service install 的參數交給打包出的 CLI", async () => {
-    const home = await makeTempDir();
-    await makeWorkspace(home, "workspace");
-    await makeFakeExecutable(home, "claude");
-    const configPath = await writeConfigFile(home, agentToml());
-
-    const { stdout } = await execFileAsync(
-      "pnpm",
-      ["service:install", "--", "--dry-run", "--config", configPath],
-      {
-        cwd: PROJECT_ROOT,
-        env: { ...process.env, HOME: home },
-      },
-    );
-
-    expect(stdout).toContain("com.agentport.serve");
-  }, 20_000);
 });

@@ -153,6 +153,8 @@ pnpm install
 pnpm check      # format:check → lint → typecheck → build → test，驗證一律跑這個
 ```
 
+`pnpm test` 會先並行跑不會碰 package 依賴樹的測試，再獨立跑 production package 驗收。後者會以 `pnpm deploy --prod` 暫時重建 repo 的 `node_modules` 連結；不能與其他會從該依賴樹載入模組的測試並行。`pnpm service:install` 本身會先用 frozen lockfile 補齊建置依賴，因此前一次 production deploy 留下 production-only 依賴樹後，重跑安裝仍可 build。
+
 真 CLI 測試預設跳過，需本機已登入 `claude` / `codex`，並會消耗訂閱額度：
 
 ```sh
