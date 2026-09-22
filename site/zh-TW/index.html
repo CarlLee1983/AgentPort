@@ -1,0 +1,77 @@
+<!doctype html>
+<html lang="zh-Hant-TW">
+  <head>
+    <meta charset="utf-8" />
+    <meta name="viewport" content="width=device-width, initial-scale=1" />
+    <meta name="description" content="AgentPort 是受管理的 MCP gateway，連接本機 Claude Code 與 Codex runtime。" />
+    <title>AgentPort — 受管理的 MCP gateway</title>
+    <link rel="canonical" href="https://carllee1983.github.io/AgentPort/zh-TW/" />
+    <link rel="alternate" hreflang="en" href="https://carllee1983.github.io/AgentPort/" />
+    <link rel="alternate" hreflang="zh-Hant" href="https://carllee1983.github.io/AgentPort/zh-TW/" />
+    <link rel="alternate" hreflang="ja" href="https://carllee1983.github.io/AgentPort/ja/" />
+    <link rel="alternate" hreflang="x-default" href="https://carllee1983.github.io/AgentPort/" />
+    <link rel="icon" type="image/png" href="../assets/agentport-mark.png" />
+    <link rel="stylesheet" href="../assets/site.css" />
+  </head>
+  <body>
+    <header class="shell nav">
+      <a class="brand" href="../"><img class="brand__mark" src="../assets/agentport-mark.png" width="32" height="32" alt="" />AgentPort</a>
+      <div class="nav__actions">
+        <nav class="languages" aria-label="語言">
+          <a href="../">EN</a><a lang="zh-Hant" aria-current="page" href="./">繁</a><a lang="ja" href="../ja/">日</a>
+        </nav>
+        <a class="command" href="https://github.com/CarlLee1983/AgentPort#readme"><span>閱讀文件</span><kbd>↗</kbd></a>
+      </div>
+    </header>
+    <main>
+      <section class="shell hero" aria-labelledby="hero-title">
+        <div>
+          <p class="eyebrow">受管理的 MCP gateway</p>
+          <h1 id="hero-title">本機 Runtime，刻意掌控。</h1>
+          <p class="lede">AgentPort 將已設定的 Claude Code 與 Codex workspace 公開為 Logical Agent。Caller 可以派送工作、觀察 Task，並延續 Context——無須任意指定路徑或 runtime。</p>
+          <div class="actions">
+            <a class="button button--accent" href="https://github.com/CarlLee1983/AgentPort#installation-and-deployment">安裝 AgentPort</a>
+            <a class="button" href="https://github.com/CarlLee1983/AgentPort#mcp-client-configuration-examples">設定 MCP client</a>
+          </div>
+        </div>
+        <div class="console" aria-label="AgentPort 任務流程">
+          <div class="console__bar"><span>agentport / task flow</span><span>streamable HTTP</span></div>
+          <div class="flow">
+            <div class="flow__node"><strong>Caller</strong><span>submit_task(agent, prompt)</span></div>
+            <div class="flow__arrow" aria-hidden="true"></div>
+            <div class="flow__node flow__node--accent"><strong>AgentPort</strong><span>policy · queue · task record</span></div>
+            <div class="flow__arrow" aria-hidden="true"></div>
+            <div class="flow__node"><strong>已設定的 Runtime</strong><span>指派 Workspace 中的 Claude Code 或 Codex</span></div>
+          </div>
+        </div>
+      </section>
+      <section class="band">
+        <div class="shell split">
+          <div><p class="eyebrow">運作模型</p><h2>單一 registry 即為權限的來源。</h2></div>
+          <div class="specs">
+            <article class="spec"><code>workspace</code><p>每個 Logical Agent 都綁定至管理員選定的工作目錄。</p></article>
+            <article class="spec"><code>runtime</code><p>Claude Code 或 Codex 由 host 設定選擇，而不是由 Caller 選擇。</p></article>
+            <article class="spec"><code>policy</code><p>每個 Task 都以明確的唯讀、workspace-write 或 full policy 執行。</p></article>
+          </div>
+        </div>
+      </section>
+      <section class="band" aria-labelledby="use-cases-title">
+        <div class="shell">
+          <div class="use-cases__intro">
+            <div><p class="eyebrow">使用情境</p><h2 id="use-cases-title">在工作需要時，啟動本機 coding runtime。</h2></div>
+            <p class="lede">Caller 選擇預先設定的 Logical Agent。AgentPort 為 Task 啟動綁定的 Runtime、讓進度可觀察，並讓 host 的 Git 與 GitHub 決策保持明確。</p>
+          </div>
+          <div class="use-cases">
+            <article class="use-case"><div><span class="use-case__number">01 / IMPLEMENT</span><h3>將已核准的 issue 交給已準備好的 workspace。</h3><p>workspace-write Agent 可接收 issue 與驗收條件作為 Task，並在設定好的 workspace 內實作和測試。更新 main、建立 worktree 或 branch，以及開啟 pull request，仍是 Git 與 host runtime 的操作——不是 AgentPort 的控制項。</p></div><code class="use-case__route">submit_task → get_task</code></article>
+            <article class="use-case"><div><span class="use-case__number">02 / TRIAGE</span><h3>在授與寫入權限前先排查 issue。</h3><p>唯讀 Agent 可檢查設定好的 workspace、測試，以及 Task 中附帶的 issue context。只有 Runtime 具備授權的 host 工具與網路存取時，才能查詢最新 GitHub issue；AgentPort 不提供 issue API。</p></div><code class="use-case__route">list_agents → submit_task</code></article>
+            <article class="use-case"><div><span class="use-case__number">03 / SUPERVISE</span><h3>無須永久開著 coding session，也能看見長時間工作。</h3><p>可 long-poll Task 的狀態變化、檢查最終回覆與 Git 摘要、在相同 Context 發送 Follow-up Task，或在工作應停止時請求取消。</p></div><code class="use-case__route">get_task → follow_up → cancel_task</code></article>
+          </div>
+          <aside class="use-cases__boundary" aria-label="AgentPort 職責邊界"><p><strong>AgentPort 負責：</strong>設定好的 Agents、policies、Task state、Context、排隊與結果。</p><p><strong>Runtime 與 host 負責：</strong>Git worktree 與 branch、GitHub issue 與 pull-request 存取、憑證以及定時觸發。</p></aside>
+        </div>
+      </section>
+      <section class="band"><div class="shell"><p class="eyebrow">精簡的 protocol surface</p><h2>六個 MCP tools，涵蓋完整的 Task lifecycle。</h2><div class="steps steps--spaced"><article class="step"><span class="step__number">01 / DISCOVER</span><h3>列出 Agents</h3><p>派送工作前，檢查已設定的 Logical Agents 與其 policies。</p></article><article class="step"><span class="step__number">02 / DISPATCH</span><h3>提交並追問</h3><p>建立 Task；當 Runtime 提問時，延續同一個 Context。</p></article><article class="step"><span class="step__number">03 / OBSERVE</span><h3>等待、檢查、取消</h3><p>long-poll Task state、查看最終回覆與 Git 摘要，或安全地取消。</p></article></div></div></section>
+      <section class="shell band"><div class="cta"><div><p class="eyebrow">從 contract 開始</p><h2>在本機安裝；透過你既有的 MCP client 遠端連線。</h2></div><a class="button button--accent" href="https://github.com/CarlLee1983/AgentPort">開啟 repository</a></div></section>
+    </main>
+    <footer class="shell footer"><div class="footer__statement">讓你的本機 coding runtime，以你選擇的方式加入對話。</div><div class="footer__meta">© AgentPort<br /><a href="../">English</a> · <a aria-current="page" href="./">繁體中文</a> · <a href="../ja/">日本語</a><br /><a href="https://github.com/CarlLee1983/AgentPort#readme">文件</a></div></footer>
+  </body>
+</html>

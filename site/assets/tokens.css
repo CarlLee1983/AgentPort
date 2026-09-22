@@ -37,6 +37,8 @@
   --radius-md: 0.625rem;
   --rule: 1px;
   --control-height: 2.75rem;
+  --brand-mark-size: 1.75rem;
+  --language-control-size: 1.6rem;
   --dur-fast: 150ms;
   --dur-base: 220ms;
   --ease-out: cubic-bezier(0.16, 1, 0.3, 1);
