@@ -1,14 +1,14 @@
 ---
-title: AgentPort v2 — 裝好就能用的 MCP 派工服務
+title: AgentPort — 裝好就能用的 MCP 派工服務
 labels: [implemented]
 status: implemented
 source_map: ../.scratch/agentport-v2/map.md
 created: 2026-09-21
 ---
 
-# AgentPort v2 — 裝好就能用的 MCP 派工服務
+# AgentPort — 裝好就能用的 MCP 派工服務
 
-詞彙依 `CONTEXT.md`：Caller、Logical Agent、Workspace、Runtime、Runtime Driver、Task、Turn、Follow-up Task、Context、Runtime Session。v2 沒有 Execution 系列、Deployment Readiness、Clarification Reply、`needs_input`。
+詞彙依 `CONTEXT.md`：Caller、Logical Agent、Workspace、Runtime、Runtime Driver、Task、Turn、Follow-up Task、Context、Runtime Session。AgentPort 沒有 Execution 系列、Deployment Readiness、Clarification Reply、`needs_input`。
 
 地圖票 01–10 皆已結案（07–10 於 2026-09-21 依建置票實作結果結案），原先標示 **【假設】** 的區段已依實作定案。
 

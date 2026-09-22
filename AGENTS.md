@@ -1,4 +1,4 @@
-# AgentPort v2 — Repository Agent Guide
+# AgentPort — Repository Agent Guide
 
 ## Project Contract
 
