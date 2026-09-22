@@ -78,6 +78,10 @@ ssh -N -L 3333:127.0.0.1:3333 <host>
 
 之後遠端的 MCP client 指向 `http://127.0.0.1:3333/` 就等於直接打主機上的 loopback。只有明確需要跳過 SSH 直連 HTTP 時才改 `[server] listen`，這種情況下 `[server] allowed_hosts` 必填（啟動時驗證），沒填會被 `check-config` / `serve` 擋下來。
 
+## 排程式 backlog trigger
+
+AgentPort 本身不排程工作。可選的外部 trigger 能由 launchd、cron 或 systemd timer 啟動，透過已驗證的 MCP endpoint 提交一個 read-only backlog-triage Task。MCP 只用來提交 Task，不能新增、列出、暫停或刪除 schedule。URL、token 與 Agent 名稱應放在 trigger 自己的 mode `0600` 環境檔，不必每次寫在指令上。它不會重試或去重，因此外部排程器必須確保每次 run 只觸發一次。腳本、環境與排程範例見 [`docs/operations/backlog-trigger.md`](docs/operations/backlog-trigger.md)。
+
 ## MCP client 設定範例
 
 AgentPort 的 HTTP server 是 stateless streamable HTTP；handler 掛在整個監聽位址上、不看路徑，下面範例統一用根路徑 `http://127.0.0.1:3333/`。

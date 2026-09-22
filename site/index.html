@@ -1,0 +1,88 @@
+<!doctype html>
+<html lang="en">
+  <head>
+    <meta charset="utf-8" />
+    <meta name="viewport" content="width=device-width, initial-scale=1" />
+    <meta name="description" content="AgentPort is a managed MCP gateway for local Claude Code and Codex runtimes." />
+    <title>AgentPort — Managed MCP gateway</title>
+    <link rel="stylesheet" href="./assets/site.css" />
+  </head>
+  <body>
+    <header class="shell nav">
+      <a class="brand" href="./">AgentPort</a>
+      <a class="command" href="https://github.com/CarlLee1983/AgentPort#readme"><span>Read the docs</span><kbd>↗</kbd></a>
+    </header>
+    <main>
+      <section class="shell hero" aria-labelledby="hero-title">
+        <div>
+          <p class="eyebrow">Managed MCP gateway</p>
+          <h1 id="hero-title">Local runtimes. Deliberate control.</h1>
+          <p class="lede">AgentPort exposes configured Claude Code and Codex workspaces as Logical Agents. Callers can dispatch work, observe Tasks, and continue a Context—without choosing arbitrary paths or runtimes.</p>
+          <div class="actions">
+            <a class="button button--accent" href="https://github.com/CarlLee1983/AgentPort#installation-and-deployment">Install AgentPort</a>
+            <a class="button" href="https://github.com/CarlLee1983/AgentPort#mcp-client-configuration-examples">Configure an MCP client</a>
+          </div>
+        </div>
+        <div class="console" aria-label="AgentPort task flow">
+          <div class="console__bar"><span>agentport / task flow</span><span>streamable HTTP</span></div>
+          <div class="flow">
+            <div class="flow__node"><strong>Caller</strong><span>submit_task(agent, prompt)</span></div>
+            <div class="flow__arrow" aria-hidden="true"></div>
+            <div class="flow__node flow__node--accent"><strong>AgentPort</strong><span>policy · queue · task record</span></div>
+            <div class="flow__arrow" aria-hidden="true"></div>
+            <div class="flow__node"><strong>Configured Runtime</strong><span>Claude Code or Codex in its assigned Workspace</span></div>
+          </div>
+        </div>
+      </section>
+      <section class="band">
+        <div class="shell split">
+          <div><p class="eyebrow">The operating model</p><h2>One registry is the source of authority.</h2></div>
+          <div class="specs">
+            <article class="spec"><code>workspace</code><p>Each Logical Agent is bound to an administrator-selected working directory.</p></article>
+            <article class="spec"><code>runtime</code><p>Claude Code or Codex is selected in host configuration, not by the Caller.</p></article>
+            <article class="spec"><code>policy</code><p>Every Task runs with an explicit read-only, workspace-write, or full policy.</p></article>
+          </div>
+        </div>
+      </section>
+      <section class="band" aria-labelledby="use-cases-title">
+        <div class="shell">
+          <div class="use-cases__intro">
+            <div><p class="eyebrow">Use cases</p><h2 id="use-cases-title">Run a local coding runtime when the work calls for it.</h2></div>
+            <p class="lede">A Caller selects a preconfigured Logical Agent. AgentPort starts the bound Runtime for a Task, keeps its progress observable, and leaves the host’s Git and GitHub choices explicit.</p>
+          </div>
+          <div class="use-cases">
+            <article class="use-case">
+              <div><span class="use-case__number">01 / IMPLEMENT</span><h3>Hand an approved issue to a prepared workspace.</h3><p>A workspace-write Agent can receive the issue and acceptance criteria as a Task, then implement and test inside its configured workspace. Updating main, creating a worktree or branch, and opening a pull request remain Git and host-runtime operations—not AgentPort controls.</p></div>
+              <code class="use-case__route">submit_task → get_task</code>
+            </article>
+            <article class="use-case">
+              <div><span class="use-case__number">02 / TRIAGE</span><h3>Investigate an issue before granting write access.</h3><p>A read-only Agent can inspect its configured workspace, tests, and the issue context included in a Task. Looking up the latest GitHub issue is possible only when the Runtime has an authorised host tool and network access; AgentPort does not provide an issue API.</p></div>
+              <code class="use-case__route">list_agents → submit_task</code>
+            </article>
+            <article class="use-case">
+              <div><span class="use-case__number">03 / SUPERVISE</span><h3>Keep long-running work visible without a permanent coding session.</h3><p>Long-poll a Task for state changes, inspect its final response and Git summary, send a Follow-up Task in the same Context, or request cancellation when the work should stop.</p></div>
+              <code class="use-case__route">get_task → follow_up → cancel_task</code>
+            </article>
+          </div>
+          <aside class="use-cases__boundary" aria-label="AgentPort responsibility boundary">
+            <p><strong>AgentPort owns:</strong> configured Agents, policies, Task state, Context, queueing, and results.</p>
+            <p><strong>The Runtime and host own:</strong> Git worktrees and branches, GitHub issue and pull-request access, credentials, and timed triggers.</p>
+          </aside>
+        </div>
+      </section>
+      <section class="band">
+        <div class="shell"><p class="eyebrow">A small protocol surface</p><h2>Six MCP tools for the whole task lifecycle.</h2>
+          <div class="steps steps--spaced">
+            <article class="step"><span class="step__number">01 / DISCOVER</span><h3>List Agents</h3><p>Inspect the configured Logical Agents and their policies before dispatching work.</p></article>
+            <article class="step"><span class="step__number">02 / DISPATCH</span><h3>Submit and follow up</h3><p>Create a Task, then continue the same Context when the Runtime asks a question.</p></article>
+            <article class="step"><span class="step__number">03 / OBSERVE</span><h3>Wait, inspect, cancel</h3><p>Long-poll Task state, see the final response and Git summary, or cancel safely.</p></article>
+          </div>
+        </div>
+      </section>
+      <section class="shell band">
+        <div class="cta"><div><p class="eyebrow">Start from the contract</p><h2>Install locally. Reach it remotely through the MCP client you already use.</h2></div><a class="button button--accent" href="https://github.com/CarlLee1983/AgentPort">Open the repository</a></div>
+      </section>
+    </main>
+    <footer class="shell footer"><div class="footer__statement">Bring your local coding runtime to the conversation—on your terms.</div><div class="footer__meta">© AgentPort<br /><a href="https://github.com/CarlLee1983/AgentPort/blob/main/README.md">English</a> · <a href="https://github.com/CarlLee1983/AgentPort/blob/main/README.zh-TW.md">繁體中文</a> · <a href="https://github.com/CarlLee1983/AgentPort/blob/main/README.ja.md">日本語</a></div></footer>
+  </body>
+</html>

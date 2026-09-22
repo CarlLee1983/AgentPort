@@ -78,6 +78,10 @@ ssh -N -L 3333:127.0.0.1:3333 <host>
 
 The remote MCP client can then use `http://127.0.0.1:3333/`, which reaches the host's loopback directly. Change `[server] listen` only when you explicitly need direct HTTP without SSH. In that case, `[server] allowed_hosts` is required and validated at startup; otherwise `check-config` and `serve` refuse to run.
 
+## Scheduled backlog trigger
+
+AgentPort does not schedule work itself. An optional external trigger can run from launchd, cron, or a systemd timer and submit one read-only backlog-triage Task through the authenticated MCP endpoint. MCP is used to submit the Task; it cannot create, list, pause, or delete schedules. Keep the URL, token, and Agent name in the trigger's mode-`0600` environment file rather than repeating them on every command. The trigger does not retry or deduplicate submissions, so the external scheduler remains responsible for one invocation per run. See [`docs/operations/backlog-trigger.md`](docs/operations/backlog-trigger.md) for the script, environment, and scheduler examples.
+
 ## MCP client configuration examples
 
 AgentPort's HTTP server is stateless Streamable HTTP. Its handler is mounted across the entire listening address and does not inspect the path, so these examples consistently use the root URL `http://127.0.0.1:3333/`.

@@ -1,0 +1,2 @@
+# Run once per day. Replace both absolute paths before installing in crontab.
+0 9 * * * /absolute/path/to/node --env-file=/absolute/path/to/agentport-backlog.env /absolute/path/to/AgentPortV2/scripts/backlog-trigger.mjs >> /absolute/path/to/agentport-backlog.out.log 2>> /absolute/path/to/agentport-backlog.err.log

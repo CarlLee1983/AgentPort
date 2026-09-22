@@ -1,6 +1,7 @@
 .claude/worktrees/
 node_modules/
 dist/
+site-dist/
 
 # graft's local graph cache — regenerable, not committed (run `graft build`).
 graft/

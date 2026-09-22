@@ -10,6 +10,7 @@ import {
 import type { TaskStore } from "../../src/store/sqlite.js";
 import {
   agentToml,
+  type AgentTomlFields,
   baseEnv,
   makeFakeExecutable,
   makeTempDir,
@@ -35,6 +36,7 @@ export interface TestHttpApp {
 export interface CreateTestHttpAppOptions {
   listen?: string;
   allowedHosts?: string[];
+  agent?: AgentTomlFields;
 }
 
 export async function createTestHttpApp(
@@ -61,7 +63,7 @@ export async function createTestHttpApp(
       ? `allowed_hosts = [${options.allowedHosts.map((host) => `"${host}"`).join(", ")}]\n`
       : "";
 
-  const toml = `${agentToml()}${callerToml}\n[server]\nlisten = "${listen}"\n${allowedHostsToml}\n[storage]\ndb_path = "${dbPath}"\nlog_dir = "${logDir}"\n`;
+  const toml = `${agentToml(options.agent)}${callerToml}\n[server]\nlisten = "${listen}"\n${allowedHostsToml}\n[storage]\ndb_path = "${dbPath}"\nlog_dir = "${logDir}"\n`;
   const configPath = await writeConfigFile(dir, toml);
 
   const envOverrides: Record<string, string> = { HOME: dir, PATH: dir };

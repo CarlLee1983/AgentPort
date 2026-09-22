@@ -14,6 +14,9 @@
   },
   "scripts": {
     "build": "tsc -p tsconfig.build.json",
+    "backlog:trigger": "node scripts/backlog-trigger.mjs",
+    "site:build": "node scripts/build-site.mjs",
+    "site:check": "node scripts/check-site.mjs",
     "service:install": "pnpm install --frozen-lockfile && node scripts/service-install.mjs",
     "typecheck": "tsc --noEmit",
     "lint": "eslint .",

@@ -1,0 +1,7 @@
+[Unit]
+Description=Submit an AgentPort read-only backlog triage Task
+
+[Service]
+Type=oneshot
+EnvironmentFile=%h/.config/agentport/agentport-backlog.env
+ExecStart=/absolute/path/to/node /absolute/path/to/AgentPortV2/scripts/backlog-trigger.mjs

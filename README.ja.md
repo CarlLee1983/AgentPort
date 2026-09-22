@@ -78,6 +78,10 @@ ssh -N -L 3333:127.0.0.1:3333 <host>
 
 その後、リモート側の MCP client が `http://127.0.0.1:3333/` を指せば、ホスト上の loopback を直接呼び出すのと同じです。SSH を迂回して HTTP へ直接接続する必要が明確な場合にのみ `[server] listen` を変更してください。その場合、`[server] allowed_hosts` は必須です（起動時に検証）。未指定なら `check-config` / `serve` によって拒否されます。
 
+## スケジュールされた backlog trigger
+
+AgentPort 自体は作業をスケジュールしません。任意の外部 trigger を launchd、cron、systemd timer から実行し、認証済み MCP endpoint 経由で read-only の backlog-triage Task を 1 件送信できます。MCP は Task の送信にだけ使われ、schedule の作成、一覧、停止、削除はできません。URL、token、Agent 名はコマンドごとに書かず、trigger 専用の mode `0600` 環境ファイルに置きます。trigger は再試行も重複排除もしないため、外部スケジューラが 1 run につき 1 回だけ起動する責任を持ちます。スクリプト、環境、スケジューラの例は [`docs/operations/backlog-trigger.md`](docs/operations/backlog-trigger.md) を参照してください。
+
 ## MCP client の設定例
 
 AgentPort の HTTP server は stateless streamable HTTP です。handler はリスニングアドレス全体にマウントされ、パスを見ません。以下の例ではすべてルートパス `http://127.0.0.1:3333/` を使用します。

@@ -1,0 +1,25 @@
+<?xml version="1.0" encoding="UTF-8"?>
+<!DOCTYPE plist PUBLIC "-//Apple//DTD PLIST 1.0//EN" "http://www.apple.com/DTDs/PropertyList-1.0.dtd">
+<plist version="1.0">
+<dict>
+  <key>Label</key>
+  <string>com.agentport.backlog</string>
+  <key>ProgramArguments</key>
+  <array>
+    <string>/absolute/path/to/node</string>
+    <string>--env-file=/absolute/path/to/agentport-backlog.env</string>
+    <string>/absolute/path/to/AgentPortV2/scripts/backlog-trigger.mjs</string>
+  </array>
+  <key>StartCalendarInterval</key>
+  <dict>
+    <key>Hour</key>
+    <integer>9</integer>
+    <key>Minute</key>
+    <integer>0</integer>
+  </dict>
+  <key>StandardOutPath</key>
+  <string>/absolute/path/to/agentport-backlog.out.log</string>
+  <key>StandardErrorPath</key>
+  <string>/absolute/path/to/agentport-backlog.err.log</string>
+</dict>
+</plist>
