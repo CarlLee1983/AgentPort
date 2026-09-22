@@ -2,7 +2,11 @@
 
 [English](README.md) | [繁體中文](README.zh-TW.md) | [日本語](README.ja.md)
 
+![AgentPort courier routing a task through a gateway to an authorised workspace](site/assets/agentport-cover.png)
+
 AgentPort exposes AI coding runtimes on a target host—Claude Code and Codex—as Logical Agents that can execute work remotely. The host administrator binds each Agent to a specific Workspace and Runtime in configuration. Remote Callers can dispatch work only within that authorization; they cannot choose arbitrary paths or register Agents themselves.
+
+![AgentPort courier handing a task package to an authorised workspace](site/assets/agentport-dispatch.png)
 
 See `CONTEXT.md` for terminology and `specs/agentport-v2.md` for architecture and decisions.
 

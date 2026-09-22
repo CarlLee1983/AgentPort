@@ -2,7 +2,11 @@
 
 [English](README.md) | 繁體中文 | [日本語](README.ja.md)
 
+![AgentPort 信使帶著任務穿越 gateway，前往已授權的 workspace](site/assets/agentport-cover.png)
+
 AgentPort 將目標主機上的 AI Coding Runtime（Claude Code、Codex）以 Logical Agent 身份提供遠端工作執行能力。主機管理者在設定檔裡把 Agent 綁定到指定的 Workspace 與 Runtime，遠端 Caller 只能在授權範圍內派工，不能自行指定路徑或登記 Agent。
+
+![AgentPort 信使將任務封包交付給已授權的 workspace](site/assets/agentport-dispatch.png)
 
 詳細詞彙定義見 `CONTEXT.md`，架構與決策見 `specs/agentport-v2.md`。
 

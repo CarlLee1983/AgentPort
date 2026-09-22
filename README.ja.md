@@ -2,7 +2,11 @@
 
 [English](README.md) | [繁體中文](README.zh-TW.md) | 日本語
 
+![AgentPort の配達人が task を gateway 経由で認可済み workspace へ運ぶ](site/assets/agentport-cover.png)
+
 AgentPort は、対象ホスト上の AI Coding Runtime（Claude Code、Codex）を Logical Agent として公開し、リモートで作業を実行できるようにします。ホスト管理者は設定ファイルで Agent を特定の Workspace と Runtime に紐付けます。リモート Caller は許可された範囲でのみタスクを依頼でき、パスの指定や Agent の登録はできません。
+
+![AgentPort の配達人が task package を認可済み workspace へ渡す](site/assets/agentport-dispatch.png)
 
 用語の詳しい定義は `CONTEXT.md`、アーキテクチャと判断は `specs/agentport-v2.md` を参照してください。
 

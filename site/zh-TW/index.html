@@ -34,16 +34,7 @@
             <a class="button" href="https://github.com/CarlLee1983/AgentPort#mcp-client-configuration-examples">設定 MCP client</a>
           </div>
         </div>
-        <div class="console" aria-label="AgentPort 任務流程">
-          <div class="console__bar"><span>agentport / task flow</span><span>streamable HTTP</span></div>
-          <div class="flow">
-            <div class="flow__node"><strong>Caller</strong><span>submit_task(agent, prompt)</span></div>
-            <div class="flow__arrow" aria-hidden="true"></div>
-            <div class="flow__node flow__node--accent"><strong>AgentPort</strong><span>policy · queue · task record</span></div>
-            <div class="flow__arrow" aria-hidden="true"></div>
-            <div class="flow__node"><strong>已設定的 Runtime</strong><span>指派 Workspace 中的 Claude Code 或 Codex</span></div>
-          </div>
-        </div>
+        <figure class="hero__art"><img src="../assets/agentport-cover.png" width="1730" height="909" fetchpriority="high" alt="信使帶著任務封包穿越 gateway，前往已授權的 workspace。" /></figure>
       </section>
       <section class="band">
         <div class="shell split">
@@ -66,6 +57,7 @@
             <article class="use-case"><div><span class="use-case__number">02 / TRIAGE</span><h3>在授與寫入權限前先排查 issue。</h3><p>唯讀 Agent 可檢查設定好的 workspace、測試，以及 Task 中附帶的 issue context。只有 Runtime 具備授權的 host 工具與網路存取時，才能查詢最新 GitHub issue；AgentPort 不提供 issue API。</p></div><code class="use-case__route">list_agents → submit_task</code></article>
             <article class="use-case"><div><span class="use-case__number">03 / SUPERVISE</span><h3>無須永久開著 coding session，也能看見長時間工作。</h3><p>可 long-poll Task 的狀態變化、檢查最終回覆與 Git 摘要、在相同 Context 發送 Follow-up Task，或在工作應停止時請求取消。</p></div><code class="use-case__route">get_task → follow_up → cancel_task</code></article>
           </div>
+          <figure class="use-cases__art"><img src="../assets/agentport-dispatch.png" width="1448" height="1086" loading="lazy" alt="信使將任務封包交付給已授權的 workspace，另一條路徑則保持未啟用。" /></figure>
           <aside class="use-cases__boundary" aria-label="AgentPort 職責邊界"><p><strong>AgentPort 負責：</strong>設定好的 Agents、policies、Task state、Context、排隊與結果。</p><p><strong>Runtime 與 host 負責：</strong>Git worktree 與 branch、GitHub issue 與 pull-request 存取、憑證以及定時觸發。</p></aside>
         </div>
       </section>
