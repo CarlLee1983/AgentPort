@@ -13,6 +13,7 @@ import {
   makeWorkspace,
   writeConfigFile,
 } from "../config/helpers.js";
+import { expectHostServiceDryRun } from "./service-dry-run.js";
 
 const execFileAsync = promisify(execFile);
 const CLI_PATH = fileURLToPath(new URL("../../dist/cli.js", import.meta.url));
@@ -20,7 +21,7 @@ const CLI_PATH = fileURLToPath(new URL("../../dist/cli.js", import.meta.url));
 afterEach(cleanupTempDirs);
 
 describe("agentport service 子命令", () => {
-  it("建置產物的 install --dry-run 路由到 service 並印出 LaunchAgent label", async () => {
+  it("建置產物的 install --dry-run 路由到 service 並印出本機平台的服務定義", async () => {
     const home = await makeTempDir();
     await makeWorkspace(home, "workspace");
     await makeFakeExecutable(home, "claude");
@@ -32,7 +33,7 @@ describe("agentport service 子命令", () => {
       { env: baseEnv({ HOME: home, PATH: home }) },
     );
 
-    expect(stdout).toContain("com.agentport.serve");
+    expectHostServiceDryRun(stdout);
   });
 
   it("未知 service 子命令印用法到 stderr 並以 exit code 2 結束", async () => {

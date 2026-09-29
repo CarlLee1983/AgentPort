@@ -1,5 +1,6 @@
 import { execFile } from "node:child_process";
 import { access } from "node:fs/promises";
+import { delimiter } from "node:path";
 import { fileURLToPath } from "node:url";
 import { promisify } from "node:util";
 
@@ -14,6 +15,7 @@ import {
   makeWorkspace,
   writeConfigFile,
 } from "../config/helpers.js";
+import { expectHostServiceDryRun } from "./service-dry-run.js";
 
 const execFileAsync = promisify(execFile);
 const PROJECT_ROOT = fileURLToPath(new URL("../..", import.meta.url));
@@ -26,17 +28,30 @@ describe("production package", () => {
     await makeWorkspace(home, "workspace");
     await makeFakeExecutable(home, "claude");
     const configPath = await writeConfigFile(home, agentToml());
+    // 換掉 HOME 後 pnpm 會改用空的 store 重新下載全部依賴；沿用原本的 store 才不會逾時。
+    const { stdout: storePath } = await execFileAsync(
+      "pnpm",
+      ["store", "path"],
+      {
+        cwd: PROJECT_ROOT,
+      },
+    );
 
     const { stdout } = await execFileAsync(
       "pnpm",
       ["service:install", "--", "--dry-run", "--config", configPath],
       {
         cwd: PROJECT_ROOT,
-        env: { ...process.env, HOME: home },
+        env: {
+          ...process.env,
+          HOME: home,
+          PATH: `${home}${delimiter}${process.env.PATH ?? ""}`,
+          pnpm_config_store_dir: storePath.trim(),
+        },
       },
     );
 
-    expect(stdout).toContain("com.agentport.serve");
+    expectHostServiceDryRun(stdout);
   }, 20_000);
 
   it("只打包建置產物，且獨立執行 check-config 成功", async () => {
