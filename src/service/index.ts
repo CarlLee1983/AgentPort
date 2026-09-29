@@ -27,10 +27,8 @@ import {
   renderWrapper,
   wrapperPath,
 } from "./wrapper.js";
+import { SERVICE_USAGE } from "../usage.js";
 
-const SERVICE_USAGE =
-  "usage: agentport service install [--dry-run] [--config <path>]\n" +
-  "       agentport service status|restart|uninstall [--config <path>]";
 const LAUNCH_AGENT_LABEL = "com.agentport.serve";
 const READY_TIMEOUT_MS = 10_000;
 const READY_RETRY_MS = 100;
