@@ -2,6 +2,7 @@ import { spawn } from "node:child_process";
 import { mkdtemp, rm } from "node:fs/promises";
 import { tmpdir } from "node:os";
 import { join } from "node:path";
+import { fileURLToPath } from "node:url";
 
 function run(command, args) {
   return new Promise((resolve, reject) => {
@@ -23,7 +24,10 @@ if (serviceArgs[0] === "--") serviceArgs.shift();
 
 try {
   await runRequired("pnpm", ["run", "build"]);
-  await runRequired("pnpm", ["deploy", "--legacy", "--prod", packageDirectory]);
+  await runRequired(process.execPath, [
+    fileURLToPath(new URL("deploy-package.mjs", import.meta.url)),
+    packageDirectory,
+  ]);
   process.exitCode = await run(process.execPath, [
     join(packageDirectory, "dist", "cli.js"),
     "service",
