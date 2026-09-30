@@ -8,15 +8,16 @@
   means `.scratch/service-install/issues/NN-*.md`; all tickets in
   `.scratch/agentport-v2-build/` are complete.
 * For an existing local ticket, that ticket remains the source for its work
-  selection and local lifecycle. A PraxisBound Story supplies approved product
-  intent only when the human explicitly assigns one; it does not replace the
-  local-ticket workflow or infer mutable status from a Story or handoff.
+  selection and local lifecycle. A Warrant Story supplies approved product
+  intent once it is approved under the Warrant section below, and only for the
+  Story the human chose; it does not replace the local-ticket workflow or infer
+  mutable status from a Story or handoff.
   When both are cited, the Story controls product intent and acceptance; the
   ticket is implementation context and lifecycle only. A conflict stops for
   Human Review rather than merging requirements or inferring approval.
 * The canonical verification command is `pnpm check`. `make verify` delegates
-  to it so PraxisBound has one repository gate; do not add checks to either
-  command without an approved requirement.
+  to it so Warrant has one declared verification command; do not add checks
+  to either command without an approved requirement.
 * Real CLI tests require local authenticated `claude` and `codex` CLIs.
 * v1 code lives in `../AgentPort`; only the Driver JSONL parsing and
   `loopback-server` may be moved here.
