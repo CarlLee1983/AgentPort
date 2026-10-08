@@ -5,7 +5,10 @@
 ## 目錄
 
 - `.scratch/agentport-v2/`：wayfinder 決策地圖（`map.md`）與決策票（`issues/NN-slug.md`）。
-- `.scratch/agentport-v2-build/`：`/to-tickets` 產出的建置工單（`issues/NN-slug.md`）。建置工單與決策票的編號各自獨立；引用時帶目錄名。
+- `.scratch/agentport-v2-build/`：`/to-tickets` 產出的建置工單（`issues/NN-slug.md`），已全數完成。
+- `.scratch/service-install/`：`service install` 功能的建置工單（`issues/NN-slug.md`），`/implement NN` 指的就是這裡。
+
+建置工單與決策票的編號各自獨立；引用時帶目錄名。
 
 ## 票的欄位
 
