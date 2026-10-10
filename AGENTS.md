@@ -22,6 +22,20 @@
 * v1 code lives in `../AgentPort`; only the Driver JSONL parsing and
   `loopback-server` may be moved here.
 
+## Agent skills
+
+### Issue tracker
+
+Local markdown under `.scratch/`; git is the only concurrency control. See `docs/agents/issue-tracker.md`.
+
+### Triage labels
+
+The five default role strings (`needs-triage`, `needs-info`, `ready-for-agent`, `ready-for-human`, `wontfix`). See `docs/agents/triage-labels.md`.
+
+### Domain docs
+
+Single-context: `CONTEXT.md` is the glossary, decisions in `docs/adr/`. See `docs/agents/domain.md`.
+
 ## Warrant
 
 This repository follows Warrant. Work is bounded by human-approved intent and
