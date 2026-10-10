@@ -43,9 +43,9 @@ log_dir = "~/.local/state/agentport/logs"
 command = "~/.local/bin/claude"  # 任意。デフォルトでは PATH から探索
 
 [[agents]]
-name = "stationhub"              # [a-z0-9-]+、一意
-description = "StationHub バックエンド"  # 任意
-workspace = "~/Dev/CMG/StationHub"
+name = "storefront-erp"          # [a-z0-9-]+、一意
+description = "EC storefront と ERP のバックエンド" # 任意
+workspace = "~/Projects/storefront-erp"
 runtime = "claude"               # claude | codex
 policy = "workspace-write"       # 必須：read-only | workspace-write | full
 extra_args = ["--model", "opus"]

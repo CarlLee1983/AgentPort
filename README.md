@@ -43,9 +43,9 @@ log_dir = "~/.local/state/agentport/logs"
 command = "~/.local/bin/claude"  # Optional; defaults to PATH lookup
 
 [[agents]]
-name = "stationhub"              # Unique; [a-z0-9-]+
-description = "StationHub backend" # Optional
-workspace = "~/Dev/CMG/StationHub"
+name = "storefront-erp"          # Unique; [a-z0-9-]+
+description = "E-commerce storefront and ERP backend" # Optional
+workspace = "~/Projects/storefront-erp"
 runtime = "claude"               # claude | codex
 policy = "workspace-write"       # Required: read-only | workspace-write | full
 extra_args = ["--model", "opus"]
