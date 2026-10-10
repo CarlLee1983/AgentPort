@@ -5,3 +5,7 @@ site-dist/
 
 # graft's local graph cache — regenerable, not committed (run `graft build`).
 graft/
+
+# Local MCP verification run artifacts (state, logs, workspaces) — keep only the assessment.
+.scratch/local-mcp-test/*
+!.scratch/local-mcp-test/issue-assessment.md
