@@ -43,9 +43,9 @@ log_dir = "~/.local/state/agentport/logs"
 command = "~/.local/bin/claude"  # 可選，預設從 PATH 找
 
 [[agents]]
-name = "stationhub"              # [a-z0-9-]+，唯一
-description = "StationHub 後端"  # 可選
-workspace = "~/Dev/CMG/StationHub"
+name = "storefront-erp"          # [a-z0-9-]+，唯一
+description = "電商 storefront 與 ERP 後端" # 可選
+workspace = "~/Projects/storefront-erp"
 runtime = "claude"               # claude | codex
 policy = "workspace-write"       # 必填：read-only | workspace-write | full
 extra_args = ["--model", "opus"]
